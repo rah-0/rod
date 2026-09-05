@@ -144,7 +144,7 @@ func (f *fakeTest) Cleanup(cleanup func()) {
 	f.cleanup = cleanup
 }
 
-func (f *fakeTest) Logf(format string, args ...interface{}) {
+func (f *fakeTest) Logf(format string, args ...any) {
 	f.logs = append(f.logs, fmt.Sprintf(format, args...))
 }
 

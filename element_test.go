@@ -122,8 +122,8 @@ func TestNotInteractable(t *testing.T) {
 	g.Is(err, &rod.NotInteractableError{})
 	g.Is(err, &rod.CoveredError{})
 	g.False(el.MustInteractable())
-	var ee *rod.NotInteractableError
-	g.True(errors.As(err, &ee))
+	ee, ok := errors.AsType[*rod.NotInteractableError](err)
+	g.True(ok)
 	g.Eq(ee.Error(), "element is not cursor interactable")
 
 	p.MustElement("div").MustRemove()
@@ -772,7 +772,7 @@ func TestBackgroundImage(t *testing.T) {
 func TestElementScreenshot(t *testing.T) {
 	g := setup(t)
 
-	f := filepath.Join("tmp", "screenshots", g.RandStr(16)+".png")
+	f := filepath.Join(t.ArtifactDir(), "element.png")
 	p := g.page.MustNavigate(g.srcFile("fixtures/click.html"))
 	el := p.MustElement("h4")
 
@@ -844,8 +844,8 @@ func TestFnErr(t *testing.T) {
 	_, err := el.Eval("foo()")
 	g.Err(err)
 	g.Has(err.Error(), "ReferenceError: foo is not defined")
-	var e *rod.EvalError
-	g.True(errors.As(err, &e))
+	e, ok := errors.AsType[*rod.EvalError](err)
+	g.True(ok)
 	g.Eq(proto.RuntimeRemoteObjectSubtypeError, e.Exception.Subtype)
 
 	_, err = el.ElementByJS(rod.Eval("() => foo()"))
@@ -902,7 +902,7 @@ func TestElementWait(t *testing.T) {
 	e1 := p.MustElement("body > ul > li")
 	g.Eq(e1.MustText(), "coffee")
 
-	params := []interface{}{1, 3, 4}
+	params := []any{1, 3, 4}
 	go func() {
 		utils.Sleep(0.3)
 		e1.MustEval(`(a, b, c) => this.innerText = 'x'.repeat(a + b + c)`, params...)

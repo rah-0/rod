@@ -47,9 +47,9 @@ func linkPreviewer(browser, previewer *rod.Browser) {
 	pool := rod.NewPagePool(5)
 	create := func() *rod.Page { return previewer.MustPage() }
 
-	go browser.EachEvent(func(e *proto.TargetTargetCreated) {
+	go browser.EachEvent(rod.On(func(e *proto.TargetTargetCreated, _ proto.TargetSessionID) bool {
 		if e.TargetInfo.Type != proto.TargetTargetInfoTypePage {
-			return
+			return false
 		}
 		page := browser.MustPageFromTargetID(e.TargetInfo.TargetID)
 
@@ -57,13 +57,14 @@ func linkPreviewer(browser, previewer *rod.Browser) {
 		page.MustEvalOnNewDocument(js)
 
 		// Expose a function to the page to provide preview
-		page.MustExpose("getPreview", func(url jsonvalue.Value) (interface{}, error) {
+		page.MustExpose("getPreview", func(url jsonvalue.Value) (any, error) {
 			p := pool.MustGet(create)
 			defer pool.Put(p)
 			p.MustNavigate(url.Str())
 			return base64.StdEncoding.EncodeToString(p.MustScreenshot()), nil
 		})
-	})()
+		return false
+	}))()
 }
 
 var jsLib = get("https://unpkg.com/@popperjs/core@2") + get("https://unpkg.com/tippy.js@6")

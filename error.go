@@ -10,7 +10,7 @@ import (
 
 // TryError error.
 type TryError struct {
-	Value interface{}
+	Value any
 	Stack string
 }
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -112,7 +113,7 @@ func TestManaged(t *testing.T) {
 
 	ctx := g.Timeout(5 * time.Second)
 
-	s := testutil.New(g).Serve()
+	s := testutil.New(t).Serve()
 	rl := NewManager(managerTestToken)
 	rl.userDataRoot = t.TempDir()
 	profilePath := make(chan string, 1)
@@ -393,7 +394,7 @@ func TestManagerAuthentication(t *testing.T) {
 	s := httptest.NewServer(m)
 	defer s.Close()
 
-	res, err := http.Get(s.URL) //nolint: noctx
+	res, err := http.Get(s.URL)
 	g.E(err)
 	g.Eq(http.StatusUnauthorized, res.StatusCode)
 	g.Eq("Bearer", res.Header.Get("WWW-Authenticate"))
@@ -566,15 +567,23 @@ func TestURLParserErr(t *testing.T) {
 	g.Eq(u.Err().Error(), "[launcher] Failed to launch the browser: /tmp/rod/chromium-818858/chrome: error while loading shared libraries: libgobject-2.0.so.0: cannot open shared object file: No such file or directory")
 }
 
-func TestTestOpen(_ *testing.T) {
+func TestTestOpen(t *testing.T) {
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "chrome"), []byte("unused"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	called := false
 	openExec = func(_ string, _ ...string) *exec.Cmd {
-		cmd := exec.Command("not-exists")
-		cmd.Process = &os.Process{}
-		return cmd
+		called = true
+		return exec.Command(filepath.Join(binDir, "not-exists"))
 	}
 	defer func() { openExec = exec.Command }()
 
 	Open("about:blank")
+	if !called && runtime.GOOS != "windows" {
+		t.Fatal("Open did not attempt to launch the discovered browser")
+	}
 }
 
 func TestLaunchClient(t *testing.T) {
@@ -582,7 +591,7 @@ func TestLaunchClient(t *testing.T) {
 
 	ctx := g.Timeout(5 * time.Second)
 
-	s := testutil.New(g).Serve()
+	s := testutil.New(t).Serve()
 	rl := NewManager(managerTestToken)
 	s.Mux.Handle("/", rl)
 

@@ -99,7 +99,7 @@ func TestPageExpose(t *testing.T) {
 
 	page := g.newPage(g.blank()).MustWaitLoad()
 
-	stop := page.MustExpose("exposedFunc", func(g jsonvalue.Value) (interface{}, error) {
+	stop := page.MustExpose("exposedFunc", func(g jsonvalue.Value) (any, error) {
 		return g.Get("k").Str(), nil
 	})
 

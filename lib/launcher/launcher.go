@@ -9,7 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -41,7 +41,7 @@ type Launcher struct {
 	serviceURL   string
 	managerToken string
 
-	isLaunched int32 // zero means not launched
+	isLaunched atomic.Bool
 }
 
 // New returns the default arguments to start browser.
@@ -380,7 +380,7 @@ func (l *Launcher) FormatArgs() []string {
 	}
 
 	execArgs = append(execArgs, l.Flags[flags.Arguments]...)
-	sort.Strings(execArgs)
+	slices.Sort(execArgs)
 	return execArgs
 }
 
@@ -422,7 +422,7 @@ func (l *Launcher) Launch() (string, error) {
 	args := l.FormatArgs()
 	port := l.Get(flags.RemoteDebuggingPort)
 	if port != "" && port != "0" {
-		u, err := ResolveURL(port)
+		u, err := ResolveURL(l.ctx, port)
 		if err == nil {
 			return u, nil
 		}
@@ -449,11 +449,15 @@ func (l *Launcher) Launch() (string, error) {
 		return "", err
 	}
 
-	return ResolveURL(u)
+	u, err = ResolveURL(l.ctx, u)
+	if err != nil {
+		l.Kill()
+	}
+	return u, err
 }
 
 func (l *Launcher) hasLaunched() bool {
-	return !atomic.CompareAndSwapInt32(&l.isLaunched, 0, 1)
+	return !l.isLaunched.CompareAndSwap(false, true)
 }
 
 func (l *Launcher) setupUserPreferences() {

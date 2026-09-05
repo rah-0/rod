@@ -59,7 +59,7 @@ func (b *Browser) ServeMonitor(host string) string {
 		httHTML(w, assets.Monitor)
 	})
 	mux.HandleFunc("/api/pages", func(w http.ResponseWriter, _ *http.Request) {
-		res, err := proto.TargetGetTargets{}.Call(b) //nolint: contextcheck
+		res, err := proto.TargetGetTargets{}.Call(b)
 		utils.E(err)
 
 		list := []*proto.TargetTargetInfo{}
@@ -76,19 +76,19 @@ func (b *Browser) ServeMonitor(host string) string {
 		httHTML(w, assets.MonitorPage)
 	})
 	mux.HandleFunc("/api/page/", func(w http.ResponseWriter, r *http.Request) {
-		id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
-		info, err := b.pageInfo(proto.TargetTargetID(id)) //nolint: contextcheck
+		_, id, _ := strings.CutLast(r.URL.Path, "/")
+		info, err := b.pageInfo(proto.TargetTargetID(id))
 		utils.E(err)
 		w.WriteHeader(http.StatusOK)
 		utils.E(w.Write(utils.MustToJSONBytes(info)))
 	})
 	mux.HandleFunc("/screenshot/", func(w http.ResponseWriter, r *http.Request) {
-		id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		_, id, _ := strings.CutLast(r.URL.Path, "/")
 		target := proto.TargetTargetID(id)
 		p := b.MustPageFromTargetID(target)
 
 		w.Header().Add("Content-Type", "image/png;")
-		utils.E(w.Write(p.MustScreenshot())) //nolint: contextcheck
+		utils.E(w.Write(p.MustScreenshot()))
 	})
 
 	return u
@@ -132,12 +132,12 @@ func (p *Page) Overlay(left, top, width, height float64, msg string) (remove fun
 	return
 }
 
-func (p *Page) tryTrace(typ TraceType, msg ...interface{}) func() {
+func (p *Page) tryTrace(typ TraceType, msg ...any) func() {
 	if !p.browser.trace {
 		return func() {}
 	}
 
-	msg = append([]interface{}{typ}, msg...)
+	msg = append([]any{typ}, msg...)
 	msg = append(msg, p)
 
 	p.browser.logger.Println(msg...)
@@ -212,12 +212,12 @@ func (el *Element) Overlay(msg string) (removeOverlay func()) {
 	return
 }
 
-func (el *Element) tryTrace(typ TraceType, msg ...interface{}) func() {
+func (el *Element) tryTrace(typ TraceType, msg ...any) func() {
 	if !el.page.browser.trace {
 		return func() {}
 	}
 
-	msg = append([]interface{}{typ}, msg...)
+	msg = append([]any{typ}, msg...)
 	msg = append(msg, el)
 
 	el.page.browser.logger.Println(msg...)

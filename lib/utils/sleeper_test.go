@@ -2,8 +2,10 @@ package utils_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/rah-0/rod/lib/utils"
@@ -16,34 +18,38 @@ func TestBackoffSleeperWakeNow(t *testing.T) {
 }
 
 func TestRetry(t *testing.T) {
-	g := setup(t)
+	synctest.Test(t, func(t *testing.T) {
+		g := setup(t)
 
-	count := 0
-	s1 := utils.BackoffSleeper(1, 5, nil)
+		count := 0
+		s1 := utils.BackoffSleeper(time.Millisecond, 5*time.Millisecond, func(d time.Duration) time.Duration { return 2 * d })
 
-	err := utils.Retry(g.Context(), s1, func() (bool, error) {
-		if count > 5 {
-			return true, io.EOF
-		}
-		count++
-		return false, nil
+		err := utils.Retry(g.Context(), s1, func() (bool, error) {
+			if count > 5 {
+				return true, io.EOF
+			}
+			count++
+			return false, nil
+		})
+
+		g.True(errors.Is(err, io.EOF))
 	})
-
-	g.Eq(err.Error(), io.EOF.Error())
 }
 
 func TestRetryCancel(t *testing.T) {
-	g := setup(t)
+	synctest.Test(t, func(t *testing.T) {
+		g := setup(t)
 
-	ctx := g.Context()
-	go ctx.Cancel()
-	s := utils.BackoffSleeper(time.Second, time.Second, nil)
+		ctx := g.Context()
+		go ctx.Cancel()
+		s := utils.BackoffSleeper(time.Second, time.Second, nil)
 
-	err := utils.Retry(ctx, s, func() (bool, error) {
-		return false, nil
+		err := utils.Retry(ctx, s, func() (bool, error) {
+			return false, nil
+		})
+
+		g.True(errors.Is(err, context.Canceled))
 	})
-
-	g.Eq(err.Error(), context.Canceled.Error())
 }
 
 func TestCountSleeperErr(t *testing.T) {
@@ -51,7 +57,7 @@ func TestCountSleeperErr(t *testing.T) {
 
 	ctx := g.Context()
 	s := utils.CountSleeper(5)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		_ = s(ctx)
 	}
 	g.Err(s(ctx))
@@ -65,31 +71,35 @@ func TestCountSleeperCancel(t *testing.T) {
 }
 
 func TestEachSleepers(t *testing.T) {
-	g := setup(t)
+	synctest.Test(t, func(t *testing.T) {
+		g := setup(t)
 
-	s1 := utils.BackoffSleeper(1, 5, nil)
-	s2 := utils.CountSleeper(5)
-	s := utils.EachSleepers(s1, s2)
+		s1 := utils.BackoffSleeper(time.Millisecond, 5*time.Millisecond, func(d time.Duration) time.Duration { return 2 * d })
+		s2 := utils.CountSleeper(5)
+		s := utils.EachSleepers(s1, s2)
 
-	err := utils.Retry(context.Background(), s, func() (stop bool, err error) {
-		return false, nil
+		err := utils.Retry(t.Context(), s, func() (stop bool, err error) {
+			return false, nil
+		})
+
+		g.Is(err, &utils.MaxSleepCountError{})
+		g.Eq(err.Error(), "max sleep count 5 exceeded")
 	})
-
-	g.Is(err, &utils.MaxSleepCountError{})
-	g.Eq(err.Error(), "max sleep count 5 exceeded")
 }
 
 func TestRaceSleepers(t *testing.T) {
-	g := setup(t)
+	synctest.Test(t, func(t *testing.T) {
+		g := setup(t)
 
-	s1 := utils.BackoffSleeper(1, 5, nil)
-	s2 := utils.CountSleeper(5)
-	s := utils.RaceSleepers(s1, s2)
+		s1 := utils.BackoffSleeper(time.Millisecond, 5*time.Millisecond, func(d time.Duration) time.Duration { return 2 * d })
+		s2 := utils.CountSleeper(5)
+		s := utils.RaceSleepers(s1, s2)
 
-	err := utils.Retry(context.Background(), s, func() (stop bool, err error) {
-		return false, nil
+		err := utils.Retry(t.Context(), s, func() (stop bool, err error) {
+			return false, nil
+		})
+
+		g.Is(err, &utils.MaxSleepCountError{})
+		g.Eq(err.Error(), "max sleep count 5 exceeded")
 	})
-
-	g.Is(err, &utils.MaxSleepCountError{})
-	g.Eq(err.Error(), "max sleep count 5 exceeded")
 }

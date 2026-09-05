@@ -40,11 +40,11 @@ func TestLaunch(t *testing.T) {
 
 	{ // test GetWebSocketDebuggerURL
 		for _, prefix := range []string{"", ":", "127.0.0.1:", "ws://127.0.0.1:"} {
-			u2 := launcher.MustResolveURL(prefix + parsed.Port())
+			u2 := launcher.MustResolveURL(t.Context(), prefix+parsed.Port())
 			g.Regex(u, u2)
 		}
 
-		_, err := launcher.ResolveURL("")
+		_, err := launcher.ResolveURL(t.Context(), "")
 		g.Err(err)
 	}
 
@@ -131,7 +131,7 @@ func TestAppMode(t *testing.T) {
 func TestGetWebSocketDebuggerURLErr(t *testing.T) {
 	g := setup(t)
 
-	_, err := launcher.ResolveURL("1://")
+	_, err := launcher.ResolveURL(t.Context(), "1://")
 	g.Err(err)
 }
 

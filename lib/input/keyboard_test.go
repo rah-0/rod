@@ -5,7 +5,6 @@ import (
 
 	"github.com/rah-0/rod/internal/testutil"
 	"github.com/rah-0/rod/lib/input"
-	"github.com/rah-0/rod/lib/jsonvalue"
 	"github.com/rah-0/rod/lib/proto"
 )
 
@@ -92,7 +91,7 @@ func TestKeyEncode(t *testing.T) {
 		Code:                  "KeyA",
 		Key:                   "a",
 		WindowsVirtualKeyCode: 65,
-		Location:              jsonvalue.Int(0),
+		Location:              new(0),
 	})
 
 	g.Eq(input.Key('a').Encode(proto.InputDispatchKeyEventTypeKeyUp, 0), &proto.InputDispatchKeyEvent{
@@ -102,7 +101,7 @@ func TestKeyEncode(t *testing.T) {
 		Code:                  "KeyA",
 		Key:                   "a",
 		WindowsVirtualKeyCode: 65,
-		Location:              jsonvalue.Int(0),
+		Location:              new(0),
 	})
 
 	g.Eq(input.AltLeft.Encode(proto.InputDispatchKeyEventTypeKeyDown, 0), &proto.InputDispatchKeyEvent{
@@ -110,7 +109,7 @@ func TestKeyEncode(t *testing.T) {
 		Code:                  "AltLeft",
 		Key:                   "Alt",
 		WindowsVirtualKeyCode: 18,
-		Location:              jsonvalue.Int(1),
+		Location:              new(1),
 	})
 
 	g.Eq(input.Numpad1.Encode(proto.InputDispatchKeyEventTypeKeyDown, 0), &proto.InputDispatchKeyEvent{

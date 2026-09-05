@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -31,12 +32,7 @@ func (t Trace) String() string {
 
 // HasParent reports whether id appears in the recorded ancestor chain.
 func (t Trace) HasParent(id int64) bool {
-	for _, ancestorID := range t.GoroutineAncestorIDs {
-		if ancestorID == id {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(t.GoroutineAncestorIDs, id)
 }
 
 // Traces is a goroutine stack snapshot.
@@ -229,8 +225,7 @@ func parseAncestor(line string) (int64, bool) {
 }
 
 func parseFunction(line string) (string, bool) {
-	if strings.HasPrefix(line, "created by ") {
-		function := strings.TrimPrefix(line, "created by ")
+	if function, ok := strings.CutPrefix(line, "created by "); ok {
 		if marker := strings.LastIndex(function, " in goroutine "); marker >= 0 {
 			function = function[:marker]
 		}
@@ -302,7 +297,7 @@ func nonChildren(parentID int64) Ignore {
 
 func tracebackAncestorsEnabled(godebug string) bool {
 	enabled := false
-	for _, setting := range strings.Split(godebug, ",") {
+	for setting := range strings.SplitSeq(godebug, ",") {
 		name, value, ok := strings.Cut(strings.TrimSpace(setting), "=")
 		if !ok || name != "tracebackancestors" {
 			continue

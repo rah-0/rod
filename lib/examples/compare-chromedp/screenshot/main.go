@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"github.com/rah-0/rod"
-	"github.com/rah-0/rod/lib/jsonvalue"
 	"github.com/rah-0/rod/lib/proto"
 )
 
@@ -21,7 +20,7 @@ func main() {
 	// capture entire browser viewport, returning jpg with quality=90
 	buf, err := browser.MustPage("https://brank.as/").Screenshot(true, &proto.PageCaptureScreenshot{
 		Format:  proto.PageCaptureScreenshotFormatJpeg,
-		Quality: jsonvalue.Int(90),
+		Quality: new(90),
 	})
 	if err != nil {
 		panic(err)

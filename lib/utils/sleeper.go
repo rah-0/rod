@@ -3,7 +3,7 @@ package utils
 import (
 	"context"
 	"fmt"
-	mr "math/rand"
+	"math/rand/v2"
 	"sync"
 	"time"
 )
@@ -54,7 +54,7 @@ func CountSleeper(max int) Sleeper {
 
 // DefaultBackoff algorithm: A(n) = A(n-1) * random[1.9, 2.1).
 func DefaultBackoff(interval time.Duration) time.Duration {
-	scale := 2 + (mr.Float64()-0.5)*0.2
+	scale := 2 + (rand.Float64()-0.5)*0.2
 	return time.Duration(float64(interval) * scale)
 }
 

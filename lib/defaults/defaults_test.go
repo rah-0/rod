@@ -108,7 +108,7 @@ func TestBasic(t *testing.T) {
 	g.Eq(try(func() { parse("slow=1") }), "invalid value for \"slow\": time: missing unit in duration \"1\" (learn format from https://golang.org/pkg/time/#ParseDuration)")
 }
 
-func try(fn func()) (err interface{}) {
+func try(fn func()) (err any) {
 	defer func() {
 		err = recover()
 	}()

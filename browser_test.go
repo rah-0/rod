@@ -1,8 +1,10 @@
 package rod_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -151,13 +153,13 @@ func TestBrowserWaitEvent(t *testing.T) {
 
 	g.NotNil(g.browser.Context(g.Context()).Event())
 
-	wait := g.page.WaitEvent(proto.PageFrameNavigated{})
+	wait := g.page.WaitEvent(&proto.PageFrameNavigated{})
 	g.page.MustNavigate(g.blank())
 	wait()
 
-	wait = g.browser.EachEvent(func(_ *proto.PageFrameNavigated, _ proto.TargetSessionID) bool {
+	wait = g.browser.EachEvent(rod.On(func(_ *proto.PageFrameNavigated, _ proto.TargetSessionID) bool {
 		return true
-	})
+	}))
 	g.page.MustNavigate(g.blank())
 	wait()
 }
@@ -180,7 +182,7 @@ func TestBrowserCrash(t *testing.T) {
 	utils.Sleep(0.3)
 
 	_, err := page.Eval(js)
-	g.Has(err.Error(), "use of closed network connection")
+	g.True(errors.Is(err, io.EOF))
 }
 
 func TestBrowserCall(t *testing.T) {
@@ -195,30 +197,30 @@ func TestBrowserCall(t *testing.T) {
 func TestBlockingNavigation(t *testing.T) {
 	g := setup(t)
 
-	/*
-		Navigate can take forever if a page doesn't response.
-		If one page is blocked, other pages should still work.
-	*/
-
+	// One pending navigation must not prevent another page from loading.
 	s := g.Serve()
 	pause := g.Context()
-
+	entered := make(chan struct{})
 	s.Mux.HandleFunc("/a", func(_ http.ResponseWriter, _ *http.Request) {
+		close(entered)
 		<-pause.Done()
 	})
 	s.Route("/b", ".html", `<html>ok</html>`)
 
-	blocked := g.newPage()
+	ctx := g.Context()
+	blocked := g.newPage().Context(ctx)
+	done := make(chan error, 1)
+	go func() { done <- blocked.Navigate(s.URL("/a")) }()
+	<-entered
 
-	go func() {
-		g.Panic(func() {
-			blocked.MustNavigate(s.URL("/a"))
-		})
-	}()
-
-	utils.Sleep(0.3)
-
-	g.newPage(s.URL("/b"))
+	g.Eq(g.newPage(s.URL("/b")).MustElement("html").MustText(), "ok")
+	select {
+	case err := <-done:
+		t.Fatalf("blocked navigation returned before cancellation: %v", err)
+	default:
+	}
+	ctx.Cancel()
+	g.True(errors.Is(<-done, context.Canceled))
 }
 
 func TestResolveBlocking(t *testing.T) {
@@ -250,8 +252,8 @@ func TestTestTry(t *testing.T) {
 	g.Nil(rod.Try(func() {}))
 
 	err := rod.Try(func() { panic(1) })
-	var errVal *rod.TryError
-	g.True(errors.As(err, &errVal))
+	errVal, ok := errors.AsType[*rod.TryError](err)
+	g.True(ok)
 	g.Is(err, &rod.TryError{})
 	g.Eq(errVal.Unwrap().Error(), "1")
 	g.Eq(1, errVal.Value)

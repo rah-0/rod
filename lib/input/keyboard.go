@@ -2,7 +2,6 @@
 package input
 
 import (
-	"github.com/rah-0/rod/lib/jsonvalue"
 	"github.com/rah-0/rod/lib/proto"
 )
 
@@ -104,7 +103,7 @@ func (k Key) Encode(t proto.InputDispatchKeyEventType, modifiers int) *proto.Inp
 	}
 
 	info := k.Info()
-	l := jsonvalue.Int(info.Location)
+	l := new(info.Location)
 	keypad := false
 	if info.Location == 3 {
 		l = nil

@@ -169,7 +169,6 @@ func TestNewImgProcessor(t *testing.T) {
 		{
 			name: "webP",
 			args: args{
-				/* cspell: disable-next-line */
 				format: proto.PageCaptureScreenshotFormatWebp,
 			},
 			wantErr: true,

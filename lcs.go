@@ -2,7 +2,7 @@ package rod
 
 import (
 	"context"
-	"sort"
+	"slices"
 )
 
 // longestCommonSubsequenceLength uses the Hunt-Szymanski reduction from LCS
@@ -10,8 +10,8 @@ import (
 // reusing an item from the left sequence.
 func longestCommonSubsequenceLength(ctx context.Context, left, right []string) int {
 	positions := make(map[string][]int, len(left))
-	for i := len(left) - 1; i >= 0; i-- {
-		positions[left[i]] = append(positions[left[i]], i)
+	for i, item := range slices.Backward(left) {
+		positions[item] = append(positions[item], i)
 	}
 
 	tails := make([]int, 0, min(len(left), len(right)))
@@ -20,7 +20,7 @@ func longestCommonSubsequenceLength(ctx context.Context, left, right []string) i
 			return len(tails)
 		}
 		for _, position := range positions[item] {
-			i := sort.SearchInts(tails, position)
+			i, _ := slices.BinarySearch(tails, position)
 			if i == len(tails) {
 				tails = append(tails, position)
 			} else {

@@ -69,8 +69,9 @@ func Open(url string) {
 
 	if bin, has := LookPath(); has {
 		p := openExec(bin, url)
-		_ = p.Start()
-		_ = p.Process.Release()
+		if err := p.Start(); err == nil {
+			_ = p.Process.Release()
+		}
 	}
 }
 

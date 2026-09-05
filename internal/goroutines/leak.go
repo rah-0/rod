@@ -12,7 +12,9 @@ const (
 )
 
 // Wait waits for non-ignored goroutines to exit until ctx is done. It returns
-// the traces that remain at that point.
+// the traces that remain at that point. Unlike the runtime goroutineleak profile,
+// this also reports reachable goroutines that outlive their expected lifecycle.
+// Stack ancestry remains available to isolate work owned by an individual test.
 func Wait(ctx context.Context, ignores ...Ignore) (remaining Traces) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -33,12 +35,7 @@ func Wait(ctx context.Context, ignores ...Ignore) (remaining Traces) {
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
+			timer.Stop()
 			return remaining
 		case <-timer.C:
 		}
@@ -74,7 +71,7 @@ type Test interface {
 	Fail()
 	Failed() bool
 	Cleanup(func())
-	Logf(format string, args ...interface{})
+	Logf(format string, args ...any)
 }
 
 // CheckLeak registers a per-test goroutine leak check. With no explicit ignore

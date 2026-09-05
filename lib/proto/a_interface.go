@@ -11,7 +11,7 @@ import (
 // Client interface to send the request.
 // So that this lib doesn't handle anything has side effect.
 type Client interface {
-	Call(ctx context.Context, sessionID, methodName string, params interface{}) (res []byte, err error)
+	Call(ctx context.Context, sessionID, methodName string, params any) (res []byte, err error)
 }
 
 // Sessionable type has a proto.TargetSessionID for its methods.
@@ -49,7 +49,7 @@ func ParseMethodName(method string) (domain, name string) {
 }
 
 // call method with request and response containers.
-func call(method string, req, res interface{}, c Client) error {
+func call(method string, req, res any, c Client) error {
 	ctx := context.Background()
 	if cta, ok := c.(Contextable); ok {
 		ctx = cta.GetContext()

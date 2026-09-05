@@ -326,15 +326,3 @@ func isIndex(value string) bool {
 	}
 	return true
 }
-
-// Num returns a pointer to value.
-func Num(value float64) *float64 { return &value }
-
-// Int returns a pointer to value.
-func Int(value int) *int { return &value }
-
-// Str returns a pointer to value.
-func Str(value string) *string { return &value }
-
-// Bool returns a pointer to value.
-func Bool(value bool) *bool { return &value }

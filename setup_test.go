@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -28,14 +29,11 @@ import (
 
 var TimeoutEach = flag.Duration("timeout-each", time.Minute, "timeout for each test")
 
-var LogDir = slash(fmt.Sprintf("tmp/cdp-log/%s", time.Now().Format("2006-01-02_15-04-05")))
-
 var testerPool rod.Pool[G]
 
 const maxBrowserProcesses = 4
 
 func TestMain(m *testing.M) {
-	utils.E(os.MkdirAll(slash("tmp/cdp-log"), 0o755))
 	defaults.Load()
 	testerPool = newTesterPool()
 
@@ -84,16 +82,16 @@ func newTesterPool() rod.Pool[G] {
 	}
 	parallel = min(parallel, maxBrowserProcesses)
 
-	fmt.Println("parallel test", parallel) //nolint: forbidigo
+	fmt.Println("parallel test", parallel)
 
 	return rod.NewPool[G](parallel)
 }
 
-func newTester() *G {
+func newTester(t *testing.T) *G {
 	l := launcher.New().Set("proxy-bypass-list", "<-loopback>").NoSandbox(true)
 	u := l.MustLaunch()
 
-	mc := newMockClient(u)
+	mc := newMockClient(t, u)
 
 	browser := rod.New().Client(mc).MustConnect().MustIgnoreCertErrors(false)
 
@@ -121,12 +119,13 @@ func setup(t *testing.T) G {
 		t.Parallel()
 	}
 
-	tester := testerPool.MustGet(newTester)
+	tester := testerPool.MustGet(func() *G { return newTester(t) })
 	t.Cleanup(func() { testerPool.Put(tester) })
 
 	tester.G = testutil.New(t)
 	tester.mc.t = t
-	tester.mc.log.SetOutput(openTestLog(t, filepath.Join(LogDir, tester.mc.id, t.Name()+".log")))
+	tester.mc.log.SetOutput(openTestLog(t, "cdp.log"))
+	t.Cleanup(func() { tester.mc.log.SetOutput(io.Discard) })
 
 	tester.checkLeaking()
 
@@ -135,8 +134,9 @@ func setup(t *testing.T) G {
 	return *tester
 }
 
-func openTestLog(t *testing.T, path string) *os.File {
+func openTestLog(t *testing.T, name string) *os.File {
 	t.Helper()
+	path := filepath.Join(t.ArtifactDir(), name)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func (g G) enableCDPLog() {
 	g.mc.principal.Logger(rod.DefaultLogger)
 }
 
-func (g G) dump(args ...interface{}) {
+func (g G) dump(args ...any) {
 	g.Log(utils.Dump(args...))
 }
 
@@ -272,19 +272,18 @@ func (g *G) closeExtraPages() {
 }
 
 func targetAlreadyGone(err error) bool {
-	var protocolErr *cdp.Error
-	return errors.As(err, &protocolErr) &&
+	protocolErr, ok := errors.AsType[*cdp.Error](err)
+	return ok &&
 		protocolErr.Code == -32602 &&
 		protocolErr.Message == "No target with given id found"
 }
 
-type Call func(ctx context.Context, sessionID, method string, params interface{}) ([]byte, error)
+type Call func(ctx context.Context, sessionID, method string, params any) ([]byte, error)
 
 var _ rod.CDPClient = &MockClient{}
 
 type MockClient struct {
 	sync.RWMutex
-	id        string
 	t         testutil.Testable
 	log       *log.Logger
 	principal *cdp.Client
@@ -292,20 +291,11 @@ type MockClient struct {
 	event     <-chan *cdp.Event
 }
 
-var mockClientCount int32
+func newMockClient(t *testing.T, u string) *MockClient {
+	logger := log.New(openTestLog(t, "cdp-init.log"), "", log.Ltime)
+	client := cdp.New().Logger(utils.MultiLogger(defaults.CDP, logger)).Start(cdp.MustConnectWS(u))
 
-func newMockClient(u string) *MockClient {
-	id := fmt.Sprintf("%02d", atomic.AddInt32(&mockClientCount, 1))
-
-	// create init log file
-	utils.E(os.MkdirAll(filepath.Join(LogDir, id), 0o755))
-	f, err := os.Create(filepath.Join(LogDir, id, "_.log"))
-	log := log.New(f, "", log.Ltime)
-	utils.E(err)
-
-	client := cdp.New().Logger(utils.MultiLogger(defaults.CDP, log)).Start(cdp.MustConnectWS(u))
-
-	return &MockClient{id: id, principal: client, log: log}
+	return &MockClient{principal: client, log: logger}
 }
 
 func (mc *MockClient) Event() <-chan *cdp.Event {
@@ -315,7 +305,7 @@ func (mc *MockClient) Event() <-chan *cdp.Event {
 	return mc.principal.Event()
 }
 
-func (mc *MockClient) Call(ctx context.Context, sessionID, method string, params interface{}) ([]byte, error) {
+func (mc *MockClient) Call(ctx context.Context, sessionID, method string, params any) ([]byte, error) {
 	return mc.getCall()(ctx, sessionID, method, params)
 }
 
@@ -362,7 +352,7 @@ func (mc *MockClient) stubCounter() {
 
 	fmt.Fprintln(os.Stdout, "[stubCounter] begin")
 
-	mc.setCall(func(ctx context.Context, sessionID, method string, params interface{}) ([]byte, error) {
+	mc.setCall(func(ctx context.Context, sessionID, method string, params any) ([]byte, error) {
 		l.Lock()
 		mCount[method]++
 		m := fmt.Sprintf("%d, proto.%s{}", mCount[method], proto.GetType(method).Name())
@@ -383,11 +373,11 @@ func (mc *MockClient) stub(nth int, p proto.Request, fn func(send StubSend) (jso
 		mc.t.FailNow()
 	}
 
-	count := int64(0)
+	var count atomic.Int64
 
-	mc.setCall(func(ctx context.Context, sessionID, method string, params interface{}) ([]byte, error) {
+	mc.setCall(func(ctx context.Context, sessionID, method string, params any) ([]byte, error) {
 		if method == p.ProtoReq() {
-			if int(atomic.AddInt64(&count, 1)) == nth {
+			if int(count.Add(1)) == nth {
 				mc.resetCall()
 				j, err := fn(func() (jsonvalue.Value, error) {
 					b, err := mc.principal.Call(ctx, sessionID, method, params)

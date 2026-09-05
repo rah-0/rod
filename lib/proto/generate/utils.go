@@ -2,43 +2,11 @@ package main
 
 import (
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 
 	"github.com/rah-0/rod/lib/jsonvalue"
-	"github.com/rah-0/rod/lib/launcher"
-	"github.com/rah-0/rod/lib/utils"
 )
-
-func getSchema() jsonvalue.Value {
-	l := launcher.New()
-	u := l.MustLaunch()
-	defer func() {
-		l.Kill()
-		l.Cleanup()
-	}()
-
-	parsed, err := url.Parse(u)
-	utils.E(err)
-	parsed.Scheme = "http"
-	parsed.Path = "/json/protocol"
-
-	res, err := http.Get(parsed.String()) //nolint: noctx
-	utils.E(err)
-	defer func() { _ = res.Body.Close() }()
-
-	data, err := io.ReadAll(res.Body)
-	utils.E(err)
-
-	obj := jsonvalue.New(data)
-
-	utils.E(utils.OutputFile("tmp/proto.json", obj.JSON("", "  ")))
-
-	return obj
-}
 
 func mapType(n string) string {
 	return map[string]string{
@@ -58,7 +26,7 @@ func typeName(domain *domain, schema jsonvalue.Value) string {
 		typeName = schema.Get("type").Str()
 	}
 
-	if typeName == "array" { //nolint: nestif
+	if typeName == "array" {
 		item := schema.Get("items")
 
 		if item.Has("type") {
@@ -158,7 +126,7 @@ func symbol(n string) string {
 	n = replaceLower(n, "Ui")
 	n = replaceLower(n, "Https")
 
-	n = strings.Replace(n, "Ids", "IDs", -1)
+	n = strings.ReplaceAll(n, "Ids", "IDs")
 
 	return n
 }

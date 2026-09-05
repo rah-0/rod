@@ -48,6 +48,6 @@ func fSessionID(s string) string {
 	return "@" + s
 }
 
-func dump(v interface{}) string {
+func dump(v any) string {
 	return utils.MustToJSON(v)
 }

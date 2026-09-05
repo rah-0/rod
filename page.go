@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -219,9 +220,9 @@ func (p *Page) Reload() error {
 	p, cancel := p.WithCancel()
 	defer cancel()
 
-	wait := p.EachEvent(func(e *proto.PageFrameNavigated) bool {
+	wait := p.EachEvent(On(func(e *proto.PageFrameNavigated, _ proto.TargetSessionID) bool {
 		return e.Frame.ID == p.FrameID
-	})
+	}))
 
 	// Not using cdp API because it doesn't work for iframe
 	_, err := p.Evaluate(Eval(`() => location.reload()`).ByUser())
@@ -652,10 +653,10 @@ func (p *Page) WaitOpen() func() (*Page, error) {
 	var targetID proto.TargetTargetID
 
 	b := p.browser.Context(p.ctx)
-	wait := b.EachEvent(func(e *proto.TargetTargetCreated) bool {
+	wait := b.EachEvent(On(func(e *proto.TargetTargetCreated, _ proto.TargetSessionID) bool {
 		targetID = e.TargetInfo.TargetID
 		return e.TargetInfo.OpenerID == p.TargetID
-	})
+	}))
 
 	return func() (*Page, error) {
 		defer p.tryTrace(TraceTypeWait, "wait open")()
@@ -664,29 +665,21 @@ func (p *Page) WaitOpen() func() (*Page, error) {
 	}
 }
 
-// EachEvent of the specified event types, if any callback returns true the wait function will resolve,
-// The type of each callback is (? means optional):
+// EachEvent subscribes to typed handlers for this page. Returning true from a
+// handler stops the wait. For example, dismiss dialogs until the page is closed:
 //
-//	func(proto.Event, proto.TargetSessionID?) bool?
-//
-// You can listen to multiple event types at the same time like:
-//
-//	browser.EachEvent(func(a *proto.A) {}, func(b *proto.B) {})
-//
-// Such as subscribe the events to know when the navigation is complete or when the page is rendered.
-// Here's an example to dismiss all dialogs/alerts on the page:
-//
-//	go page.EachEvent(func(e *proto.PageJavascriptDialogOpening) {
-//	    _ = proto.PageHandleJavaScriptDialog{ Accept: false, PromptText: ""}.Call(page)
-//	})()
-func (p *Page) EachEvent(callbacks ...interface{}) (wait func()) {
-	return p.browser.Context(p.ctx).eachEvent(p.SessionID, callbacks...)
+//	go page.EachEvent(rod.On(func(e *proto.PageJavascriptDialogOpening, _ proto.TargetSessionID) bool {
+//	    _ = proto.PageHandleJavaScriptDialog{Accept: false}.Call(page)
+//	    return false
+//	}))()
+func (p *Page) EachEvent(handlers ...EventHandler) func() {
+	return p.browser.Context(p.ctx).eachEvent(p.SessionID, handlers...)
 }
 
-// WaitEvent waits for the next event for one time. It will also load the data into the event object.
-func (p *Page) WaitEvent(e proto.Event) (wait func()) {
-	defer p.tryTrace(TraceTypeWait, "event", e.ProtoEvent())()
-	return p.browser.Context(p.ctx).waitEvent(p.SessionID, e)
+// WaitEvent loads the next matching event into out. E is a concrete protocol event type.
+func (p *Page) WaitEvent[E proto.Event](out *E) func() {
+	defer p.tryTrace(TraceTypeWait, "event", (*out).ProtoEvent())()
+	return p.browser.Context(p.ctx).waitEvent(p.SessionID, out)
 }
 
 // WaitNavigation wait for a page lifecycle event when navigating.
@@ -694,9 +687,9 @@ func (p *Page) WaitEvent(e proto.Event) (wait func()) {
 func (p *Page) WaitNavigation(name proto.PageLifecycleEventName) func() {
 	_ = proto.PageSetLifecycleEventsEnabled{Enabled: true}.Call(p)
 
-	wait := p.EachEvent(func(e *proto.PageLifecycleEvent) bool {
+	wait := p.EachEvent(On(func(e *proto.PageLifecycleEvent, _ proto.TargetSessionID) bool {
 		return e.Name == name
-	})
+	}))
 
 	return func() {
 		defer p.tryTrace(TraceTypeWait, "navigation", name)()
@@ -745,11 +738,9 @@ func (p *Page) WaitRequestIdle(
 		}
 	}
 
-	wait := p.EachEvent(func(sent *proto.NetworkRequestWillBeSent) {
-		for _, t := range excludeTypes {
-			if sent.Type == t {
-				return
-			}
+	wait := p.EachEvent(On(func(sent *proto.NetworkRequestWillBeSent, _ proto.TargetSessionID) bool {
+		if slices.Contains(excludeTypes, sent.Type) {
+			return false
 		}
 
 		if match(sent.Request.URL) {
@@ -761,11 +752,14 @@ func (p *Page) WaitRequestIdle(
 				idleCounter.Add()
 			}
 		}
-	}, func(e *proto.NetworkLoadingFinished) {
+		return false
+	}), On(func(e *proto.NetworkLoadingFinished, _ proto.TargetSessionID) bool {
 		checkDone(e.RequestID)
-	}, func(e *proto.NetworkLoadingFailed) {
+		return false
+	}), On(func(e *proto.NetworkLoadingFailed, _ proto.TargetSessionID) bool {
 		checkDone(e.RequestID)
-	})
+		return false
+	}))
 
 	return func() {
 		go func() {
@@ -1002,7 +996,7 @@ func (p *Page) Release(obj *proto.RuntimeRemoteObject) error {
 }
 
 // Call implements the [proto.Client].
-func (p *Page) Call(ctx context.Context, sessionID, methodName string, params interface{}) (res []byte, err error) {
+func (p *Page) Call(ctx context.Context, sessionID, methodName string, params any) (res []byte, err error) {
 	return p.browser.Call(ctx, sessionID, methodName, params)
 }
 
@@ -1043,7 +1037,7 @@ func (p *Page) initEvents() {
 			destroyed := proto.TargetTargetDestroyed{}
 
 			if (msg.Load(&detached) && detached.SessionID == p.SessionID) ||
-				(msg.Load(destroyed) && destroyed.TargetID == p.TargetID) {
+				(msg.Load(&destroyed) && destroyed.TargetID == p.TargetID) {
 				p.sessionCancel()
 				return
 			}

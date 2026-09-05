@@ -19,33 +19,6 @@ A high-level Go driver for the Chrome DevTools Protocol, built for browser autom
 - Dependency-free core module
 - Direct local browser execution without downloaded binaries
 
-## Differences from upstream Rod
-
-This fork keeps Rod's CDP-based automation API while changing browser setup,
-dependencies, and process ownership. The main differences from
-[go-rod/rod](https://github.com/go-rod/rod) are:
-
-| Area | This fork |
-| --- | --- |
-| Go and dependencies | Requires Go 1.27.1. The core module has no third-party Go dependencies; upstream's [helper dependencies](https://github.com/go-rod/rod/blob/main/go.mod) have been removed or replaced with repository-owned code. Testcontainers dependencies stay in a separate test module. |
-| Browser provisioning | Uses an installed Chrome, Chromium, or Edge executable, or an explicit `Launcher.Bin` path. Upstream's [automatic browser downloads and revision selection](https://github.com/go-rod/rod/blob/main/lib/launcher/launcher.go) have been removed. A missing browser returns an error. |
-| Process lifecycle | Launches the browser directly, without upstream's `leakless` helper executable. Call `Browser.Close` or `Launcher.Kill` during normal shutdown; abrupt process termination has no portable cleanup guarantee. `Launcher.Cleanup` preserves caller-supplied profiles. See [launcher lifecycle](lib/launcher). |
-| JSON types | Replaces `gson.JSON` with [`lib/jsonvalue.Value`](lib/jsonvalue). Serialization uses standard `encoding/json`; direct `encoding/json/v2` imports are prohibited. |
-| Remote management | Adds mandatory bearer authentication, loopback-only listening by default, and restrictions on client-supplied launch settings. Use TLS or an encrypted tunnel for remote access. The manager owns each session's browser and temporary profile. See [remote manager configuration](lib/launcher#remote-manager-security). |
-| Development monitor | Listens on loopback by default and has no authentication. Use an authenticated proxy when exposing it remotely. |
-| Browser compatibility testing | Adds an explicit [Testcontainers test](lib/docker) that pulls `chromedp/headless-shell:latest` on every run to detect compatibility changes. Container execution is optional; local development continues to use an installed browser. |
-
-When migrating, switch imports to `github.com/rah-0/rod` and adapt any direct
-`gson.JSON` usage to `lib/jsonvalue.Value`. Download/revision and `Leakless`
-APIs are no longer available. Managed clients now pass a token to
-`NewManaged(serviceURL, authToken)` or `MustNewManaged(serviceURL, authToken)`;
-the server uses `NewManager(authToken)`. Remote `KeepUserDataDir` and the
-manager's `--allow-all` option have also been removed.
-
-Command-line defaults are loaded through `defaults.Load()` rather than package
-initialization. Constructors call it automatically; applications that call
-`flag.Parse()` or override exported defaults must call it first.
-
 ## Requirements
 
 - Go 1.27.1 or later
@@ -64,18 +37,83 @@ go get github.com/rah-0/rod
 ```
 
 See the [API reference](https://pkg.go.dev/github.com/rah-0/rod).
+For versioned migration notes, see [Breaking changes](doc/BREAKING.md).
+
+## Events
+
+Subscribe before triggering an action, then call the returned wait function:
+
+```go
+wait := page.EachEvent(rod.On(func(event *proto.PageLoadEventFired, _ proto.TargetSessionID) bool {
+    fmt.Println("page loaded at", event.Timestamp)
+    return true
+}))
+page.MustNavigate("https://example.com")
+wait()
+```
+
+Return `false` to keep receiving events. Pass multiple `rod.On` handlers to
+observe different event types in message order. Browser handlers receive events
+across sessions; page handlers only receive their page's events. For one event,
+use `var event proto.PageLoadEventFired` and `wait := page.WaitEvent(&event)`.
+Cancel the page or browser context to end a continuing subscription.
+
+## Project backlog
+
+Upstream Rod issues and pull requests have been reviewed and triaged. The retained
+tasks are documented in the [issue backlog](doc/issues/README.md) and
+[pull-request assessments](doc/pulls/README.md), with priorities and acceptance
+criteria.
+
+The [feature proposals](doc/features/README.md) capture additions this fork's
+maintainer has personally identified and would like to implement.
 
 ## Development
 
-The core module has no third-party Go dependencies. Code generation requires a
-locally installed Chromium-family browser and Node.js executable; it downloads
-neither.
-
-Run the root test suite without live-site documentation examples:
+The core module has no third-party Go dependencies. Protocol serialization uses
+standard `encoding/json`; direct `encoding/json/v2` imports are prohibited.
+Regeneration uses checked-in protocol and device snapshots and a local Node.js
+executable. It runs offline and reproduces the pinned protocol schema:
 
 ```sh
-GODEBUG=tracebackancestors=100 go test -count=1 -race -cover -covermode=atomic -run '^Test' ./...
+go generate ./...
 ```
+
+See [protocol generation](lib/proto/README.md) and
+[device generation](lib/devices/README.md) for snapshot provenance and update
+procedures. Generators validate their output before replacing owned files.
+
+Check formatting, vet, compilation of all four modules with and without the
+workspace, and race tests that need no browser or container:
+
+```sh
+bash scripts/check.sh pure
+bash scripts/check.sh fix
+```
+
+The second command prints advisory `go fix -diff` suggestions for review; it
+does not apply them. Review callback panic behavior and protocol encoding before
+applying suggestions. The [modernization record](doc/MODERNIZATION.md) explains
+the retained exceptions.
+
+Run the root and e2e test suites with an installed browser:
+
+```sh
+bash scripts/check.sh browser
+```
+
+Live-site documentation examples run separately with `bash scripts/check.sh live`.
+Tests store screenshots, PDFs, and failed-test CDP logs in `t.ArtifactDir()`.
+To retain these files from root tests:
+
+```sh
+mkdir -p /tmp/rod-artifacts
+GODEBUG=tracebackancestors=100 go test -count=1 -race -cover -covermode=atomic \
+  -run '^Test' -artifacts -outputdir /tmp/rod-artifacts .
+```
+
+Successful-test CDP logs are removed. Without `-artifacts`, Go removes artifact
+directories after the test.
 
 The separate [Testcontainers compatibility test](lib/docker) uses
 `WithAlwaysPull()` to test `docker.io/chromedp/headless-shell:latest` on every
@@ -85,6 +123,8 @@ checked for compatibility:
 ```sh
 go test -count=1 -race -cover -covermode=atomic ./lib/docker
 ```
+
+Nested modules retain their local `replace` directives.
 
 ## License
 

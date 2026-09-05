@@ -6,12 +6,14 @@ import (
 	"crypto/sha1"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"sync"
+	"time"
 )
 
 var _ WebSocketable = &WebSocket{}
@@ -29,7 +31,8 @@ type WebSocket struct {
 	r    *bufio.Reader
 }
 
-// Connect to browser.
+// Connect to browser. The context controls connection establishment only;
+// canceling it after Connect succeeds does not close the connection.
 func (ws *WebSocket) Connect(ctx context.Context, wsURL string, header http.Header) error {
 	if ws.conn != nil {
 		panic("duplicated connection: " + wsURL)
@@ -47,9 +50,42 @@ func (ws *WebSocket) Connect(ctx context.Context, wsURL string, header http.Head
 		return err
 	}
 
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			_ = conn.Close()
+			return err
+		}
+	}
+
 	ws.conn = conn
 	ws.r = bufio.NewReader(conn)
-	return ws.handshake(ctx, u, header)
+	canceled := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+		close(canceled)
+	})
+	err = ws.handshake(ctx, u, header)
+	if !stop() {
+		// Wait for a callback that already started before inspecting or reusing conn.
+		<-canceled
+	}
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	} else if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		// The connection deadline can fire before the context's timer callback.
+		if timeout, ok := errors.AsType[net.Error](err); ok && timeout.Timeout() {
+			err = context.DeadlineExceeded
+		}
+	}
+	if err == nil {
+		err = conn.SetDeadline(time.Time{})
+	}
+	if err != nil {
+		_ = conn.Close()
+		ws.conn = nil
+		ws.r = nil
+	}
+	return err
 }
 
 // Close the underlying connection.
@@ -158,7 +194,7 @@ func (ws *WebSocket) read() ([]byte, error) {
 		fieldLen = 8
 	}
 
-	for i := 0; i < fieldLen; i++ {
+	for range fieldLen {
 		b, err := ws.r.ReadByte()
 		if err != nil {
 			return nil, err

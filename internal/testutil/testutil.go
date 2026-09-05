@@ -15,6 +15,7 @@ import (
 // Testable is the subset of testing.T and testing.B needed by G.
 type Testable interface {
 	Name() string
+	Context() context.Context
 	Skipped() bool
 	Failed() bool
 	Cleanup(func())
@@ -93,10 +94,10 @@ type Context struct {
 	Cancel context.CancelFunc
 }
 
-// Context returns a background context tied to the test lifecycle.
+// Context returns a cancelable child of the native test context.
 func (g G) Context() Context {
 	g.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(g.Testable.Context())
 	g.Cleanup(cancel)
 	return Context{Context: ctx, Cancel: cancel}
 }
@@ -104,7 +105,7 @@ func (g G) Context() Context {
 // Timeout returns a context with a deadline tied to the test lifecycle.
 func (g G) Timeout(d time.Duration) Context {
 	g.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), d)
+	ctx, cancel := context.WithTimeout(g.Testable.Context(), d)
 	g.Cleanup(cancel)
 	return Context{Context: ctx, Cancel: cancel}
 }
@@ -112,7 +113,7 @@ func (g G) Timeout(d time.Duration) Context {
 // DoAfter runs do after d unless the test finishes or the returned function is called.
 func (g G) DoAfter(d time.Duration, do func()) context.CancelFunc {
 	g.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(g.Testable.Context())
 	g.Cleanup(cancel)
 
 	go func() {

@@ -2,6 +2,7 @@ package rod_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -11,7 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -55,8 +56,8 @@ func TestSetCookies(t *testing.T) {
 
 	cookies := page.MustCookies()
 
-	sort.Slice(cookies, func(i, j int) bool {
-		return cookies[i].Value < cookies[j].Value
+	slices.SortFunc(cookies, func(a, b *proto.NetworkCookie) int {
+		return cmp.Compare(a.Value, b.Value)
 	})
 
 	g.Eq("1", cookies[0].Value)
@@ -79,18 +80,20 @@ func TestSetCookies(t *testing.T) {
 
 func TestSetBlockedURLs(t *testing.T) {
 	g := setup(t)
+	server := g.Serve().Route("/", ".html", `<script src="/blocked.js"></script>`)
+	server.Route("/blocked.js", ".js", `window.scriptLoaded = true`)
+
 	page := g.newPage()
-	urlsPattern := []string{}
 	page.EnableDomain(proto.NetworkEnable{})
-	page.MustSetBlockedURLs(urlsPattern...)
-	urlsPattern = append(urlsPattern, "*.js")
-	page.MustSetBlockedURLs(urlsPattern...)
-	go page.EachEvent(
-		func(e *proto.NetworkLoadingFailed) {
-			g.Eq(e.BlockedReason, proto.NetworkBlockedReasonInspector)
-		},
-	)
-	page.MustNavigate("https://github.com")
+	page.MustSetBlockedURLs()
+	page.MustSetBlockedURLs("*.js")
+	wait := page.EachEvent(rod.On(func(event *proto.NetworkLoadingFailed, _ proto.TargetSessionID) bool {
+		g.Eq(event.BlockedReason, proto.NetworkBlockedReasonInspector)
+		return true
+	}))
+	page.MustNavigate(server.URL()).MustWaitLoad()
+	wait()
+	g.False(page.MustEval(`() => window.scriptLoaded === true`).Bool())
 }
 
 func TestSetExtraHeaders(t *testing.T) {
@@ -479,7 +482,7 @@ func TestPageWaitRequestIdle(t *testing.T) {
 	}`
 
 	waitReq := ""
-	g.browser.Logger(utils.Log(func(msg ...interface{}) {
+	g.browser.Logger(utils.Log(func(msg ...any) {
 		typ := msg[0].(rod.TraceType)
 		if typ == rod.TraceTypeWaitRequests {
 			list := msg[2].(map[string]string)
@@ -563,7 +566,7 @@ func TestPageWaitStable(t *testing.T) {
 	p.MustWaitStable()
 
 	g.Panic(func() {
-		g.mc.setCall(func(ctx context.Context, sessionID, method string, params interface{}) ([]byte, error) {
+		g.mc.setCall(func(ctx context.Context, sessionID, method string, params any) ([]byte, error) {
 			switch method {
 			case (proto.DOMSnapshotCaptureSnapshot{}).ProtoReq():
 				utils.Sleep(0.3)
@@ -579,7 +582,7 @@ func TestPageWaitStable(t *testing.T) {
 		p.MustWaitStable()
 	})
 	g.Panic(func() {
-		g.mc.setCall(func(ctx context.Context, sessionID, method string, params interface{}) ([]byte, error) {
+		g.mc.setCall(func(ctx context.Context, sessionID, method string, params any) ([]byte, error) {
 			switch method {
 			case (proto.DOMSnapshotCaptureSnapshot{}).ProtoReq():
 				return nil, errors.New("error")
@@ -613,10 +616,11 @@ func TestPageEventSession(t *testing.T) {
 	p := g.newPage(s.URL())
 
 	p.EnableDomain(proto.NetworkEnable{})
-	go g.page.Context(g.Context()).EachEvent(func(_ *proto.NetworkRequestWillBeSent) {
+	go g.page.Context(g.Context()).EachEvent(rod.On(func(_ *proto.NetworkRequestWillBeSent, _ proto.TargetSessionID) bool {
 		g.Log("should not goes to here")
 		g.Fail()
-	})()
+		return false
+	}))()
 	p.MustEval(`u => fetch(u)`, s.URL())
 }
 
@@ -646,7 +650,7 @@ func TestPageEvent(t *testing.T) {
 	events := p.Context(ctx).Event()
 	p.MustNavigate(g.blank())
 	for msg := range events {
-		if msg.Load(proto.PageFrameStartedLoading{}) {
+		if msg.Method == (proto.PageFrameStartedLoading{}).ProtoEvent() {
 			break
 		}
 	}
@@ -718,7 +722,7 @@ func TestPageHandleFileDialog(t *testing.T) {
 func TestPageScreenshot(t *testing.T) {
 	g := setup(t)
 
-	f := filepath.Join("tmp", "screenshots", g.RandStr(16)+".png")
+	f := filepath.Join(t.ArtifactDir(), "page.png")
 	p := g.page.MustNavigate(g.srcFile("fixtures/click.html"))
 	p.MustElement("button")
 	p.MustScreenshot()
@@ -728,8 +732,6 @@ func TestPageScreenshot(t *testing.T) {
 	g.Eq(1280, img.Bounds().Dx())
 	g.Eq(800, img.Bounds().Dy())
 	g.Nil(os.Stat(f))
-
-	p.MustScreenshot("")
 
 	g.Panic(func() {
 		g.mc.stubErr(1, proto.PageCaptureScreenshot{})
@@ -849,9 +851,8 @@ func TestScrollScreenshotErrors(t *testing.T) {
 
 	// test unsupported format
 	_, err := p.ScrollScreenshot(&rod.ScrollScreenshotOptions{
-		/* cspell: disable-next-line */
 		Format:  proto.PageCaptureScreenshotFormatWebp,
-		Quality: jsonvalue.Int(10),
+		Quality: new(10),
 	})
 	g.Err(err)
 }
@@ -886,7 +887,7 @@ func TestFonts(t *testing.T) {
 
 	p := g.page.MustNavigate(g.srcFile("fixtures/fonts.html")).MustWaitLoad()
 
-	p.MustPDF("tmp", "fonts.pdf") // download the file from Github Actions Artifacts
+	p.MustPDF(filepath.Join(t.ArtifactDir(), "fonts.pdf"))
 }
 
 func TestPagePDF(t *testing.T) {
@@ -898,7 +899,7 @@ func TestPagePDF(t *testing.T) {
 	g.E(err)
 	g.Nil(s.Close())
 
-	p.MustPDF("")
+	p.MustPDF(filepath.Join(t.ArtifactDir(), "page.pdf"))
 
 	g.Panic(func() {
 		g.mc.stubErr(1, proto.PagePrintToPDF{})
@@ -1045,13 +1046,12 @@ func TestPageTriggerFavicon(t *testing.T) {
 		page := g.newPage()
 		page.MustNavigate(s.URL("/test"))
 		page.MustWaitIdle()
-		go page.Context(g.Context()).EachEvent(
-			func(e *proto.NetworkRequestWillBeSent) {
-				if e.Request.URL == faviconURL {
-					g.Eq(e.Request.URL, faviconURL)
-				}
-			},
-		)()
+		go page.Context(g.Context()).EachEvent(rod.On(func(e *proto.NetworkRequestWillBeSent, _ proto.TargetSessionID) bool {
+			if e.Request.URL == faviconURL {
+				g.Eq(e.Request.URL, faviconURL)
+			}
+			return false
+		}))()
 		page.MustTriggerFavicon()
 	}
 

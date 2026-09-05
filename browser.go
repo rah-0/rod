@@ -1,6 +1,6 @@
 //go:generate go run ./lib/proto/generate
 //go:generate go run ./lib/js/generate
-//go:generate go run ./lib/assets/generate
+//go:generate go run ./lib/devices/generate
 
 // Package rod is a high-level driver directly based on DevTools Protocol.
 package rod
@@ -277,7 +277,7 @@ func (b *Browser) Pages() (Pages, error) {
 }
 
 // Call implements the [proto.Client] to call raw cdp interface directly.
-func (b *Browser) Call(ctx context.Context, sessionID, methodName string, params interface{}) (res []byte, err error) {
+func (b *Browser) Call(ctx context.Context, sessionID, methodName string, params any) (res []byte, err error) {
 	res, err = b.client.Call(ctx, sessionID, methodName, params)
 	if err != nil {
 		return nil, err
@@ -355,58 +355,39 @@ func (b *Browser) PageFromTarget(targetID proto.TargetTargetID) (*Page, error) {
 	return page, nil
 }
 
-// EachEvent is similar to [Page.EachEvent], but catches events of the entire browser.
-func (b *Browser) EachEvent(callbacks ...interface{}) (wait func()) {
-	return b.eachEvent("", callbacks...)
+// EachEvent subscribes to the given handlers across all browser sessions.
+// Handlers run in message order; returning true stops the wait.
+func (b *Browser) EachEvent(handlers ...EventHandler) func() {
+	return b.eachEvent("", handlers...)
 }
 
-// WaitEvent waits for the next event for one time. It will also load the data into the event object.
-func (b *Browser) WaitEvent(e proto.Event) (wait func()) {
-	return b.waitEvent("", e)
+// WaitEvent loads the next matching event into out. E is a concrete protocol event type.
+func (b *Browser) WaitEvent[E proto.Event](out *E) func() {
+	return b.waitEvent("", out)
 }
 
-// waits for the next event for one time. It will also load the data into the event object.
-func (b *Browser) waitEvent(sessionID proto.TargetSessionID, e proto.Event) (wait func()) {
-	valE := reflect.ValueOf(e)
-	valTrue := reflect.ValueOf(true)
-
-	if valE.Kind() != reflect.Ptr {
-		valE = reflect.New(valE.Type())
-	}
-
-	// dynamically creates a function on runtime:
-	//
-	// func(ee proto.Event) bool {
-	//   *e = *ee
-	//   return true
-	// }
-	fnType := reflect.FuncOf([]reflect.Type{valE.Type()}, []reflect.Type{valTrue.Type()}, false)
-	fnVal := reflect.MakeFunc(fnType, func(args []reflect.Value) []reflect.Value {
-		valE.Elem().Set(args[0].Elem())
-		return []reflect.Value{valTrue}
-	})
-
-	return b.eachEvent(sessionID, fnVal.Interface())
+func (b *Browser) waitEvent[E proto.Event](sessionID proto.TargetSessionID, out *E) func() {
+	return b.eachEvent(sessionID, On(func(event *E, _ proto.TargetSessionID) bool {
+		*out = *event
+		return true
+	}))
 }
 
-// If the any callback returns true the event loop will stop.
-// It will enable the related domains if not enabled, and restore them after wait ends.
-func (b *Browser) eachEvent(sessionID proto.TargetSessionID, callbacks ...interface{}) (wait func()) {
-	cbMap := map[string]reflect.Value{}
+// eachEvent enables related domains until the wait ends, then restores them.
+func (b *Browser) eachEvent(sessionID proto.TargetSessionID, handlers ...EventHandler) func() {
+	callbacks := make(map[string]func(*Message) bool, len(handlers))
 	restores := []func(){}
 
-	for _, cb := range callbacks {
-		cbVal := reflect.ValueOf(cb)
-		eType := cbVal.Type().In(0)
-		name := reflect.New(eType.Elem()).Interface().(proto.Event).ProtoEvent() //nolint: forcetypeassert
-		cbMap[name] = cbVal
+	for _, handler := range handlers {
+		if handler.handle == nil {
+			panic("rod: empty event handler; use On")
+		}
+		callbacks[handler.method] = handler.handle
 
-		// Only enabled domains will emit events to cdp client.
-		// We enable the domains for the event types if it's not enabled.
-		// We restore the domains to their previous states after the wait ends.
-		domain, _ := proto.ParseMethodName(name)
+		// Only enabled domains emit events. Runtime lookup selects their enable requests.
+		domain, _ := proto.ParseMethodName(handler.method)
 		if req := proto.GetType(domain + ".enable"); req != nil {
-			enable := reflect.New(req).Interface().(proto.Request) //nolint: forcetypeassert
+			enable := reflect.New(req).Interface().(proto.Request)
 			restores = append(restores, b.EnableDomain(sessionID, enable))
 		}
 	}
@@ -428,23 +409,11 @@ func (b *Browser) eachEvent(sessionID proto.TargetSessionID, callbacks ...interf
 		}()
 
 		for msg := range messages {
-			if !(sessionID == "" || msg.SessionID == sessionID) {
+			if sessionID != "" && msg.SessionID != sessionID {
 				continue
 			}
-
-			if cbVal, has := cbMap[msg.Method]; has {
-				e := reflect.New(proto.GetType(msg.Method))
-				msg.Load(e.Interface().(proto.Event)) //nolint: forcetypeassert
-				args := []reflect.Value{e}
-				if cbVal.Type().NumIn() == 2 {
-					args = append(args, reflect.ValueOf(msg.SessionID))
-				}
-				res := cbVal.Call(args)
-				if len(res) > 0 {
-					if res[0].Bool() {
-						return
-					}
-				}
+			if callback, ok := callbacks[msg.Method]; ok && callback(msg) {
+				return
 			}
 		}
 	}
@@ -486,7 +455,6 @@ func (b *Browser) initEvents() {
 			b.event.Publish(&Message{
 				SessionID: proto.TargetSessionID(e.SessionID),
 				Method:    e.Method,
-				lock:      &sync.Mutex{},
 				data:      e.Params,
 			})
 		}
@@ -553,11 +521,12 @@ func (b *Browser) WaitDownload(dir string) func() (info *proto.PageDownloadWillB
 
 	var start *proto.PageDownloadWillBegin
 
-	waitProgress := b.EachEvent(func(e *proto.PageDownloadWillBegin) {
+	waitProgress := b.EachEvent(On(func(e *proto.PageDownloadWillBegin, _ proto.TargetSessionID) bool {
 		start = e
-	}, func(e *proto.PageDownloadProgress) bool {
+		return false
+	}), On(func(e *proto.PageDownloadProgress, _ proto.TargetSessionID) bool {
 		return start != nil && start.GUID == e.GUID && e.State == proto.PageDownloadProgressStateCompleted
-	})
+	}))
 
 	return func() *proto.PageDownloadWillBegin {
 		defer func() {

@@ -36,14 +36,14 @@ type EvalOptions struct {
 	// When the arg.Name exists in the page's cache, it reuse the cache without sending
 	// the definition to the browser again.
 	// Useful when you need to eval a huge js expression many times.
-	JSArgs []interface{}
+	JSArgs []any
 
 	// Whether execution should be treated as initiated by user in the UI.
 	UserGesture bool
 }
 
 // Eval creates a [EvalOptions] with ByValue set to true.
-func Eval(js string, args ...interface{}) *EvalOptions {
+func Eval(js string, args ...any) *EvalOptions {
 	return &EvalOptions{
 		ByValue:      true,
 		AwaitPromise: false,
@@ -54,10 +54,10 @@ func Eval(js string, args ...interface{}) *EvalOptions {
 	}
 }
 
-func evalHelper(fn *js.Function, args ...interface{}) *EvalOptions {
+func evalHelper(fn *js.Function, args ...any) *EvalOptions {
 	return &EvalOptions{
 		ByValue: true,
-		JSArgs:  append([]interface{}{fn}, args...),
+		JSArgs:  append([]any{fn}, args...),
 		JS:      fmt.Sprintf(`function (f /* %s */, ...args) { return f.apply(this, args) }`, fn.Name),
 	}
 }
@@ -115,7 +115,7 @@ func (e *EvalOptions) formatToJSFunc() string {
 }
 
 // Eval is a shortcut for [Page.Evaluate] with AwaitPromise, ByValue set to true.
-func (p *Page) Eval(js string, args ...interface{}) (*proto.RuntimeRemoteObject, error) {
+func (p *Page) Eval(js string, args ...any) (*proto.RuntimeRemoteObject, error) {
 	return p.Evaluate(Eval(js, args...).ByPromise())
 }
 
@@ -183,7 +183,7 @@ func (p *Page) evaluate(opts *EvalOptions) (*proto.RuntimeRemoteObject, error) {
 
 // Expose fn to the page's window object with the name. The exposure survives reloads.
 // Call stop to unbind the fn.
-func (p *Page) Expose(name string, fn func(jsonvalue.Value) (interface{}, error)) (stop func() error, err error) {
+func (p *Page) Expose(name string, fn func(jsonvalue.Value) (any, error)) (stop func() error, err error) {
 	bind := "_" + utils.RandString(8)
 
 	err = proto.RuntimeAddBinding{Name: bind}.Call(p)
@@ -213,14 +213,15 @@ func (p *Page) Expose(name string, fn func(jsonvalue.Value) (interface{}, error)
 		return proto.RuntimeRemoveBinding{Name: bind}.Call(p)
 	}
 
-	go p.EachEvent(func(e *proto.RuntimeBindingCalled) {
+	go p.EachEvent(On(func(e *proto.RuntimeBindingCalled, _ proto.TargetSessionID) bool {
 		if e.Name == bind {
 			payload := jsonvalue.NewFrom(e.Payload)
 			res, err := fn(payload.Get("req"))
 			code := fmt.Sprintf("(res, err) => %s(res, err)", payload.Get("cb").Str())
 			_, _ = p.Evaluate(Eval(code, res, err))
 		}
-	})()
+		return false
+	}))()
 
 	return
 }

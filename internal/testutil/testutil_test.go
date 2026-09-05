@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -56,7 +57,7 @@ func TestAssertions(t *testing.T) {
 }
 
 func TestAssertionFailures(t *testing.T) {
-	recorder := &recordingTest{name: t.Name()}
+	recorder := &recordingTest{name: t.Name(), ctx: t.Context()}
 	g := New(recorder)
 
 	g.Eq(1, 2)
@@ -109,14 +110,6 @@ func TestLifecycleHelpers(t *testing.T) {
 		t.Fatal("Timeout did not expire")
 	}
 
-	fired := make(chan struct{})
-	g.DoAfter(time.Millisecond, func() { close(fired) })
-	select {
-	case <-fired:
-	case <-time.After(time.Second):
-		t.Fatal("DoAfter did not run")
-	}
-
 	random := g.RandStr(16)
 	if len(random) != 16 {
 		t.Fatalf("unexpected random string length: %d", len(random))
@@ -155,7 +148,7 @@ func TestGParallel(t *testing.T) {
 
 func TestHTTPHelpers(t *testing.T) {
 	g := New(t)
-	router := g.Serve()
+	router := g.ServeInMemory()
 	router.Route("/text", ".txt", "hello")
 	router.Route("/json", ".json", map[string]int{"answer": 42})
 
@@ -176,7 +169,7 @@ func TestHTTPHelpers(t *testing.T) {
 		_, _ = w.Write([]byte("created"))
 	})
 
-	response := g.Req(http.MethodPost, router.URL("/request"), headers, ReqMIME(".json"), map[string]int{"a": 1})
+	response := g.Req(http.MethodPost, router.URL("/request"), router.Client, headers, ReqMIME(".json"), map[string]int{"a": 1})
 	if response.StatusCode != http.StatusCreated || response.String() != "created" {
 		t.Fatalf("unexpected response: status=%d body=%q", response.StatusCode, response.String())
 	}
@@ -184,10 +177,10 @@ func TestHTTPHelpers(t *testing.T) {
 		t.Fatal("Req mutated its caller's headers")
 	}
 
-	if got := g.Req("", router.URL("/text")).String(); got != "hello" {
+	if got := g.Req("", router.URL("/text"), router.Client).String(); got != "hello" {
 		t.Fatalf("unexpected text response: %q", got)
 	}
-	jsonValue := g.Req("", router.URL("/json")).JSON().(map[string]any)
+	jsonValue := g.Req("", router.URL("/json"), router.Client).JSON().(map[string]any)
 	if jsonValue["answer"] != float64(42) {
 		t.Fatalf("unexpected JSON response: %#v", jsonValue)
 	}
@@ -197,7 +190,7 @@ func TestHTTPHelpers(t *testing.T) {
 		t.Fatal(err)
 	}
 	router.Route("/file", file)
-	if got := g.Req("", router.URL("/file")).String(); got != "fixture" {
+	if got := g.Req("", router.URL("/file"), router.Client).String(); got != "fixture" {
 		t.Fatalf("unexpected file response: %q", got)
 	}
 
@@ -205,7 +198,7 @@ func TestHTTPHelpers(t *testing.T) {
 	if requestError.Err() == nil {
 		t.Fatal("Req did not preserve the request construction error")
 	}
-	encodeError := g.Req(http.MethodPost, router.URL(), make(chan struct{}))
+	encodeError := g.Req(http.MethodPost, router.URL(), router.Client, make(chan struct{}))
 	if encodeError.Err() == nil {
 		t.Fatal("Req did not preserve the body encoding error")
 	}
@@ -213,8 +206,8 @@ func TestHTTPHelpers(t *testing.T) {
 
 func TestResponseBodyCanBeReadRepeatedly(t *testing.T) {
 	g := New(t)
-	router := g.Serve().Route("/", "", strings.NewReader("body"))
-	response := g.Req("", router.URL())
+	router := g.ServeInMemory().Route("/", "", strings.NewReader("body"))
+	response := g.Req("", router.URL(), router.Client)
 	if first, second := response.String(), response.String(); first != "body" || second != first {
 		t.Fatalf("body reads differ: %q and %q", first, second)
 	}
@@ -225,6 +218,7 @@ func TestContextImplementsContext(t *testing.T) {
 }
 
 type recordingTest struct {
+	ctx      context.Context
 	name     string
 	failed   bool
 	skipped  bool
@@ -233,6 +227,8 @@ type recordingTest struct {
 }
 
 func (test *recordingTest) Name() string { return test.name }
+
+func (test *recordingTest) Context() context.Context { return test.ctx }
 
 func (test *recordingTest) Skipped() bool { return test.skipped }
 
@@ -254,51 +250,43 @@ func (test *recordingTest) Logf(format string, args ...any) {
 
 func (test *recordingTest) SkipNow() { test.skipped = true }
 
-type normalSuite struct {
-	G
-	calls *atomic.Int64
+func TestDoAfter(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		g := New(t)
+		var fired atomic.Bool
+		g.DoAfter(time.Second, func() { fired.Store(true) })
+		synctest.Sleep(time.Second - time.Nanosecond)
+		if fired.Load() {
+			t.Fatal("DoAfter fired before its delay")
+		}
+		synctest.Sleep(time.Nanosecond)
+		if !fired.Load() {
+			t.Fatal("DoAfter did not run at its delay")
+		}
+
+		cancel := g.DoAfter(time.Second, func() { t.Error("canceled callback ran") })
+		cancel()
+		synctest.Sleep(time.Second)
+	})
 }
 
-func (suite normalSuite) Alpha() { suite.calls.Add(1) }
-
-func (suite normalSuite) Beta(_ int) { suite.calls.Add(1) }
-
-type onlySuite struct {
-	G
-	calls *atomic.Int64
+func TestNativeContextCancelsBeforeCleanup(t *testing.T) {
+	t.Run("lifecycle", func(t *testing.T) {
+		g := New(t)
+		ctx := g.Context()
+		timed := g.Timeout(time.Hour)
+		t.Cleanup(func() {
+			if ctx.Err() != context.Canceled || timed.Err() != context.Canceled {
+				t.Error("test contexts were not canceled before cleanup")
+			}
+		})
+	})
 }
 
-func (suite onlySuite) Regular() { suite.calls.Add(100) }
-
-func (suite onlySuite) Selected(_ Only) { suite.calls.Add(1) }
-
-type skipSuite struct {
-	G
-	called *atomic.Bool
-}
-
-func (suite skipSuite) Omitted(_ Skip) { suite.called.Store(true) }
-
-func TestEach(t *testing.T) {
-	var normalCalls atomic.Int64
-	if count := Each(t, normalSuite{calls: &normalCalls}); count != 2 || normalCalls.Load() != 2 {
-		t.Fatalf("normal suite: count=%d calls=%d", count, normalCalls.Load())
-	}
-
-	var factoryCalls atomic.Int64
-	if count := Each(t, func(child Testable) normalSuite {
-		return normalSuite{G: New(child), calls: &factoryCalls}
-	}); count != 2 || factoryCalls.Load() != 2 {
-		t.Fatalf("factory suite: count=%d calls=%d", count, factoryCalls.Load())
-	}
-
-	var onlyCalls atomic.Int64
-	if count := Each(t, onlySuite{calls: &onlyCalls}); count != 1 || onlyCalls.Load() != 1 {
-		t.Fatalf("only suite: count=%d calls=%d", count, onlyCalls.Load())
-	}
-
-	var skippedCall atomic.Bool
-	if count := Each(t, skipSuite{called: &skippedCall}); count != 1 || skippedCall.Load() {
-		t.Fatalf("skip suite: count=%d called=%t", count, skippedCall.Load())
+func TestServeUsesLoopback(t *testing.T) {
+	g := New(t)
+	router := g.Serve().Route("/", "", "loopback")
+	if got := g.Req("", router.URL()).String(); got != "loopback" {
+		t.Fatalf("default HTTP client received %q", got)
 	}
 }

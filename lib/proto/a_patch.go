@@ -70,12 +70,12 @@ func (p Point) Scale(s float64) Point {
 
 // Len is the number of vertices.
 func (q DOMQuad) Len() int {
-	return len(q) / 2 //nolint: mnd
+	return len(q) / 2
 }
 
 // Each point.
 func (q DOMQuad) Each(fn func(pt Point, i int)) {
-	for i := 0; i < q.Len(); i++ {
+	for i := range q.Len() {
 		fn(Point{q[i*2], q[i*2+1]}, i)
 	}
 }
@@ -94,22 +94,21 @@ func (q DOMQuad) Center() Point {
 // https://en.wikipedia.org/wiki/Polygon#Area
 func (q DOMQuad) Area() float64 {
 	area := 0.0
-	l := len(q)/2 - 1 //nolint: mnd
+	l := len(q)/2 - 1
 
-	for i := 0; i < l; i++ {
+	for i := range l {
 		area += q[i*2]*q[i*2+3] - q[i*2+2]*q[i*2+1]
 	}
 	area += q[l*2]*q[1] - q[0]*q[l*2+1]
 
-	return area / 2 //nolint: mnd
+	return area / 2
 }
 
 // OnePointInside the shape.
 func (res *DOMGetContentQuadsResult) OnePointInside() *Point {
 	for _, q := range res.Quads {
 		if q.Area() >= 1 {
-			pt := q.Center()
-			return &pt
+			return new(q.Center())
 		}
 	}
 

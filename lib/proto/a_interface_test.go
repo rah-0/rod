@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"testing"
 	"time"
 
+	"github.com/rah-0/rod/internal/testutil"
 	"github.com/rah-0/rod/lib/proto"
 	"github.com/rah-0/rod/lib/utils"
 )
@@ -14,9 +16,9 @@ import (
 type Client struct {
 	sessionID  string
 	methodName string
-	params     interface{}
+	params     any
 	err        error
-	ret        interface{}
+	ret        any
 }
 
 var (
@@ -25,7 +27,7 @@ var (
 	_ proto.Contextable = &Client{}
 )
 
-func (c *Client) Call(_ context.Context, sessionID, methodName string, params interface{}) (res []byte, err error) {
+func (c *Client) Call(_ context.Context, sessionID, methodName string, params any) (res []byte, err error) {
 	c.sessionID = sessionID
 	c.methodName = methodName
 	c.params = params
@@ -36,111 +38,120 @@ func (c *Client) GetSessionID() proto.TargetSessionID { return "" }
 
 func (c *Client) GetContext() context.Context { return nil }
 
-func (t T) CallErr() {
+func TestCallErr(t *testing.T) {
+	g := testutil.New(t)
 	client := &Client{err: errors.New("err")}
-	t.Eq(proto.PageEnable{}.Call(client).Error(), "err")
+	g.Eq(proto.PageEnable{}.Call(client).Error(), "err")
 }
 
-func (t T) ParseMethodName() {
+func TestParseMethodName(t *testing.T) {
+	g := testutil.New(t)
 	d, n := proto.ParseMethodName("Page.enable")
-	t.Eq("Page", d)
-	t.Eq("enable", n)
+	g.Eq("Page", d)
+	g.Eq("enable", n)
 }
 
-func (t T) GetType() {
+func TestGetType(t *testing.T) {
+	g := testutil.New(t)
 	method := proto.GetType("Page.enable")
-	t.Eq(reflect.TypeOf(proto.PageEnable{}), method)
+	g.Eq(reflect.TypeFor[proto.PageEnable](), method)
 }
 
-func (t T) TimeCodec() {
+func TestTimeCodec(t *testing.T) {
+	g := testutil.New(t)
 	raw := []byte("123.123")
 	var duration proto.MonotonicTime
-	t.E(json.Unmarshal(raw, &duration))
+	g.E(json.Unmarshal(raw, &duration))
 
-	t.Eq(123123, duration.Duration().Milliseconds())
-	t.Eq("2m3.123s", duration.String())
+	g.Eq(123123, duration.Duration().Milliseconds())
+	g.Eq("2m3.123s", duration.String())
 
 	data, err := json.Marshal(duration)
-	t.E(err)
-	t.Eq(raw, data)
+	g.E(err)
+	g.Eq(raw, data)
 
 	raw = []byte("1234567890")
 	var datetime proto.TimeSinceEpoch
-	t.E(json.Unmarshal(raw, &datetime))
+	g.E(json.Unmarshal(raw, &datetime))
 
-	t.Eq(1234567890, datetime.Time().Unix())
-	t.Has(datetime.String(), "2009-02")
+	g.Eq(1234567890, datetime.Time().Unix())
+	g.Has(datetime.String(), "2009-02")
 
 	data, err = json.Marshal(datetime)
-	t.E(err)
-	t.Eq(raw, data)
+	g.E(err)
+	g.Eq(raw, data)
 
 	var sessionExpires proto.TimeSinceEpoch = -1
 	var zeroTime time.Time
-	t.Eq(sessionExpires.Time(), zeroTime)
+	g.Eq(sessionExpires.Time(), zeroTime)
 }
 
-func (t T) Rect() {
+func TestRect(t *testing.T) {
+	g := testutil.New(t)
 	rect := proto.DOMQuad{
 		336, 382, 361, 382, 361, 421, 336, 412,
 	}
 
-	t.Eq(348.5, rect.Center().X)
-	t.Eq(399.25, rect.Center().Y)
+	g.Eq(348.5, rect.Center().X)
+	g.Eq(399.25, rect.Center().Y)
 
 	res := &proto.DOMGetContentQuadsResult{}
-	t.Nil(res.OnePointInside())
+	g.Nil(res.OnePointInside())
 
 	res = &proto.DOMGetContentQuadsResult{Quads: []proto.DOMQuad{{1, 1, 2, 1, 2, 1, 1, 1}}}
-	t.Nil(res.OnePointInside())
+	g.Nil(res.OnePointInside())
 
 	res = &proto.DOMGetContentQuadsResult{Quads: []proto.DOMQuad{rect}}
 	pt := res.OnePointInside()
-	t.Eq(348.5, pt.X)
-	t.Eq(399.25, pt.Y)
+	g.Eq(348.5, pt.X)
+	g.Eq(399.25, pt.Y)
 }
 
-func (t T) Area() {
-	t.Eq(proto.DOMQuad{1, 1, 2, 1, 2, 1, 1, 1}.Area(), 0)
-	t.Eq(proto.DOMQuad{1, 1, 2, 1, 2, 2, 1, 2}.Area(), 1)
-	t.Eq(proto.DOMQuad{1, 1, 2, 1, 2, 4, 1, 3}.Area(), 2.5)
+func TestArea(t *testing.T) {
+	g := testutil.New(t)
+	g.Eq(proto.DOMQuad{1, 1, 2, 1, 2, 1, 1, 1}.Area(), 0)
+	g.Eq(proto.DOMQuad{1, 1, 2, 1, 2, 2, 1, 2}.Area(), 1)
+	g.Eq(proto.DOMQuad{1, 1, 2, 1, 2, 4, 1, 3}.Area(), 2.5)
 }
 
-func (t T) Box() {
+func TestBox(t *testing.T) {
+	g := testutil.New(t)
 	res := &proto.DOMGetContentQuadsResult{Quads: []proto.DOMQuad{
 		{1, 1, 2, 1, 2, 2, 1, 2},
 		{2, 0, 3, 0, 3, 1, 2, 1},
 		{0, 2, 1, 2, 1, 3, 0, 3},
 	}}
-	t.Eq(res.Box(), &proto.DOMRect{
+	g.Eq(res.Box(), &proto.DOMRect{
 		X:      0,
 		Y:      0,
 		Width:  3,
 		Height: 3,
 	})
 
-	t.Nil((&proto.DOMGetContentQuadsResult{}).Box())
+	g.Nil((&proto.DOMGetContentQuadsResult{}).Box())
 }
 
-func (t T) InputTouchPointMoveTo() {
+func TestInputTouchPointMoveTo(t *testing.T) {
+	g := testutil.New(t)
 	p := &proto.InputTouchPoint{}
 	p.MoveTo(1, 2)
 
-	t.Eq(1, p.X)
-	t.Eq(2, p.Y)
+	g.Eq(1, p.X)
+	g.Eq(2, p.Y)
 }
 
-func (t T) CookiesToParams() {
+func TestCookiesToParams(t *testing.T) {
+	g := testutil.New(t)
 	list := proto.CookiesToParams([]*proto.NetworkCookie{{
 		Name:  "name",
 		Value: "val",
 	}})
 
-	t.Eq(list[0].Name, "name")
-	t.Eq(list[0].Value, "val")
+	g.Eq(list[0].Name, "name")
+	g.Eq(list[0].Value, "val")
 }
 
-func (t T) GeneratorOptimize() {
+func TestGeneratorOptimize(t *testing.T) {
 	var _ proto.TargetTargetInfoType = proto.TargetTargetInfoTypeBackgroundPage
 	var _ proto.TargetTargetInfoType = proto.TargetTargetInfoTypePage
 

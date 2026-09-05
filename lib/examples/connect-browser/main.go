@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/rah-0/rod"
@@ -14,7 +15,7 @@ func main() {
 	//
 	//     chrome --headless --remote-debugging-port=9222
 	//
-	u := launcher.MustResolveURL("")
+	u := launcher.MustResolveURL(context.Background(), "")
 
 	browser := rod.New().ControlURL(u).MustConnect()
 

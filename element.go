@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -375,7 +375,7 @@ func (el *Element) Attribute(name string) (*string, error) {
 	}
 
 	if attr.Value.Nil() {
-		return nil, nil //nolint: nilnil
+		return nil, nil
 	}
 
 	s := attr.Value.Str()
@@ -426,7 +426,7 @@ func (el *Element) SetFiles(paths []string) error {
 // is fired all NodeID on the page will be reassigned to another value)
 // we don't recommend using the NodeID, instead, use the [proto.DOMBackendNodeID] to identify the element.
 func (el *Element) Describe(depth int, pierce bool) (*proto.DOMNode, error) {
-	val, err := proto.DOMDescribeNode{ObjectID: el.id(), Depth: jsonvalue.Int(depth), Pierce: pierce}.Call(el)
+	val, err := proto.DOMDescribeNode{ObjectID: el.id(), Depth: new(depth), Pierce: pierce}.Call(el)
 	if err != nil {
 		return nil, err
 	}
@@ -513,6 +513,21 @@ func (el *Element) WaitLoad() error {
 	return err
 }
 
+func shapesEqual(a, b *proto.DOMGetContentQuadsResult) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if len(a.Quads) != len(b.Quads) {
+		return false
+	}
+	for i, quad := range a.Quads {
+		if !slices.Equal(quad, b.Quads[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // WaitStable waits until no shape or position change for d duration.
 // Be careful, d is not the max wait timeout, it's the least stable time.
 // If you want to set a timeout you can use the [Element.Timeout] function.
@@ -542,7 +557,7 @@ func (el *Element) WaitStable(d time.Duration) error {
 		if err != nil {
 			return err
 		}
-		if reflect.DeepEqual(shape, current) {
+		if shapesEqual(shape, current) {
 			break
 		}
 		shape = current
@@ -574,7 +589,7 @@ func (el *Element) WaitStableRAF() error {
 		if err != nil {
 			return err
 		}
-		if reflect.DeepEqual(shape, current) {
+		if shapesEqual(shape, current) {
 			break
 		}
 		shape = current
@@ -679,7 +694,7 @@ func (el *Element) Screenshot(format proto.PageCaptureScreenshotFormat, quality 
 	}
 
 	opts := &proto.PageCaptureScreenshot{
-		Quality: jsonvalue.Int(quality),
+		Quality: new(quality),
 		Format:  format,
 	}
 
@@ -720,12 +735,12 @@ func (el *Element) Remove() error {
 }
 
 // Call implements the [proto.Client].
-func (el *Element) Call(ctx context.Context, sessionID, methodName string, params interface{}) (res []byte, err error) {
+func (el *Element) Call(ctx context.Context, sessionID, methodName string, params any) (res []byte, err error) {
 	return el.page.Call(ctx, sessionID, methodName, params)
 }
 
 // Eval is a shortcut for [Element.Evaluate] with AwaitPromise, ByValue and AutoExp set to true.
-func (el *Element) Eval(js string, params ...interface{}) (*proto.RuntimeRemoteObject, error) {
+func (el *Element) Eval(js string, params ...any) (*proto.RuntimeRemoteObject, error) {
 	return el.Evaluate(Eval(js, params...).ByPromise())
 }
 

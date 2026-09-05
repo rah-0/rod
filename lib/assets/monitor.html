@@ -38,35 +38,41 @@
       const targets = document.getElementById('targets')
 
       async function update() {
-        const list = await (await fetch('/api/pages')).json()
-        const links = document.createDocumentFragment()
+        try {
+          const response = await fetch('/api/pages')
+          if (!response.ok) throw new Error(`HTTP ${response.status}`)
+          const list = await response.json()
+          const links = document.createDocumentFragment()
 
-        list.forEach((target) => {
-          if (
-            typeof target.targetId !== 'string' ||
-            target.targetId.length === 0 ||
-            typeof target.title !== 'string' ||
-            typeof target.url !== 'string'
-          ) {
-            return
-          }
+          list.forEach((target) => {
+            if (
+              typeof target.targetId !== 'string' ||
+              target.targetId.length === 0 ||
+              typeof target.title !== 'string' ||
+              typeof target.url !== 'string'
+            ) {
+              return
+            }
 
-          const url = new URL(
-            `/page/${encodeURIComponent(target.targetId)}`,
-            window.location.origin,
-          )
-          if (url.origin !== window.location.origin) return
+            const url = new URL(
+              `/page/${encodeURIComponent(target.targetId)}`,
+              window.location.origin,
+            )
+            if (url.origin !== window.location.origin) return
 
-          const link = document.createElement('a')
-          link.href = url.href
-          link.title = target.url
-          link.textContent = target.title
-          links.appendChild(link)
-        })
+            const link = document.createElement('a')
+            link.href = url.href
+            link.title = target.url
+            link.textContent = target.title
+            links.appendChild(link)
+          })
 
-        targets.replaceChildren(links)
-
-        setTimeout(update, 1000)
+          targets.replaceChildren(links)
+        } catch (error) {
+          console.error('Cannot refresh monitor pages:', error)
+        } finally {
+          setTimeout(update, 1000)
+        }
       }
 
       update()

@@ -8,9 +8,9 @@ import (
 
 func patch(json jsonvalue.Value) {
 	k := func(k, v string) jsonvalue.Query {
-		return func(obj interface{}) (val interface{}, has bool) {
-			for _, el := range obj.([]interface{}) {
-				res := el.(map[string]interface{})[k]
+		return func(obj any) (val any, has bool) {
+			for _, el := range obj.([]any) {
+				res := el.(map[string]any)[k]
 				if res == v {
 					return el, true
 				}
@@ -18,9 +18,9 @@ func patch(json jsonvalue.Value) {
 			panic("not found")
 		}
 	}
-	index := func(obj interface{}, k, v string) string {
-		for i, el := range obj.([]interface{}) {
-			res := el.(map[string]interface{})[k]
+	index := func(obj any, k, v string) string {
+		for i, el := range obj.([]any) {
+			res := el.(map[string]any)[k]
 			if res == v {
 				return fmt.Sprintf("%d", i)
 			}
@@ -56,7 +56,7 @@ func patch(json jsonvalue.Value) {
 
 	// fix Cookie.Expires
 	j, _ = getTypes("Network").Gets(k("id", "Cookie"), "properties")
-	j.Set(index(j.Val(), "name", "expires"), map[string]interface{}{
+	j.Set(index(j.Val(), "name", "expires"), map[string]any{
 		"$ref":        "TimeSinceEpoch",
 		"description": "Cookie expiration date",
 		"name":        "expires",

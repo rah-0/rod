@@ -2,7 +2,8 @@
 package devices
 
 import (
-	"github.com/rah-0/rod/lib/jsonvalue"
+	"slices"
+
 	"github.com/rah-0/rod/lib/proto"
 )
 
@@ -65,7 +66,7 @@ func (device Device) MetricsEmulation() *proto.EmulationSetDeviceMetricsOverride
 		Height:            screen.Height,
 		DeviceScaleFactor: device.Screen.DevicePixelRatio,
 		ScreenOrientation: orientation,
-		Mobile:            has(device.Capabilities, "mobile"),
+		Mobile:            slices.Contains(device.Capabilities, "mobile"),
 	}
 }
 
@@ -78,8 +79,8 @@ func (device Device) TouchEmulation() *proto.EmulationSetTouchEmulationEnabled {
 	}
 
 	return &proto.EmulationSetTouchEmulationEnabled{
-		Enabled:        has(device.Capabilities, "touch"),
-		MaxTouchPoints: jsonvalue.Int(5),
+		Enabled:        slices.Contains(device.Capabilities, "touch"),
+		MaxTouchPoints: new(5),
 	}
 }
 

@@ -1,6 +1,7 @@
 package rod_test
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/rah-0/rod/lib/devices"
@@ -248,7 +249,7 @@ func TestNativeDrag(t *testing.T) { // devtools doesn't support to use mouse eve
 	mouse.MustMoveTo(pt.X, pt.Y)
 	mouse.MustDown("left")
 	g.E(mouse.MoveLinear(proto.NewPoint(pt.X, toY), 5))
-	page.MustScreenshot("")
+	page.MustScreenshot(filepath.Join(t.ArtifactDir(), "drag.png"))
 	mouse.MustUp("left")
 
 	page.MustElement(".dropzone:nth-child(2) #draggable")

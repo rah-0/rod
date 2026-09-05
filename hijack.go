@@ -50,7 +50,7 @@ func newHijackRouter(browser *Browser, client proto.Client) *HijackRouter {
 	}
 }
 
-func (r *HijackRouter) initEvents() *HijackRouter { //nolint: gocognit
+func (r *HijackRouter) initEvents() *HijackRouter {
 	ctx := r.browser.ctx
 	if cta, ok := r.client.(proto.Contextable); ok {
 		ctx = cta.GetContext()
@@ -66,7 +66,7 @@ func (r *HijackRouter) initEvents() *HijackRouter { //nolint: gocognit
 
 	_ = r.enable.Call(r.client)
 
-	r.run = r.browser.Context(eventCtx).eachEvent(sessionID, func(e *proto.FetchRequestPaused) bool {
+	r.run = r.browser.Context(eventCtx).eachEvent(sessionID, On(func(e *proto.FetchRequestPaused, _ proto.TargetSessionID) bool {
 		go func() {
 			ctx := r.new(eventCtx, e)
 			for _, h := range r.handlers {
@@ -106,7 +106,7 @@ func (r *HijackRouter) initEvents() *HijackRouter { //nolint: gocognit
 		}()
 
 		return false
-	})
+	}))
 	return r
 }
 
@@ -210,7 +210,7 @@ type Hijack struct {
 	continueRequest *proto.FetchContinueRequest
 
 	// CustomState is used to store things for this context
-	CustomState interface{}
+	CustomState any
 
 	browser *Browser
 }
@@ -303,7 +303,7 @@ func (ctx *HijackRequest) SetContext(c context.Context) *HijackRequest {
 }
 
 // SetBody of the request, if obj is []byte or string, raw body will be used, else it will be encoded as json.
-func (ctx *HijackRequest) SetBody(obj interface{}) *HijackRequest {
+func (ctx *HijackRequest) SetBody(obj any) *HijackRequest {
 	var b []byte
 
 	switch body := obj.(type) {
@@ -391,7 +391,7 @@ func (ctx *HijackResponse) AddHeader(pairs ...string) *HijackResponse {
 }
 
 // SetBody of the payload, if obj is []byte or string, raw body will be used, else it will be encoded as json.
-func (ctx *HijackResponse) SetBody(obj interface{}) *HijackResponse {
+func (ctx *HijackResponse) SetBody(obj any) *HijackResponse {
 	switch body := obj.(type) {
 	case []byte:
 		ctx.payload.Body = body

@@ -1,13 +1,19 @@
 package proto_test
 
-import "github.com/rah-0/rod/lib/proto"
+import (
+	"testing"
 
-func (t T) Point() {
+	"github.com/rah-0/rod/internal/testutil"
+	"github.com/rah-0/rod/lib/proto"
+)
+
+func TestPoint(t *testing.T) {
+	g := testutil.New(t)
 	p := proto.NewPoint(1, 2).
 		Add(proto.NewPoint(3, 4)).
 		Minus(proto.NewPoint(1, 1)).
 		Scale(2)
 
-	t.Eq(p.X, 6)
-	t.Eq(p.Y, 10)
+	g.Eq(p.X, 6)
+	g.Eq(p.Y, 10)
 }

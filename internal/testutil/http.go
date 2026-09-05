@@ -14,14 +14,16 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"testing"
 )
 
-// Router is a loopback HTTP server owned by a test.
+// Router is an HTTP server owned by a test.
 type Router struct {
 	g G
 
 	HostURL *url.URL
 	Server  *http.Server
+	Client  *http.Client
 	Mux     *http.ServeMux
 }
 
@@ -30,21 +32,38 @@ func (g G) Serve() *Router {
 	g.Helper()
 	mux := http.NewServeMux()
 	server := httptest.NewServer(mux)
+	g.Cleanup(server.Close)
+	return g.router(server, mux)
+}
+
+// ServeInMemory starts an HTTP server reachable only through Router.Client.
+// Use Serve for fixtures consumed by browsers or http.DefaultClient.
+func (g G) ServeInMemory() *Router {
+	g.Helper()
+	t, ok := g.Testable.(testing.TB)
+	if !ok {
+		g.Fatalf("testutil: %T does not support in-memory HTTP servers", g.Testable)
+		return nil
+	}
+	mux := http.NewServeMux()
+	return g.router(httptest.NewTestServer(t, mux), mux)
+}
+
+func (g G) router(server *httptest.Server, mux *http.ServeMux) *Router {
+	client := server.Client()
 	hostURL, err := url.Parse(server.URL)
 	if err != nil {
 		server.Close()
 		g.Fatalf("testutil: parse test server URL: %v", err)
 		return nil
 	}
-
-	router := &Router{
+	return &Router{
 		g:       g,
 		HostURL: hostURL,
 		Server:  server.Config,
+		Client:  client,
 		Mux:     mux,
 	}
-	g.Cleanup(server.Close)
-	return router
 }
 
 // URL returns the server URL with path appended.
@@ -106,7 +125,7 @@ func (g G) HandleHTTP(file string, value ...any) http.HandlerFunc {
 type ReqMIME string
 
 // Req sends an HTTP request and returns a response helper.
-// Header, ReqMIME, and context.Context values configure the request;
+// Header, ReqMIME, context.Context, and *http.Client values configure the request;
 // another option is encoded as its body.
 func (g G) Req(method, rawURL string, options ...any) *ResHelper {
 	g.Helper()
@@ -114,7 +133,8 @@ func (g G) Req(method, rawURL string, options ...any) *ResHelper {
 	headers := make(http.Header)
 	host := ""
 	contentType := ""
-	ctx := context.Background()
+	ctx := g.Testable.Context()
+	client := http.DefaultClient
 	var body io.Reader
 
 	for _, option := range options {
@@ -127,6 +147,8 @@ func (g G) Req(method, rawURL string, options ...any) *ResHelper {
 			contentType = mime.TypeByExtension(filepath.Ext(string(value)))
 		case context.Context:
 			ctx = value
+		case *http.Client:
+			client = value
 		default:
 			encoded, err := responseBytes(value)
 			if err != nil {
@@ -149,7 +171,7 @@ func (g G) Req(method, rawURL string, options ...any) *ResHelper {
 		request.Header.Set("Content-Type", contentType)
 	}
 
-	response, err := http.DefaultClient.Do(request)
+	response, err := client.Do(request)
 	return &ResHelper{g: g, Response: response, err: err}
 }
 

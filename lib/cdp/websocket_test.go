@@ -24,7 +24,7 @@ func TestWebSocketLargePayload(t *testing.T) {
 
 	const size = 2 * 1024 * 1024
 
-	res, err := client.Call(ctx, id, "Runtime.evaluate", map[string]interface{}{
+	res, err := client.Call(ctx, id, "Runtime.evaluate", map[string]any{
 		"expression":    fmt.Sprintf(`"%s"`, strings.Repeat("a", size)),
 		"returnByValue": true,
 	})
@@ -41,16 +41,14 @@ func ConcurrentCall(t *testing.T) {
 	client, id := newPage(ctx, g)
 
 	wg := sync.WaitGroup{}
-	for i := 0; i < 30; i++ {
-		wg.Add(1)
-		go func() {
-			res, err := client.Call(ctx, id, "Runtime.evaluate", map[string]interface{}{
+	for range 30 {
+		wg.Go(func() {
+			res, err := client.Call(ctx, id, "Runtime.evaluate", map[string]any{
 				"expression": `10`,
 			})
 			g.Nil(err)
 			g.Eq(string(res), "{\"result\":{\"type\":\"number\",\"value\":10,\"description\":\"10\"}}")
-			wg.Done()
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -98,14 +96,14 @@ func newPage(ctx context.Context, g testutil.G) (*cdp.Client, string) {
 	file, err := filepath.Abs(filepath.FromSlash("fixtures/basic.html"))
 	g.E(err)
 
-	res, err := client.Call(ctx, "", "Target.createTarget", map[string]interface{}{
+	res, err := client.Call(ctx, "", "Target.createTarget", map[string]any{
 		"url": "file://" + file,
 	})
 	g.E(err)
 
 	targetID := jsonvalue.New(res).Get("targetId").String()
 
-	res, err = client.Call(ctx, "", "Target.attachToTarget", map[string]interface{}{
+	res, err = client.Call(ctx, "", "Target.attachToTarget", map[string]any{
 		"targetId": targetID,
 		"flatten":  true,
 	})

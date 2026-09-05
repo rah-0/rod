@@ -67,8 +67,8 @@ func TestTrace(t *testing.T) {
 
 	g.Eq(rod.TraceTypeInput.String(), "[input]")
 
-	var msg []interface{}
-	g.browser.Logger(utils.Log(func(list ...interface{}) { msg = list }))
+	var msg []any
+	g.browser.Logger(utils.Log(func(list ...any) { msg = list }))
 	g.browser.Trace(true).SlowMotion(time.Microsecond)
 	defer func() {
 		g.browser.Logger(rod.DefaultLogger)

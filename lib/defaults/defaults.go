@@ -183,14 +183,8 @@ func parse(options string) {
 	reg := regexp.MustCompile(`[,\r\n]`)
 
 	for _, str := range reg.Split(options, -1) {
-		kv := strings.SplitN(str, "=", 2)
-
-		v := ""
-		if len(kv) == 2 {
-			v = kv[1]
-		}
-
-		n := strings.TrimSpace(kv[0])
+		n, v, _ := strings.Cut(str, "=")
+		n = strings.TrimSpace(n)
 		if n == "" {
 			continue
 		}

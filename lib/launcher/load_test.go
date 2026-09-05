@@ -1,73 +1,45 @@
 package launcher_test
 
 import (
-	"context"
-	"math/rand"
-	"sync"
+	"net/http"
 	"testing"
 
 	"github.com/rah-0/rod"
 	"github.com/rah-0/rod/internal/testutil"
 	"github.com/rah-0/rod/lib/cdp"
 	"github.com/rah-0/rod/lib/launcher"
-	"github.com/rah-0/rod/lib/utils"
 )
 
+// BenchmarkManager measures a complete managed browser lifecycle, including
+// navigation, browser shutdown, and the manager's profile cleanup.
 func BenchmarkManager(b *testing.B) {
 	const managerToken = "test-manager-token-0123456789abcdef0123456789abcdef"
-
-	const concurrent = 30 // how many browsers will run at the same time
-	const num = 300       // how many browsers we will launch
-
-	limiter := make(chan int, concurrent)
-
-	s := testutil.New(b).Serve()
+	server := testutil.New(b).Serve()
+	server.Route("/", ".html", `<html><body>ok</body></html>`)
 	manager := testutil.New(b).Serve()
-	manager.Mux.Handle("/", launcher.NewManager(managerToken))
-
-	s.Route("/", ".html", `<html><body>
-		ok
-	</body><script>
-		function wait() {
-			return new Promise(r => setTimeout(r, 1000 * Math.random()))
+	handler := launcher.NewManager(managerToken)
+	finished := make(chan struct{}, 1)
+	manager.Mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Upgrade") == "websocket" {
+			defer func() { finished <- struct{}{} }()
 		}
-	</script></html>`)
+		handler.ServeHTTP(w, r)
+	})
 
-	wg := &sync.WaitGroup{}
-	wg.Add(num)
-	for i := 0; i < num; i++ {
-		limiter <- 0
-
-		go func() {
-			utils.Sleep(rand.Float64())
-
-			ctx, cancel := context.WithCancel(context.Background())
-			defer func() {
-				go func() {
-					utils.Sleep(2)
-					cancel()
-				}()
-			}()
-
+	for b.Loop() {
+		func() {
 			l := launcher.MustNewManaged(manager.URL(), managerToken)
-			u, h := l.ClientHeader()
-			browser := rod.New().Client(cdp.MustStartWithURL(ctx, u, h)).MustConnect()
-			page := browser.MustPage()
-			wait := page.MustWaitNavigation()
-			page.MustNavigate(s.URL())
-			wait()
-			page.MustEval(`wait()`)
-
-			if rand.Int()%10 == 0 {
-				// 10% we will drop the websocket connection without call the api to gracefully close the browser
-				cancel()
-			} else {
-				browser.MustClose()
+			u, header := l.ClientHeader()
+			ws := new(cdp.WebSocket)
+			if err := ws.Connect(b.Context(), u, header); err != nil {
+				b.Fatal(err)
 			}
-
-			wg.Done()
-			<-limiter
+			defer ws.Close()
+			client := cdp.New().Start(ws)
+			browser := rod.New().Client(client).MustConnect()
+			defer browser.MustClose()
+			browser.MustPage(server.URL()).MustWaitLoad()
 		}()
+		<-finished
 	}
-	wg.Wait()
 }

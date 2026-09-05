@@ -35,7 +35,7 @@ func (b *Browser) Timeout(d time.Duration) *Browser {
 
 // CancelTimeout cancels the current timeout context and returns a clone with the parent context.
 func (b *Browser) CancelTimeout() *Browser {
-	val := b.ctx.Value(timeoutContextKey{}).(*timeoutContextVal) //nolint:forcetypeassert
+	val := b.ctx.Value(timeoutContextKey{}).(*timeoutContextVal)
 	val.cancel()
 	return b.Context(val.parent)
 }
@@ -75,7 +75,7 @@ func (p *Page) Timeout(d time.Duration) *Page {
 
 // CancelTimeout cancels the current timeout context and returns a clone with the parent context.
 func (p *Page) CancelTimeout() *Page {
-	val := p.ctx.Value(timeoutContextKey{}).(*timeoutContextVal) //nolint: forcetypeassert
+	val := p.ctx.Value(timeoutContextKey{}).(*timeoutContextVal)
 	val.cancel()
 	return p.Context(val.parent)
 }
@@ -113,7 +113,7 @@ func (el *Element) Timeout(d time.Duration) *Element {
 
 // CancelTimeout cancels the current timeout context and returns a clone with the parent context.
 func (el *Element) CancelTimeout() *Element {
-	val := el.ctx.Value(timeoutContextKey{}).(*timeoutContextVal) //nolint: forcetypeassert
+	val := el.ctx.Value(timeoutContextKey{}).(*timeoutContextVal)
 	val.cancel()
 	return el.Context(val.parent)
 }

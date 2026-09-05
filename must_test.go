@@ -11,7 +11,7 @@ func TestBrowserWithPanic(t *testing.T) {
 	g := setup(t)
 
 	var triggers int
-	trigger := func(x interface{}) {
+	trigger := func(x any) {
 		triggers++
 		panic(x)
 	}
@@ -39,7 +39,7 @@ func TestPageWithPanic(t *testing.T) {
 	g := setup(t)
 
 	var triggers int
-	trigger := func(x interface{}) {
+	trigger := func(x any) {
 		triggers++
 		panic(x)
 	}
@@ -67,7 +67,7 @@ func TestElementWithPanic(t *testing.T) {
 	g := setup(t)
 
 	var triggers int
-	trigger := func(x interface{}) {
+	trigger := func(x any) {
 		triggers++
 		panic(x)
 	}

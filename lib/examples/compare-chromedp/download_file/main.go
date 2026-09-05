@@ -26,14 +26,14 @@ func main() {
 
 	wait := page.Browser().WaitDownload(wd)
 
-	go browser.EachEvent(func(e *proto.PageDownloadProgress) bool {
+	go browser.EachEvent(rod.On(func(e *proto.PageDownloadProgress, _ proto.TargetSessionID) bool {
 		completed := "(unknown)"
 		if e.TotalBytes != 0 {
 			completed = fmt.Sprintf("%0.2f%%", e.ReceivedBytes/e.TotalBytes*100.0)
 		}
 		log.Printf("state: %s, completed: %s\n", e.State, completed)
 		return e.State == proto.PageDownloadProgressStateCompleted
-	})()
+	}))()
 
 	page.MustElementR("a", "Download ZIP").MustClick()
 

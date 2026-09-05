@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -41,23 +42,23 @@ func Noop() {}
 // Logger interface.
 type Logger interface {
 	// Same as fmt.Printf
-	Println(vs ...interface{})
+	Println(vs ...any)
 }
 
 // Log type for Println.
-type Log func(msg ...interface{})
+type Log func(msg ...any)
 
 // Println interface.
-func (l Log) Println(msg ...interface{}) {
+func (l Log) Println(msg ...any) {
 	l(msg...)
 }
 
 // LoggerQuiet does nothing.
-var LoggerQuiet Logger = Log(func(_ ...interface{}) {})
+var LoggerQuiet Logger = Log(func(_ ...any) {})
 
 // MultiLogger is similar to https://golang.org/pkg/io/#MultiWriter
 func MultiLogger(list ...Logger) Log {
-	return Log(func(msg ...interface{}) {
+	return Log(func(msg ...any) {
 		for _, lg := range list {
 			lg.Println(msg...)
 		}
@@ -65,10 +66,10 @@ func MultiLogger(list ...Logger) Log {
 }
 
 // Panic is the same as the built-in panic.
-var Panic = func(v interface{}) { panic(v) }
+var Panic = func(v any) { panic(v) }
 
 // E if the last arg is error, panic it.
-func E(args ...interface{}) []interface{} {
+func E(args ...any) []any {
 	err, ok := args[len(args)-1].(error)
 	if ok {
 		Panic(err)
@@ -77,15 +78,15 @@ func E(args ...interface{}) []interface{} {
 }
 
 // S Template render, the params is key-value pairs.
-func S(tpl string, params ...interface{}) string {
+func S(tpl string, params ...any) string {
 	var out bytes.Buffer
 
-	dict := map[string]interface{}{}
+	dict := map[string]any{}
 	fnDict := template.FuncMap{}
 
 	l := len(params)
 	for i := 0; i < l-1; i += 2 {
-		k := params[i].(string) //nolint: forcetypeassert
+		k := params[i].(string)
 		v := params[i+1]
 		if reflect.TypeOf(v).Kind() == reflect.Func {
 			fnDict[k] = v
@@ -125,9 +126,11 @@ func AbsolutePaths(paths []string) []string {
 
 // OutputFile auto creates file if not exists, it will try to detect the data type and
 // auto output binary, string or json.
-func OutputFile(p string, data interface{}) error {
+func OutputFile(p string, data any) error {
 	dir := filepath.Dir(p)
-	_ = Mkdir(dir)
+	if err := Mkdir(dir); err != nil {
+		return err
+	}
 
 	var bin []byte
 
@@ -137,9 +140,12 @@ func OutputFile(p string, data interface{}) error {
 	case string:
 		bin = []byte(t)
 	case io.Reader:
-		f, _ := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o664)
-		_, err := io.Copy(f, t)
-		return err
+		f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o664)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(f, t)
+		return errors.Join(copyErr, f.Close())
 	default:
 		bin = MustToJSONBytes(data)
 	}
@@ -157,6 +163,8 @@ func ReadString(p string) (string, error) {
 func All(actions ...func()) func() {
 	wg := &sync.WaitGroup{}
 
+	// Keep explicit Done calls: callers may use panic or runtime.Goexit,
+	// whereas WaitGroup.Go requires its function not to panic.
 	wg.Add(len(actions))
 
 	runner := func(action func()) {
@@ -207,7 +215,7 @@ func (de *IdleCounter) Done() {
 
 	de.job--
 	if de.job == 0 {
-		de.reset(de.duration)
+		de.tmr.Reset(de.duration)
 	}
 	if de.job < 0 {
 		panic("all jobs are already done")
@@ -218,7 +226,7 @@ func (de *IdleCounter) Done() {
 func (de *IdleCounter) Wait(ctx context.Context) {
 	de.lock.Lock()
 	if de.job == 0 {
-		de.reset(de.duration)
+		de.tmr.Reset(de.duration)
 	}
 	de.lock.Unlock()
 
@@ -229,16 +237,6 @@ func (de *IdleCounter) Wait(ctx context.Context) {
 	}
 }
 
-func (de *IdleCounter) reset(d time.Duration) {
-	if !de.tmr.Stop() {
-		select {
-		case <-de.tmr.C:
-		default:
-		}
-	}
-	de.tmr.Reset(d)
-}
-
 var chPause = make(chan struct{})
 
 // Pause the goroutine forever.
@@ -247,7 +245,7 @@ func Pause() {
 }
 
 // Dump values for debugging.
-func Dump(list ...interface{}) string {
+func Dump(list ...any) string {
 	out := []string{}
 	for _, el := range list {
 		out = append(out, jsonvalue.New(el).JSON("", "  "))
@@ -256,7 +254,7 @@ func Dump(list ...interface{}) string {
 }
 
 // MustToJSONBytes encode data to json bytes.
-func MustToJSONBytes(data interface{}) []byte {
+func MustToJSONBytes(data any) []byte {
 	buf := bytes.NewBuffer(nil)
 	enc := json.NewEncoder(buf)
 	enc.SetEscapeHTML(false)
@@ -266,7 +264,7 @@ func MustToJSONBytes(data interface{}) []byte {
 }
 
 // MustToJSON encode data to json string.
-func MustToJSON(data interface{}) string {
+func MustToJSON(data any) string {
 	return string(MustToJSONBytes(data))
 }
 
@@ -359,7 +357,7 @@ func CropImage(bin []byte, quality, x, y, width, height int) ([]byte, error) {
 
 	cropped := bytes.NewBuffer(nil)
 
-	img = img.(interface { //nolint: forcetypeassert
+	img = img.(interface {
 		SubImage(r image.Rectangle) image.Image
 	}).SubImage(image.Rect(
 		x, y, x+width, y+height,

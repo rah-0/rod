@@ -2,15 +2,17 @@ package launcher
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
-	"github.com/rah-0/rod/lib/jsonvalue"
 	"github.com/rah-0/rod/lib/utils"
 )
 
@@ -84,8 +86,8 @@ func (r *URLParser) Err() error {
 }
 
 // MustResolveURL is similar to ResolveURL.
-func MustResolveURL(u string) string {
-	u, err := ResolveURL(u)
+func MustResolveURL(ctx context.Context, u string) string {
+	u, err := ResolveURL(ctx, u)
 	utils.E(err)
 	return u
 }
@@ -99,7 +101,9 @@ var (
 // The format of u can be "9222", ":9222", "host:9222", "ws://host:9222", "wss://host:9222",
 // "https://host:9222" "http://host:9222". The return string will look like:
 // "ws://host:9222/devtools/browser/4371405f-84df-4ad6-9e0f-eab81f7521cc"
-func ResolveURL(u string) (string, error) {
+// Discovery requests honor ctx and have a maximum duration of 10 seconds,
+// including reading the response body.
+func ResolveURL(ctx context.Context, u string) (string, error) {
 	if u == "" {
 		u = "9222"
 	}
@@ -119,19 +123,38 @@ func ResolveURL(u string) (string, error) {
 	parsed = toHTTP(*parsed)
 	parsed.Path = "/json/version"
 
-	res, err := http.Get(parsed.String()) //nolint: noctx
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	res, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = res.Body.Close() }()
 
+	if res.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("resolve browser URL: HTTP status %s", res.Status)
+	}
 	data, err := io.ReadAll(res.Body)
-	utils.E(err)
+	if err != nil {
+		return "", fmt.Errorf("read browser discovery: %w", err)
+	}
+	var version struct {
+		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+	}
+	if err := json.Unmarshal(data, &version); err != nil {
+		return "", fmt.Errorf("decode browser discovery: %w", err)
+	}
 
-	wsURL := jsonvalue.New(data).Get("webSocketDebuggerUrl").Str()
-
-	parsedWS, err := url.Parse(wsURL)
-	utils.E(err)
+	parsedWS, err := url.Parse(version.WebSocketDebuggerURL)
+	if err != nil {
+		return "", fmt.Errorf("parse browser WebSocket URL: %w", err)
+	}
+	if (parsedWS.Scheme != "ws" && parsedWS.Scheme != "wss") || parsedWS.Host == "" {
+		return "", fmt.Errorf("invalid browser WebSocket URL: %q", version.WebSocketDebuggerURL)
+	}
 
 	parsedWS.Host = parsed.Host
 

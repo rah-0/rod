@@ -1,6 +1,7 @@
 package goroutines
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -213,4 +214,38 @@ func TestTracesStringGroupsInEncounterOrder(t *testing.T) {
 	if !strings.HasSuffix(formatted, second.Raw) {
 		t.Fatalf("second group is not stable:\n%s", formatted)
 	}
+}
+
+// Runtime stacks are finite snapshots; cap fuzz input to keep allocation bounded.
+func FuzzParseTraces(f *testing.F) {
+	for _, seed := range []string{
+		"",
+		"not a goroutine trace",
+		"goroutine 1 [running]:\nexample.run()\n\t/example.go:1 +0x1",
+		"goroutine 2 [chan receive]:\nexample.wait()\n\t/example.go:2\n[originating from goroutine 1]:",
+		"goroutine nope [running]:\nfunction()\n\ngoroutine 3 []:",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, raw string) {
+		if len(raw) > 64<<10 {
+			t.Skip()
+		}
+		traces := parseTraces(raw)
+		if len(traces) > strings.Count(raw, "\n\n")+1 {
+			t.Fatal("parser produced more traces than input blocks")
+		}
+		for _, trace := range traces {
+			if trace == nil || trace.Raw == "" || !strings.Contains(raw, trace.Raw) {
+				t.Fatal("parser lost the original trace")
+			}
+			if !reflect.DeepEqual(trace, parseTrace(trace.Raw)) {
+				t.Fatal("parsing the same trace changed its result")
+			}
+			if len(trace.Stacks)+len(trace.GoroutineAncestorIDs) > strings.Count(trace.Raw, "\n") {
+				t.Fatal("parser produced more frames than input lines")
+			}
+		}
+		_ = traces.String()
+	})
 }

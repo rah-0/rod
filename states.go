@@ -20,7 +20,7 @@ func (b *Browser) key(sessionID proto.TargetSessionID, methodName string) stateK
 	}
 }
 
-func (b *Browser) set(sessionID proto.TargetSessionID, methodName string, params interface{}) {
+func (b *Browser) set(sessionID proto.TargetSessionID, methodName string, params any) {
 	b.states.Store(b.key(sessionID, methodName), params)
 
 	key := ""
@@ -52,7 +52,7 @@ func (b *Browser) LoadState(sessionID proto.TargetSessionID, method proto.Reques
 }
 
 // RemoveState a state.
-func (b *Browser) RemoveState(key interface{}) {
+func (b *Browser) RemoveState(key any) {
 	b.states.Delete(key)
 }
 
@@ -94,7 +94,7 @@ func (b *Browser) cachePage(page *Page) {
 
 func (b *Browser) loadCachedPage(id proto.TargetTargetID) *Page {
 	if cache, ok := b.states.Load(id); ok {
-		return cache.(*Page) //nolint: forcetypeassert
+		return cache.(*Page)
 	}
 	return nil
 }

@@ -34,3 +34,11 @@ including the browser executable, environment, working directory, and XVFB
 wrapper, cannot be changed remotely. `Launcher.XVFB` remains available to
 trusted local launchers. Managed clients also cannot choose the profile path or
 debugging port; cleanup is confined to the manager-created profile.
+
+## Browser discovery
+
+`ResolveURL(ctx, endpoint)` normalizes a browser endpoint and requests
+`/json/version` with a 10-second timeout, including the response body. Its context
+accepts caller cancellation or a shorter deadline. `Launcher.Launch` passes its
+context to discovery. HTTP status, body-read, JSON, and WebSocket URL errors are
+returned to the caller; `MustResolveURL(ctx, endpoint)` panics on errors.

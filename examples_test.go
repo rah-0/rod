@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -14,7 +14,6 @@ import (
 	"github.com/rah-0/rod"
 	"github.com/rah-0/rod/lib/cdp"
 	"github.com/rah-0/rod/lib/input"
-	"github.com/rah-0/rod/lib/jsonvalue"
 	"github.com/rah-0/rod/lib/launcher"
 	"github.com/rah-0/rod/lib/proto"
 	"github.com/rah-0/rod/lib/utils"
@@ -192,7 +191,7 @@ func Example_context_and_EachEvent() {
 	}()
 
 	// It's a blocking method, it will wait until the context is cancelled
-	page.EachEvent(func(_ *proto.PageLifecycleEvent) {})()
+	page.EachEvent(rod.On(func(_ *proto.PageLifecycleEvent, _ proto.TargetSessionID) bool { return false }))()
 
 	if page.GetContext().Err() == context.Canceled {
 		fmt.Println("cancelled")
@@ -210,10 +209,9 @@ func Example_error_handling() {
 
 	// We use Go's standard way to check error types, no magic.
 	check := func(err error) {
-		var evalErr *rod.EvalError
 		if errors.Is(err, context.DeadlineExceeded) { // timeout error
 			fmt.Println("timeout err")
-		} else if errors.As(err, &evalErr) { // eval error
+		} else if evalErr, ok := errors.AsType[*rod.EvalError](err); ok { // eval error
 			fmt.Println(evalErr.LineNumber)
 		} else if err != nil {
 			fmt.Println("can't handle", err)
@@ -278,7 +276,7 @@ func Example_page_screenshot() {
 	// customization version
 	img, _ := page.Screenshot(true, &proto.PageCaptureScreenshot{
 		Format:  proto.PageCaptureScreenshotFormatJpeg,
-		Quality: jsonvalue.Int(90),
+		Quality: new(90),
 		Clip: &proto.PageViewport{
 			X:      0,
 			Y:      0,
@@ -298,7 +296,7 @@ func Example_page_scroll_screenshot() {
 	// capture entire browser viewport, returning jpg with quality=90
 	img, err := browser.MustPage("https://desktop.github.com/").MustWaitStable().ScrollScreenshot(&rod.ScrollScreenshotOptions{
 		Format:  proto.PageCaptureScreenshotFormatJpeg,
-		Quality: jsonvalue.Int(90),
+		Quality: new(90),
 	})
 	if err != nil {
 		panic(err)
@@ -318,8 +316,8 @@ func Example_page_pdf() {
 
 	// customized version
 	pdf, _ := page.PDF(&proto.PagePrintToPDF{
-		PaperWidth:  jsonvalue.Num(8.5),
-		PaperHeight: jsonvalue.Num(11),
+		PaperWidth:  new(8.5),
+		PaperHeight: new(float64(11)),
 		PageRanges:  "1-3",
 	})
 	_ = utils.OutputFile("my.pdf", pdf)
@@ -493,12 +491,13 @@ func Example_handle_events() {
 	done := make(chan struct{})
 
 	// Listen for all events of console output.
-	go page.EachEvent(func(e *proto.RuntimeConsoleAPICalled) {
+	go page.EachEvent(rod.On(func(e *proto.RuntimeConsoleAPICalled, _ proto.TargetSessionID) bool {
 		if e.Type == proto.RuntimeConsoleAPICalledTypeLog {
 			fmt.Println(page.MustObjectsToJSON(e.Args))
 			close(done)
 		}
-	})()
+		return false
+	}))()
 
 	wait := page.WaitEvent(&proto.PageLoadEventFired{})
 	page.MustNavigate("https://mdn.dev")
@@ -508,9 +507,9 @@ func Example_handle_events() {
 	if false {
 		// Subscribe events before they happen, run the "wait()" to start consuming
 		// the events. We can return an optional stop signal to unsubscribe events.
-		wait := page.EachEvent(func(_ *proto.PageLoadEventFired) (stop bool) {
+		wait := page.EachEvent(rod.On(func(_ *proto.PageLoadEventFired, _ proto.TargetSessionID) (stop bool) {
 			return true
-		})
+		}))
 		page.MustNavigate("https://mdn.dev")
 		wait()
 	}
@@ -659,7 +658,7 @@ func ExamplePage_pool() {
 		fmt.Println(page.MustInfo().Title)
 	}
 
-	// Run jobs concurrently
+	// Run jobs concurrently. Explicit Done preserves cleanup if a Must helper panics.
 	wg := sync.WaitGroup{}
 	for range "...." {
 		wg.Add(1)
@@ -695,9 +694,9 @@ func ExampleBrowser_pool() {
 		return browser
 	}
 
-	// Use the browser instances in separate goroutines
+	// Explicit Done preserves cleanup if a Must helper panics.
 	var wg sync.WaitGroup
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -758,7 +757,7 @@ func Example_log_cdp_traffic() {
 
 	cdp := cdp.New().
 		// Here we can customize how to log the requests, responses, and events transferred between Rod and the browser.
-		Logger(utils.Log(func(args ...interface{}) {
+		Logger(utils.Log(func(args ...any) {
 			switch v := args[0].(type) {
 			case *cdp.Request:
 				fmt.Printf("id: %d", v.ID)

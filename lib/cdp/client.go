@@ -4,6 +4,8 @@ package cdp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"sync"
 	"sync/atomic"
 
@@ -13,10 +15,10 @@ import (
 
 // Request to send to browser.
 type Request struct {
-	ID        int         `json:"id"`
-	SessionID string      `json:"sessionId,omitempty"`
-	Method    string      `json:"method"`
-	Params    interface{} `json:"params,omitempty"`
+	ID        int    `json:"id"`
+	SessionID string `json:"sessionId,omitempty"`
+	Method    string `json:"method"`
+	Params    any    `json:"params,omitempty"`
 }
 
 // Response from browser.
@@ -44,12 +46,15 @@ type WebSocketable interface {
 
 // Client is a devtools protocol connection instance.
 type Client struct {
-	count uint64
+	count atomic.Uint64
 
 	ws WebSocketable
 
-	pending sync.Map    // pending requests
-	event   chan *Event // events from browser
+	pendingMu sync.Mutex
+	pending   map[int]chan result
+	event     chan *Event // events from browser
+	done      chan struct{}
+	readErr   error // published by closing done
 
 	logger utils.Logger
 }
@@ -59,8 +64,10 @@ func New() *Client {
 	defaults.Load()
 
 	return &Client{
-		event:  make(chan *Event),
-		logger: defaults.CDP,
+		pending: make(map[int]chan result),
+		event:   make(chan *Event),
+		done:    make(chan struct{}),
+		logger:  defaults.CDP,
 	}
 }
 
@@ -86,30 +93,35 @@ type result struct {
 }
 
 // Call a method and wait for its response.
-func (cdp *Client) Call(ctx context.Context, sessionID, method string, params interface{}) ([]byte, error) {
+func (cdp *Client) Call(ctx context.Context, sessionID, method string, params any) ([]byte, error) {
 	req := &Request{
-		ID:        int(atomic.AddUint64(&cdp.count, 1)),
+		ID:        int(cdp.count.Add(1)),
 		SessionID: sessionID,
 		Method:    method,
 		Params:    params,
 	}
 
+	data, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal CDP request: %w", err)
+	}
 	cdp.logger.Println(req)
 
-	data, err := json.Marshal(req)
-	utils.E(err)
+	select {
+	case <-cdp.done:
+		return nil, cdp.readErr
+	default:
+	}
 
-	done := make(chan result)
-	once := sync.Once{}
-	cdp.pending.Store(req.ID, func(res result) {
-		once.Do(func() {
-			select {
-			case <-ctx.Done():
-			case done <- res:
-			}
-		})
-	})
-	defer cdp.pending.Delete(req.ID)
+	done := make(chan result, 1)
+	cdp.pendingMu.Lock()
+	cdp.pending[req.ID] = done
+	cdp.pendingMu.Unlock()
+	defer func() {
+		cdp.pendingMu.Lock()
+		delete(cdp.pending, req.ID)
+		cdp.pendingMu.Unlock()
+	}()
 
 	err = cdp.ws.Send(data)
 	if err != nil {
@@ -119,6 +131,15 @@ func (cdp *Client) Call(ctx context.Context, sessionID, method string, params in
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	case <-cdp.done:
+		// The reader may have delivered this response before reaching EOF while
+		// Send was still returning. Preserve that response over the terminal error.
+		select {
+		case res := <-done:
+			return res.msg, res.err
+		default:
+			return nil, cdp.readErr
+		}
 	case res := <-done:
 		return res.msg, res.err
 	}
@@ -131,47 +152,61 @@ func (cdp *Client) Event() <-chan *Event {
 
 // Consume messages coming from the browser via the websocket.
 func (cdp *Client) consumeMessages() {
-	defer close(cdp.event)
+	var readErr error
+	defer func() {
+		cdp.readErr = readErr
+		close(cdp.done)
+		close(cdp.event)
+		if closer, ok := cdp.ws.(io.Closer); ok {
+			_ = closer.Close()
+		}
+	}()
 
 	for {
 		data, err := cdp.ws.Read()
 		if err != nil {
-			cdp.pending.Range(func(_, val interface{}) bool {
-				val.(func(result))(result{err: err}) //nolint: forcetypeassert
-				return true
-			})
+			readErr = err
 			return
 		}
 
 		var id struct {
 			ID int `json:"id"`
 		}
-		err = json.Unmarshal(data, &id)
-		utils.E(err)
+		if err := json.Unmarshal(data, &id); err != nil {
+			readErr = fmt.Errorf("decode CDP message: %w", err)
+			return
+		}
 
 		if id.ID == 0 {
 			var evt Event
-			err := json.Unmarshal(data, &evt)
-			utils.E(err)
+			if err := json.Unmarshal(data, &evt); err != nil {
+				readErr = fmt.Errorf("decode CDP event: %w", err)
+				return
+			}
 			cdp.logger.Println(&evt)
 			cdp.event <- &evt
 			continue
 		}
 
 		var res Response
-		err = json.Unmarshal(data, &res)
-		utils.E(err)
+		if err := json.Unmarshal(data, &res); err != nil {
+			readErr = fmt.Errorf("decode CDP response: %w", err)
+			return
+		}
 
 		cdp.logger.Println(&res)
 
-		val, ok := cdp.pending.Load(id.ID)
-		if !ok {
+		cdp.pendingMu.Lock()
+		done := cdp.pending[res.ID]
+		delete(cdp.pending, res.ID)
+		cdp.pendingMu.Unlock()
+		if done == nil {
 			continue
 		}
 		if res.Error == nil {
-			val.(func(result))(result{res.Result, nil}) //nolint: forcetypeassert
+			done <- result{res.Result, nil}
 		} else {
-			val.(func(result))(result{nil, res.Error}) //nolint: forcetypeassert
+			done <- result{nil, res.Error}
 		}
 	}
 }

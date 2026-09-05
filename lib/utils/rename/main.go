@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-
-	"github.com/rah-0/rod/lib/utils"
 )
 
 func main() {
@@ -21,21 +19,25 @@ func rename() {
 	wg := sync.WaitGroup{}
 	for _, p := range cmd("gopls -remote auto workspace_symbol .C.got") {
 		pType := repose(p, -1, 4)
+		if pType == "" {
+			continue
+		}
 
 		cmd("gopls -remote auto rename -w " + pType + " T")
 
-		wg.Add(1)
-		go func() {
+		wg.Go(func() {
 			for _, p := range cmd("gopls -remote auto references " + pType) {
 				if strings.Contains(p, "definitions_test.go") {
 					continue
 				}
 
 				pRef := repose(p, 0, -2)
+				if pRef == "" {
+					continue
+				}
 				cmd("gopls -remote auto rename -w " + pRef + " t")
 			}
-			wg.Done()
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -53,10 +55,16 @@ func repose(raw string, lineOffset, columnOffset int) string {
 	p := ms[1]
 
 	line, err := strconv.ParseInt(ms[2], 10, 64)
-	utils.E(err)
+	if err != nil {
+		log.Println("invalid line", err)
+		return ""
+	}
 
 	col, err := strconv.ParseInt(ms[3], 10, 64)
-	utils.E(err)
+	if err != nil {
+		log.Println("invalid column", err)
+		return ""
+	}
 
 	return fmt.Sprintf("%s:%d:%d", p, int(line)+lineOffset, int(col)+columnOffset)
 }

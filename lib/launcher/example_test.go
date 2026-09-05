@@ -1,6 +1,7 @@
 package launcher_test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 
@@ -56,7 +57,7 @@ func Example_custom_launch() {
 		_ = cmd.Wait()
 	}()
 
-	u := launcher.MustResolveURL(<-parser.URL)
+	u := launcher.MustResolveURL(context.Background(), <-parser.URL)
 
 	browser := rod.New().ControlURL(u).MustConnect()
 	defer browser.MustClose()

@@ -1,0 +1,158 @@
+{
+  "version": {
+    "major": "1",
+    "minor": "3"
+  },
+  "domains": [
+    {
+      "domain": "Target",
+      "types": [
+        {
+          "id": "TargetInfo",
+          "type": "object",
+          "properties": [
+            {
+              "name": "type",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "domain": "Page",
+      "events": [
+        {
+          "name": "lifecycleEvent",
+          "parameters": [
+            {
+              "name": "name",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "domain": "Input",
+      "types": [
+        {
+          "id": "TimeSinceEpoch",
+          "type": "number"
+        }
+      ],
+      "commands": [
+        {
+          "name": "dispatchMouseEvent",
+          "parameters": [
+            {
+              "name": "deltaX",
+              "type": "number",
+              "optional": true
+            },
+            {
+              "name": "deltaY",
+              "type": "number",
+              "optional": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "domain": "Network",
+      "types": [
+        {
+          "id": "TimeSinceEpoch",
+          "type": "number"
+        },
+        {
+          "id": "MonotonicTime",
+          "type": "number"
+        },
+        {
+          "id": "Cookie",
+          "type": "object",
+          "properties": [
+            {
+              "name": "expires",
+              "type": "number"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "domain": "Fetch",
+      "commands": [
+        {
+          "name": "fulfillRequest",
+          "parameters": [
+            {
+              "name": "body",
+              "type": "binary",
+              "optional": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "domain": "Fixture",
+      "types": [
+        {
+          "id": "Options",
+          "type": "object",
+          "properties": [
+            {
+              "name": "value",
+              "type": "any",
+              "optional": true
+            },
+            {
+              "name": "count",
+              "type": "integer",
+              "optional": true
+            },
+            {
+              "name": "ratio",
+              "type": "number",
+              "optional": true
+            }
+          ]
+        }
+      ],
+      "commands": [
+        {
+          "name": "getValue",
+          "deprecated": true,
+          "parameters": [
+            {
+              "name": "options",
+              "$ref": "Options",
+              "optional": true
+            }
+          ],
+          "returns": [
+            {
+              "name": "value",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "name": "changed",
+          "parameters": [
+            {
+              "name": "options",
+              "$ref": "Options"
+            }
+          ],
+          "description": "Reports a fixture change.\n  This description includes an indented block.\n    Its nested indentation is preserved."
+        }
+      ]
+    }
+  ]
+}

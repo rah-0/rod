@@ -6,7 +6,7 @@ type Function struct {
 	Name string
 
 	// Definition holds the code of a js function from "helper.js",
-	// the js code is compressed by uglify-js.
+	// serialized by Node.js during generation.
 	Definition string
 
 	// Dependencies will be preloaded and assigned to the global js object "functions"
