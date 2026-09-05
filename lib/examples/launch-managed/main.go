@@ -3,29 +3,30 @@ package main
 
 import (
 	"fmt"
+	"os"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/launcher"
-	"github.com/go-rod/rod/lib/utils"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/lib/launcher"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 func main() {
 	// This example is to launch a browser remotely, not connect to a running browser remotely,
 	// to connect to a running browser check the "../connect-browser" example.
-	// Rod provides a docker image for beginners, run the below to start a launcher.Manager:
+	// Start a launcher.Manager on a machine with Chrome or Chromium installed:
 	//
-	//     docker run --rm -p 7317:7317 ghcr.io/go-rod/rod
+	//     export ROD_MANAGER_TOKEN="$(openssl rand -hex 32)"
+	//     go run ./lib/launcher/rod-manager
 	//
-	// For available CLI flags run: docker run --rm ghcr.io/go-rod/rod rod-manager -h
+	// For available CLI flags run: go run ./lib/launcher/rod-manager -h
 	// For more information, check the doc of launcher.Manager
-	l := launcher.MustNewManaged("")
+	authToken := os.Getenv(launcher.ManagerTokenEnv)
+	l := launcher.MustNewManaged("", authToken)
 
-	// You can also set any flag remotely before you launch the remote browser.
+	// You can also set browser flags remotely before you launch the remote browser.
+	// Process settings such as the executable, environment, working directory, and XVFB are server-owned.
 	// Available flags: https://peter.sh/experiments/chromium-command-line-switches
 	l.Set("disable-gpu").Delete("disable-gpu")
-
-	// Launch with headful mode
-	l.Headless(false).XVFB("--server-num=5", "--server-args=-screen 0 1600x900x16")
 
 	browser := rod.New().Client(l.MustClient()).MustConnect()
 
@@ -36,8 +37,8 @@ func main() {
 		browser.MustPage("https://developer.mozilla.org").MustEval("() => document.title"),
 	)
 
-	// Launch another browser with the same docker container.
-	ll := launcher.MustNewManaged("")
+	// Launch another browser with the same manager.
+	ll := launcher.MustNewManaged("", authToken)
 
 	// You can set different flags for each browser.
 	ll.Set("disable-sync").Delete("disable-sync")
@@ -45,7 +46,7 @@ func main() {
 	anotherBrowser := rod.New().Client(ll.MustClient()).MustConnect()
 
 	fmt.Println(
-		anotherBrowser.MustPage("https://go-rod.github.io").MustEval("() => document.title"),
+		anotherBrowser.MustPage("https://github.com/rah-0/rod").MustEval("() => document.title"),
 	)
 
 	utils.Pause()

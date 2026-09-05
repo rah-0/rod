@@ -6,23 +6,24 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/cdp"
-	"github.com/go-rod/rod/lib/launcher"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/got"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/internal/testutil"
+	"github.com/rah-0/rod/lib/cdp"
+	"github.com/rah-0/rod/lib/launcher"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 func BenchmarkManager(b *testing.B) {
+	const managerToken = "test-manager-token-0123456789abcdef0123456789abcdef"
+
 	const concurrent = 30 // how many browsers will run at the same time
 	const num = 300       // how many browsers we will launch
 
 	limiter := make(chan int, concurrent)
 
-	s := got.New(b).Serve()
-
-	// docker run --rm -p 7317:7317 ghcr.io/go-rod/rod
-	s.HostURL.Host = "host.docker.internal"
+	s := testutil.New(b).Serve()
+	manager := testutil.New(b).Serve()
+	manager.Mux.Handle("/", launcher.NewManager(managerToken))
 
 	s.Route("/", ".html", `<html><body>
 		ok
@@ -48,7 +49,7 @@ func BenchmarkManager(b *testing.B) {
 				}()
 			}()
 
-			l := launcher.MustNewManaged("")
+			l := launcher.MustNewManaged(manager.URL(), managerToken)
 			u, h := l.ClientHeader()
 			browser := rod.New().Client(cdp.MustStartWithURL(ctx, u, h)).MustConnect()
 			page := browser.MustPage()

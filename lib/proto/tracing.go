@@ -3,7 +3,7 @@
 package proto
 
 import (
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/jsonvalue"
 )
 
 /*
@@ -13,7 +13,7 @@ Tracing
 */
 
 // TracingMemoryDumpConfig (experimental) Configuration for memory dump. Used only when "memory-infra" category is enabled.
-type TracingMemoryDumpConfig map[string]gson.JSON
+type TracingMemoryDumpConfig map[string]jsonvalue.Value
 
 // TracingTraceConfigRecordMode enum.
 type TracingTraceConfigRecordMode string
@@ -267,7 +267,7 @@ func (evt TracingBufferUsage) ProtoEvent() string {
 // sent as a sequence of dataCollected events followed by tracingComplete event.
 type TracingDataCollected struct {
 	// Value ...
-	Value []map[string]gson.JSON `json:"value"`
+	Value []map[string]jsonvalue.Value `json:"value"`
 }
 
 // ProtoEvent name.

@@ -1,8 +1,6 @@
-//go:generate go run ./lib/utils/setup
 //go:generate go run ./lib/proto/generate
 //go:generate go run ./lib/js/generate
 //go:generate go run ./lib/assets/generate
-//go:generate go run ./lib/utils/lint
 
 // Package rod is a high-level driver directly based on DevTools Protocol.
 package rod
@@ -14,13 +12,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-rod/rod/lib/cdp"
-	"github.com/go-rod/rod/lib/defaults"
-	"github.com/go-rod/rod/lib/devices"
-	"github.com/go-rod/rod/lib/launcher"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/goob"
+	"github.com/rah-0/rod/internal/observable"
+	"github.com/rah-0/rod/lib/cdp"
+	"github.com/rah-0/rod/lib/defaults"
+	"github.com/rah-0/rod/lib/devices"
+	"github.com/rah-0/rod/lib/launcher"
+	"github.com/rah-0/rod/lib/proto"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 // Browser implements these interfaces.
@@ -31,8 +29,8 @@ var (
 
 // Browser represents the browser.
 // It doesn't depends on file system, it should work with remote browser seamlessly.
-// To check the env var you can use to quickly enable options from CLI, check here:
-// https://pkg.go.dev/github.com/go-rod/rod/lib/defaults
+// To check the command-line defaults you can use to quickly enable options, check here:
+// https://pkg.go.dev/github.com/rah-0/rod/lib/defaults
 type Browser struct {
 	// BrowserContextID is the id for incognito window
 	BrowserContextID proto.BrowserBrowserContextID
@@ -53,8 +51,9 @@ type Browser struct {
 
 	controlURL  string
 	client      CDPClient
-	event       *goob.Observable // all the browser events from cdp client
+	event       *observable.Observable[*Message] // all the browser events from cdp client
 	targetsLock *sync.Mutex
+	process     *localBrowserProcess
 
 	// stores all the previous cdp call of same type. Browser doesn't have enough API
 	// for us to retrieve all its internal states. This is an workaround to map them to local.
@@ -62,11 +61,39 @@ type Browser struct {
 	states *sync.Map
 }
 
+type localBrowserProcess struct {
+	launcher *launcher.Launcher
+	stopOnce sync.Once
+	done     chan struct{}
+}
+
+func ownLocalBrowserProcess(l *launcher.Launcher) *localBrowserProcess {
+	p := &localBrowserProcess{
+		launcher: l,
+		done:     make(chan struct{}),
+	}
+	go func() {
+		l.Cleanup()
+		close(p.done)
+	}()
+	return p
+}
+
+func (p *localBrowserProcess) shutdown() {
+	if p == nil {
+		return
+	}
+	p.stopOnce.Do(p.launcher.Kill)
+	<-p.done
+}
+
 // New creates a controller.
 // DefaultDevice to emulate is set to [devices.LaptopWithMDPIScreen].Landscape(), it will change the default
 // user-agent and can make the actual view area smaller than the browser window on headful mode,
 // you can use [Browser.NoDefaultDevice] to disable it.
 func New() *Browser {
+	defaults.Load()
+
 	return (&Browser{
 		ctx:           context.Background(),
 		sleeper:       DefaultSleeper,
@@ -113,6 +140,8 @@ func (b *Browser) Trace(enable bool) *Browser {
 }
 
 // Monitor address to listen if not empty. Shortcut for [Browser.ServeMonitor].
+// The monitor has no authentication, so keep it on loopback or protect it with
+// a trusted authenticated proxy.
 func (b *Browser) Monitor(url string) *Browser {
 	b.monitor = url
 	return b
@@ -144,20 +173,26 @@ func (b *Browser) NoDefaultDevice() *Browser {
 }
 
 // Connect to the browser and start to control it.
-// If fails to connect, try to launch a local browser, if local browser not found try to download one.
+// If it fails to connect, it tries to launch an installed local browser.
 func (b *Browser) Connect() error {
 	if b.client == nil {
 		u := b.controlURL
 		if u == "" {
+			l := launcher.New().Context(b.ctx)
 			var err error
-			u, err = launcher.New().Context(b.ctx).Launch()
+			u, err = l.Launch()
+			if l.PID() != 0 {
+				b.process = ownLocalBrowserProcess(l)
+			}
 			if err != nil {
+				b.process.shutdown()
 				return err
 			}
 		}
 
 		c, err := cdp.StartWithURL(b.ctx, u, nil)
 		if err != nil {
+			b.process.shutdown()
 			return err
 		}
 		b.client = c
@@ -171,12 +206,17 @@ func (b *Browser) Connect() error {
 		launcher.Open(b.ServeMonitor(b.monitor))
 	}
 
-	return proto.TargetSetDiscoverTargets{Discover: true}.Call(b)
+	err := proto.TargetSetDiscoverTargets{Discover: true}.Call(b)
+	if err != nil {
+		b.process.shutdown()
+	}
+	return err
 }
 
 // Close the browser.
 func (b *Browser) Close() error {
 	if b.BrowserContextID == "" {
+		defer b.process.shutdown()
 		return proto.BrowserClose{}.Call(b)
 	}
 	return proto.TargetDisposeBrowserContext{BrowserContextID: b.BrowserContextID}.Call(b)
@@ -427,7 +467,7 @@ func (b *Browser) Event() <-chan *Message {
 				select {
 				case <-b.ctx.Done():
 					return
-				case dst <- e.(*Message): //nolint: forcetypeassert
+				case dst <- e:
 				}
 			}
 		}
@@ -437,7 +477,7 @@ func (b *Browser) Event() <-chan *Message {
 
 func (b *Browser) initEvents() {
 	ctx, cancel := context.WithCancel(b.ctx)
-	b.event = goob.New(ctx)
+	b.event = observable.New[*Message](ctx)
 	event := b.client.Event()
 
 	go func() {

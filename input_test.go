@@ -3,10 +3,10 @@ package rod_test
 import (
 	"testing"
 
-	"github.com/go-rod/rod/lib/devices"
-	"github.com/go-rod/rod/lib/input"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/go-rod/rod/lib/utils"
+	"github.com/rah-0/rod/lib/devices"
+	"github.com/rah-0/rod/lib/input"
+	"github.com/rah-0/rod/lib/proto"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 func TestKeyActions(t *testing.T) {

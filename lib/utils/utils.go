@@ -23,7 +23,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/jsonvalue"
 )
 
 // TestEnvs for testing.
@@ -250,7 +250,7 @@ func Pause() {
 func Dump(list ...interface{}) string {
 	out := []string{}
 	for _, el := range list {
-		out = append(out, gson.New(el).JSON("", "  "))
+		out = append(out, jsonvalue.New(el).JSON("", "  "))
 	}
 	return strings.Join(out, " ")
 }
@@ -324,10 +324,11 @@ func ExecLine(std bool, line string, rest ...string) string {
 	return buf.String()
 }
 
-// UseNode installs Node.js and set the bin path to PATH env var.
-func UseNode(std bool) {
-	binPath := strings.TrimSpace(ExecLine(std, "go run github.com/ysmood/use-node@latest -p v20"))
-	E(os.Setenv("PATH", binPath+string(os.PathListSeparator)+os.Getenv("PATH")))
+// UseNode verifies that Node.js is already available locally. It never
+// downloads or installs an executable.
+func UseNode(_ bool) {
+	_, err := exec.LookPath("node")
+	E(err)
 }
 
 // FormatCLIArgs into one line string.

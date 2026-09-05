@@ -5,7 +5,8 @@ import (
 	"flag"
 	"log"
 
-	"github.com/go-rod/rod"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/lib/defaults"
 )
 
 var flagDevToolWsURL = flag.String("devtools-ws-url", "", "DevTools WebSocket URL")
@@ -13,6 +14,7 @@ var flagDevToolWsURL = flag.String("devtools-ws-url", "", "DevTools WebSocket UR
 // This example demonstrates how to connect to an existing Chrome DevTools
 // instance using a remote WebSocket URL.
 func main() {
+	defaults.Load()
 	flag.Parse()
 	if *flagDevToolWsURL == "" {
 		log.Fatal("must specify -devtools-ws-url")

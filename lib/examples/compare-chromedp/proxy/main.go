@@ -2,14 +2,15 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/launcher"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/lib/launcher"
 )
 
 func main() {
@@ -21,7 +22,12 @@ func main() {
 	}))
 	defer s.Close()
 
-	url := launcher.New().Proxy(p.URL).Set("proxy-bypass-list", "<-loopback>").MustLaunch()
+	l := launcher.New().Proxy(p.URL).Set("proxy-bypass-list", "<-loopback>")
+	url := l.MustLaunch()
+	defer func() {
+		l.Kill()
+		l.Cleanup()
+	}()
 
 	browser := rod.New().ControlURL(url).MustConnect()
 	defer browser.MustClose()
@@ -66,7 +72,7 @@ type transport struct {
 
 func (t *transport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if h := r.Header.Get("X-Failed"); h != "" {
-		return nil, fmt.Errorf(h)
+		return nil, errors.New(h)
 	}
 	return t.RoundTripper.RoundTrip(r)
 }

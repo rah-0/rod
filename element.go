@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-rod/rod/lib/cdp"
-	"github.com/go-rod/rod/lib/input"
-	"github.com/go-rod/rod/lib/js"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/cdp"
+	"github.com/rah-0/rod/lib/input"
+	"github.com/rah-0/rod/lib/js"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/proto"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 // Element implements these interfaces.
@@ -385,10 +385,10 @@ func (el *Element) Attribute(name string) (*string, error) {
 // Property of the DOM object.
 // Property vs Attribute:
 // https://stackoverflow.com/questions/6003819/what-is-the-difference-between-properties-and-attributes-in-html
-func (el *Element) Property(name string) (gson.JSON, error) {
+func (el *Element) Property(name string) (jsonvalue.Value, error) {
 	prop, err := el.Eval("(n) => this[n]", name)
 	if err != nil {
-		return gson.New(nil), err
+		return jsonvalue.New(nil), err
 	}
 
 	return prop.Value, nil
@@ -426,7 +426,7 @@ func (el *Element) SetFiles(paths []string) error {
 // is fired all NodeID on the page will be reassigned to another value)
 // we don't recommend using the NodeID, instead, use the [proto.DOMBackendNodeID] to identify the element.
 func (el *Element) Describe(depth int, pierce bool) (*proto.DOMNode, error) {
-	val, err := proto.DOMDescribeNode{ObjectID: el.id(), Depth: gson.Int(depth), Pierce: pierce}.Call(el)
+	val, err := proto.DOMDescribeNode{ObjectID: el.id(), Depth: jsonvalue.Int(depth), Pierce: pierce}.Call(el)
 	if err != nil {
 		return nil, err
 	}
@@ -679,7 +679,7 @@ func (el *Element) Screenshot(format proto.PageCaptureScreenshotFormat, quality 
 	}
 
 	opts := &proto.PageCaptureScreenshot{
-		Quality: gson.Int(quality),
+		Quality: jsonvalue.Int(quality),
 		Format:  format,
 	}
 

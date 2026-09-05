@@ -3,7 +3,7 @@
 package proto
 
 import (
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/jsonvalue"
 )
 
 /*
@@ -46,7 +46,7 @@ type RuntimeSerializationOptions struct {
 	// AdditionalParameters (optional) Embedder-specific parameters. For example if connected to V8 in Chrome these control DOM
 	// serialization via `maxNodeDepth: integer` and `includeShadowTree: "none" | "open" | "all"`.
 	// Values can be only of type string or integer.
-	AdditionalParameters map[string]gson.JSON `json:"additionalParameters,omitempty"`
+	AdditionalParameters map[string]jsonvalue.Value `json:"additionalParameters,omitempty"`
 }
 
 // RuntimeDeepSerializedValueType enum.
@@ -132,7 +132,7 @@ type RuntimeDeepSerializedValue struct {
 	Type RuntimeDeepSerializedValueType `json:"type"`
 
 	// Value (optional) ...
-	Value gson.JSON `json:"value,omitempty"`
+	Value jsonvalue.Value `json:"value,omitempty"`
 
 	// ObjectID (optional) ...
 	ObjectID string `json:"objectId,omitempty"`
@@ -255,7 +255,7 @@ type RuntimeRemoteObject struct {
 	ClassName string `json:"className,omitempty"`
 
 	// Value (optional) Remote object value in case of primitive values or JSON values (if it was requested).
-	Value gson.JSON `json:"value,omitempty"`
+	Value jsonvalue.Value `json:"value,omitempty"`
 
 	// UnserializableValue (optional) Primitive value which can not be JSON-stringified does not have `value`, but gets this
 	// property.
@@ -589,7 +589,7 @@ type RuntimePrivatePropertyDescriptor struct {
 // unserializable primitive value or neither of (for undefined) them should be specified.
 type RuntimeCallArgument struct {
 	// Value (optional) Primitive value or serializable javascript object.
-	Value gson.JSON `json:"value,omitempty"`
+	Value jsonvalue.Value `json:"value,omitempty"`
 
 	// UnserializableValue (optional) Primitive value which can not be JSON-stringified.
 	UnserializableValue RuntimeUnserializableValue `json:"unserializableValue,omitempty"`
@@ -619,7 +619,7 @@ type RuntimeExecutionContextDescription struct {
 	UniqueID string `json:"uniqueId"`
 
 	// AuxData (optional) Embedder-specific auxiliary data likely matching {isDefault: boolean, type: 'default'|'isolated'|'worker', frameId: string}
-	AuxData map[string]gson.JSON `json:"auxData,omitempty"`
+	AuxData map[string]jsonvalue.Value `json:"auxData,omitempty"`
 }
 
 // RuntimeExceptionDetails Detailed information about exception (or error) that was thrown during script compilation or
@@ -655,7 +655,7 @@ type RuntimeExceptionDetails struct {
 	// ExceptionMetaData (experimental) (optional) Dictionary with entries of meta data that the client associated
 	// with this exception, such as information about associated network
 	// requests, etc.
-	ExceptionMetaData map[string]gson.JSON `json:"exceptionMetaData,omitempty"`
+	ExceptionMetaData map[string]jsonvalue.Value `json:"exceptionMetaData,omitempty"`
 }
 
 // RuntimeTimestamp Number of milliseconds since epoch.
@@ -1496,7 +1496,7 @@ type RuntimeInspectRequested struct {
 	Object *RuntimeRemoteObject `json:"object"`
 
 	// Hints ...
-	Hints map[string]gson.JSON `json:"hints"`
+	Hints map[string]jsonvalue.Value `json:"hints"`
 
 	// ExecutionContextID (experimental) (optional) Identifier of the context where the call was made.
 	ExecutionContextID RuntimeExecutionContextID `json:"executionContextId,omitempty"`

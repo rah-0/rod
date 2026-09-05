@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/go-rod/rod/lib/input"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/input"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/proto"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 // Keyboard represents the keyboard on a page, it's always related the main frame.
@@ -230,7 +230,7 @@ func (m *Mouse) MoveTo(p proto.Point) error {
 		X:         p.X,
 		Y:         p.Y,
 		Button:    button,
-		Buttons:   gson.Int(buttons),
+		Buttons:   jsonvalue.Int(buttons),
 		Modifiers: m.page.Keyboard.getModifiers(),
 	}.Call(m.page)
 	if err != nil {
@@ -306,7 +306,7 @@ func (m *Mouse) Scroll(offsetX, offsetY float64, steps int) error {
 		err := proto.InputDispatchMouseEvent{
 			Type:      proto.InputDispatchMouseEventTypeMouseWheel,
 			Button:    button,
-			Buttons:   gson.Int(buttons),
+			Buttons:   jsonvalue.Int(buttons),
 			Modifiers: m.page.Keyboard.getModifiers(),
 			DeltaX:    stepX,
 			DeltaY:    stepY,
@@ -333,7 +333,7 @@ func (m *Mouse) Down(button proto.InputMouseButton, clickCount int) error {
 	err := proto.InputDispatchMouseEvent{
 		Type:       proto.InputDispatchMouseEventTypeMousePressed,
 		Button:     button,
-		Buttons:    gson.Int(buttons),
+		Buttons:    jsonvalue.Int(buttons),
 		ClickCount: clickCount,
 		Modifiers:  m.page.Keyboard.getModifiers(),
 		X:          m.pos.X,
@@ -364,7 +364,7 @@ func (m *Mouse) Up(button proto.InputMouseButton, clickCount int) error {
 	err := proto.InputDispatchMouseEvent{
 		Type:       proto.InputDispatchMouseEventTypeMouseReleased,
 		Button:     button,
-		Buttons:    gson.Int(buttons),
+		Buttons:    jsonvalue.Int(buttons),
 		ClickCount: clickCount,
 		Modifiers:  m.page.Keyboard.getModifiers(),
 		X:          m.pos.X,

@@ -1,6 +1,6 @@
 package proto_test
 
-import "github.com/go-rod/rod/lib/proto"
+import "github.com/rah-0/rod/lib/proto"
 
 func (t T) Point() {
 	p := proto.NewPoint(1, 2).

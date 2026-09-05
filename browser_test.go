@@ -6,18 +6,19 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/cdp"
-	"github.com/go-rod/rod/lib/devices"
-	"github.com/go-rod/rod/lib/launcher"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/got"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/internal/testutil"
+	"github.com/rah-0/rod/lib/cdp"
+	"github.com/rah-0/rod/lib/devices"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/launcher"
+	"github.com/rah-0/rod/lib/proto"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 func TestIncognito(t *testing.T) {
@@ -99,7 +100,7 @@ func TestBrowserPages(t *testing.T) {
 	g.Gte(len(pages), 1)
 
 	{
-		g.mc.stub(1, proto.TargetGetTargets{}, func(send StubSend) (gson.JSON, error) {
+		g.mc.stub(1, proto.TargetGetTargets{}, func(send StubSend) (jsonvalue.Value, error) {
 			d, _ := send()
 			return *d.Set("targetInfos.0.type", "iframe"), nil
 		})
@@ -273,17 +274,18 @@ func TestBinarySize(t *testing.T) {
 		g.SkipNow()
 	}
 
+	binary := filepath.Join(t.TempDir(), "translator")
 	cmd := exec.Command("go", "build",
 		"-trimpath",
 		"-ldflags", "-w -s",
-		"-o", "tmp/translator",
+		"-o", binary,
 		"./lib/examples/translator")
 
 	cmd.Env = append(os.Environ(), "GOOS=linux")
 
 	g.Nil(cmd.Run())
 
-	stat, err := os.Stat("tmp/translator")
+	stat, err := os.Stat(binary)
 	g.E(err)
 
 	g.Lte(float64(stat.Size())/1024/1024, 11) // mb
@@ -406,8 +408,8 @@ func TestStreamReader(t *testing.T) {
 
 	r := rod.NewStreamReader(g.page, "")
 
-	g.mc.stub(1, proto.IORead{}, func(_ StubSend) (gson.JSON, error) {
-		return gson.New(proto.IOReadResult{
+	g.mc.stub(1, proto.IORead{}, func(_ StubSend) (jsonvalue.Value, error) {
+		return jsonvalue.New(proto.IOReadResult{
 			Data: "test",
 		}), nil
 	})
@@ -419,8 +421,8 @@ func TestStreamReader(t *testing.T) {
 	_, err := r.Read(nil)
 	g.Err(err)
 
-	g.mc.stub(1, proto.IORead{}, func(_ StubSend) (gson.JSON, error) {
-		return gson.New(proto.IOReadResult{
+	g.mc.stub(1, proto.IORead{}, func(_ StubSend) (jsonvalue.Value, error) {
+		return jsonvalue.New(proto.IOReadResult{
 			Base64Encoded: true,
 			Data:          "@",
 		}), nil
@@ -441,7 +443,7 @@ func TestBrowserConnectFailure(t *testing.T) {
 }
 
 func TestBrowserPool(t *testing.T) {
-	g := got.T(t)
+	g := testutil.T(t)
 
 	pool := rod.NewBrowserPool(3)
 
@@ -460,23 +462,17 @@ func TestBrowserPool(t *testing.T) {
 	})
 }
 
-func TestOldBrowser(t *testing.T) {
-	t.Skip()
-
-	g := setup(t)
-	u := launcher.New().Revision(686378).MustLaunch()
-	b := rod.New().ControlURL(u).MustConnect()
-	g.Cleanup(b.MustClose)
-	res, err := proto.BrowserGetVersion{}.Call(b)
-	g.E(err)
-	g.Eq(res.Revision, "@19d4547535ab5aba70b4730443f84e8153052174")
-}
-
 func TestBrowserLostConnection(t *testing.T) {
 	g := setup(t)
 
 	l := launcher.New()
-	p := rod.New().ControlURL(l.MustLaunch()).MustConnect().MustPage(g.blank())
+	u := l.MustLaunch()
+	defer func() {
+		l.Kill()
+		l.Cleanup()
+	}()
+
+	p := rod.New().ControlURL(u).MustConnect().MustPage(g.blank())
 
 	go func() {
 		utils.Sleep(1)

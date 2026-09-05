@@ -3,7 +3,7 @@
 package proto
 
 import (
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/jsonvalue"
 )
 
 /*
@@ -303,7 +303,7 @@ func (m LayerTreeSnapshotCommandLog) Call(c Client) (*LayerTreeSnapshotCommandLo
 // LayerTreeSnapshotCommandLogResult ...
 type LayerTreeSnapshotCommandLogResult struct {
 	// CommandLog The array of canvas function calls.
-	CommandLog []map[string]gson.JSON `json:"commandLog"`
+	CommandLog []map[string]jsonvalue.Value `json:"commandLog"`
 }
 
 // LayerTreeLayerPainted ...

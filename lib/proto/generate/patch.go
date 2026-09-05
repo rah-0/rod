@@ -3,11 +3,11 @@ package main
 import (
 	"fmt"
 
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/jsonvalue"
 )
 
-func patch(json gson.JSON) {
-	k := func(k, v string) gson.Query {
+func patch(json jsonvalue.Value) {
+	k := func(k, v string) jsonvalue.Query {
 		return func(obj interface{}) (val interface{}, has bool) {
 			for _, el := range obj.([]interface{}) {
 				res := el.(map[string]interface{})[k]
@@ -28,7 +28,7 @@ func patch(json gson.JSON) {
 		panic("not found")
 	}
 
-	getTypes := func(domain string) gson.JSON {
+	getTypes := func(domain string) jsonvalue.Value {
 		res, _ := json.Gets("domains", k("domain", domain), "types")
 		return res
 	}

@@ -7,19 +7,29 @@ import (
 	"log"
 	"net"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/cdp"
-	"github.com/go-rod/rod/lib/launcher"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/lib/cdp"
+	"github.com/rah-0/rod/lib/launcher"
 )
 
 func main() {
-	w := NewWebSocket(launcher.New().MustLaunch())
+	l := launcher.New()
+	u := l.MustLaunch()
+	defer func() {
+		l.Kill()
+		l.Cleanup()
+	}()
+
+	w := NewWebSocket(u)
 
 	client := cdp.New().Start(w)
 
-	p := rod.New().Client(client).MustConnect().MustPage("http://example.com")
+	browser := rod.New().Client(client).MustConnect()
+	defer browser.MustClose()
+
+	p := browser.MustPage("http://example.com")
 
 	fmt.Println(p.MustInfo().Title)
 }

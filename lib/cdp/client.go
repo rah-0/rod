@@ -7,8 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/go-rod/rod/lib/defaults"
-	"github.com/go-rod/rod/lib/utils"
+	"github.com/rah-0/rod/lib/defaults"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 // Request to send to browser.
@@ -56,6 +56,8 @@ type Client struct {
 
 // New creates a cdp connection, all messages from Client.Event must be received or they will block the client.
 func New() *Client {
+	defaults.Load()
+
 	return &Client{
 		event:  make(chan *Event),
 		logger: defaults.CDP,

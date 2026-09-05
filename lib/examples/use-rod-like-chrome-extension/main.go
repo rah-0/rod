@@ -6,13 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/launcher"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/launcher"
+	"github.com/rah-0/rod/lib/proto"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 // For example, when you log into your github account, and you want to reuse the login session for automation task.
@@ -20,22 +19,30 @@ import (
 func main() {
 	// Make sure you have closed your browser completely, UserMode can't control a browser that is not launched by it.
 	// Launches a new browser with the "new user mode" option, and returns the URL to control that browser.
-	wsURL := launcher.NewUserMode().MustLaunch()
+	l := launcher.NewUserMode()
+	wsURL := l.MustLaunch()
+	defer func() {
+		l.Kill()
+		l.Cleanup()
+	}()
 
 	browser := rod.New().ControlURL(wsURL).MustConnect().NoDefaultDevice()
+	defer browser.MustClose()
+
+	previewer := rod.New().MustConnect()
+	defer previewer.MustClose()
 
 	// Run a extension. Here we created a link previewer extension as an example.
 	// With this extension, whenever you hover on a link a preview of the linked page will popup.
-	linkPreviewer(browser)
+	linkPreviewer(browser, previewer)
 
 	browser.MustPage()
 
 	waitExit()
 }
 
-func linkPreviewer(browser *rod.Browser) {
+func linkPreviewer(browser, previewer *rod.Browser) {
 	// Create a headless browser to generate preview of links on background.
-	previewer := rod.New().MustConnect()
 	previewer.MustSetCookies(browser.MustGetCookies()...) // share cookies
 	pool := rod.NewPagePool(5)
 	create := func() *rod.Page { return previewer.MustPage() }
@@ -50,7 +57,7 @@ func linkPreviewer(browser *rod.Browser) {
 		page.MustEvalOnNewDocument(js)
 
 		// Expose a function to the page to provide preview
-		page.MustExpose("getPreview", func(url gson.JSON) (interface{}, error) {
+		page.MustExpose("getPreview", func(url jsonvalue.Value) (interface{}, error) {
 			p := pool.MustGet(create)
 			defer pool.Put(p)
 			p.MustNavigate(url.Str())
@@ -93,5 +100,4 @@ func get(u string) string {
 func waitExit() {
 	fmt.Println("Press Enter to exit...")
 	utils.E(fmt.Scanln())
-	os.Exit(0)
 }

@@ -1,74 +1,39 @@
 package launcher_test
 
 import (
-	"archive/zip"
-	"bytes"
 	"crypto"
 	"crypto/x509"
 	"encoding/pem"
 	"flag"
 	"io"
-	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/go-rod/rod/lib/defaults"
-	"github.com/go-rod/rod/lib/launcher"
-	"github.com/go-rod/rod/lib/launcher/flags"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/got"
+	"github.com/rah-0/rod/internal/testutil"
+	"github.com/rah-0/rod/lib/defaults"
+	"github.com/rah-0/rod/lib/launcher"
+	"github.com/rah-0/rod/lib/launcher/flags"
 )
 
-var setup = got.Setup(nil)
-
-func TestDownloadHosts(t *testing.T) {
-	g := setup(t)
-
-	g.Has(launcher.HostGoogle(launcher.RevisionDefault), "https://storage.googleapis.com/chromium-browser-snapshots")
-	g.Has(launcher.HostNPM(launcher.RevisionDefault), "https://registry.npmmirror.com/-/binary/chromium-browser-snapshots")
-	g.Has(launcher.HostPlaywright(launcher.RevisionDefault), "https://playwright.azureedge.net/")
-}
-
-func TestDownload(t *testing.T) {
-	g := got.T(t)
-
-	buf := bytes.NewBuffer(nil)
-	z := zip.NewWriter(buf)
-	f, _ := z.Create(filepath.FromSlash("a/b/c.txt"))
-	_, _ = f.Write([]byte(g.RandStr(500 * 1024)))
-	_ = z.Close()
-
-	s := g.Serve()
-	s.Route("/", ".zip", buf.Bytes())
-
-	b := launcher.NewBrowser()
-	b.Revision = 1
-	b.Logger = utils.LoggerQuiet
-	b.Hosts = []launcher.Host{func(_ int) string {
-		return s.URL("/a.zip")
-	}}
-
-	g.Cleanup(func() { _ = os.RemoveAll(b.Dir()) })
-
-	b.MustGet()
-
-	g.PathExists(b.Dir())
-}
+var setup = testutil.Setup(nil)
 
 func TestLaunch(t *testing.T) {
 	g := setup(t)
 
+	defaults.Load()
 	defaults.Proxy = "test.com"
 	defer func() { defaults.ResetWith("") }()
 
 	l := launcher.New().Preferences("").AlwaysOpenPDFExternally()
-	defer l.Kill()
-
 	u := l.MustLaunch()
+	defer func() {
+		l.Kill()
+		l.Cleanup()
+	}()
+
 	g.Regex(`\Aws://.+\z`, u)
 
 	parsed, _ := url.Parse(u)
@@ -84,13 +49,13 @@ func TestLaunch(t *testing.T) {
 	}
 
 	{
-		_, err := launcher.NewManaged("")
+		_, err := launcher.NewManaged("", "test-manager-token")
 		g.Err(err)
 
-		_, err = launcher.NewManaged("1://")
+		_, err = launcher.NewManaged("1://", "test-manager-token")
 		g.Err(err)
 
-		_, err = launcher.NewManaged("ws://not-exists")
+		_, err = launcher.NewManaged("ws://not-exists", "test-manager-token")
 		g.Err(err)
 	}
 
@@ -103,8 +68,6 @@ func TestLaunchUserMode(t *testing.T) {
 	g := setup(t)
 
 	l := launcher.NewUserMode()
-	defer l.Kill()
-
 	l.Kill() // empty kill should do nothing
 
 	has := l.Has("not-exists")
@@ -118,9 +81,7 @@ func TestLaunchUserMode(t *testing.T) {
 	port := 58472
 
 	l = l.Context(g.Context()).Delete("test").Bin("").
-		Revision(launcher.RevisionDefault).
 		Logger(io.Discard).
-		Leakless(false).Leakless(true).
 		HeadlessNew(true).HeadlessNew(false).
 		Headless(false).Headless(true).RemoteDebuggingPort(port).
 		NoSandbox(true).NoSandbox(false).
@@ -141,6 +102,10 @@ func TestLaunchUserMode(t *testing.T) {
 	})
 
 	url := l.MustLaunch()
+	defer func() {
+		l.Kill()
+		l.Cleanup()
+	}()
 
 	g.Eq(url, launcher.NewUserMode().RemoteDebuggingPort(port).MustLaunch())
 }
@@ -202,32 +167,16 @@ func TestProfileDir(t *testing.T) {
 	}
 
 	url.MustLaunch()
+	defer func() {
+		url.Kill()
+		url.Cleanup()
+	}()
 
 	userDataDir := url.Get(flags.UserDataDir)
 	file, err := os.Stat(filepath.Join(userDataDir, "test-profile-dir"))
 
 	g.E(err)
 	g.True(file.IsDir())
-}
-
-func TestBrowserValid(t *testing.T) {
-	g := setup(t)
-
-	b := launcher.NewBrowser()
-	b.Revision = 0
-	g.Err(b.Validate())
-
-	g.E(utils.Mkdir(filepath.Dir(b.BinPath())))
-	g.Cleanup(func() { _ = os.RemoveAll(b.Dir()) })
-
-	g.E(exec.Command("go", "build", "-o", b.BinPath(), "./fixtures/chrome-exit-err").CombinedOutput())
-	g.Has(b.Validate().Error(), "failed to run the browser")
-
-	g.E(exec.Command("go", "build", "-o", b.BinPath(), "./fixtures/chrome-empty").CombinedOutput())
-	g.Eq(b.Validate().Error(), "the browser executable doesn't support headless mode")
-
-	g.E(exec.Command("go", "build", "-o", b.BinPath(), "./fixtures/chrome-lib-missing").CombinedOutput())
-	g.Nil(b.Validate())
 }
 
 func TestIgnoreCerts(t *testing.T) {
@@ -262,7 +211,7 @@ fmQnyBe7dVU43NXfrQIDAQAB
 
 		pub, err := x509.ParsePKIXPublicKey(block.Bytes)
 		if err != nil {
-			g.Fatalf("failed to parse DER encoded public key: " + err.Error())
+			g.Fatalf("failed to parse DER encoded public key: %v", err)
 		}
 
 		keys = append(keys, pub)
@@ -294,24 +243,6 @@ func TestIgnoreCerts_InvalidCert(t *testing.T) {
 	}
 }
 
-func TestBrowserDownloadErr(t *testing.T) {
-	g := setup(t)
-	b := launcher.NewBrowser()
-	b.Logger = utils.LoggerQuiet
-	b.HTTPClient = http.DefaultClient
-	b.Hosts = []launcher.Host{}
-	g.Err(b.Download())
-
-	s := g.Serve()
-	s.Route("/download", ".txt", "ok")
-
-	b = launcher.NewBrowser()
-	b.Hosts = []launcher.Host{func(_ int) string {
-		return s.URL("/download/file")
-	}}
-	g.Err(b.Download())
-}
-
 func TestLaunchMultiTimes(t *testing.T) {
 	g := setup(t)
 
@@ -320,6 +251,10 @@ func TestLaunchMultiTimes(t *testing.T) {
 	u, e := l.Launch()
 	g.Neq(u, "")
 	g.E(e)
+	defer func() {
+		l.Kill()
+		l.Cleanup()
+	}()
 
 	// second time launch, failed with ErrAlreadyLaunched.
 	_, e = l.Launch()

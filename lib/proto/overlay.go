@@ -3,7 +3,7 @@
 package proto
 
 import (
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/jsonvalue"
 )
 
 /*
@@ -424,7 +424,7 @@ func (m OverlayGetHighlightObjectForTest) Call(c Client) (*OverlayGetHighlightOb
 // OverlayGetHighlightObjectForTestResult ...
 type OverlayGetHighlightObjectForTestResult struct {
 	// Highlight data for the node.
-	Highlight map[string]gson.JSON `json:"highlight"`
+	Highlight map[string]jsonvalue.Value `json:"highlight"`
 }
 
 // OverlayGetGridHighlightObjectsForTest For Persistent Grid testing.
@@ -447,7 +447,7 @@ func (m OverlayGetGridHighlightObjectsForTest) Call(c Client) (*OverlayGetGridHi
 // OverlayGetGridHighlightObjectsForTestResult ...
 type OverlayGetGridHighlightObjectsForTestResult struct {
 	// Highlights Grid Highlight data for the node ids provided.
-	Highlights map[string]gson.JSON `json:"highlights"`
+	Highlights map[string]jsonvalue.Value `json:"highlights"`
 }
 
 // OverlayGetSourceOrderHighlightObjectForTest For Source Order Viewer testing.
@@ -470,7 +470,7 @@ func (m OverlayGetSourceOrderHighlightObjectForTest) Call(c Client) (*OverlayGet
 // OverlayGetSourceOrderHighlightObjectForTestResult ...
 type OverlayGetSourceOrderHighlightObjectForTestResult struct {
 	// Highlight Source order highlight data for the node id provided.
-	Highlight map[string]gson.JSON `json:"highlight"`
+	Highlight map[string]jsonvalue.Value `json:"highlight"`
 }
 
 // OverlayHideHighlight Hides any highlight.

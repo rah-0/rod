@@ -7,21 +7,23 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/launcher"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/got"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/internal/testutil"
+	"github.com/rah-0/rod/lib/launcher"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 func BenchmarkCleanup(b *testing.B) {
-	u := got.New(b).Serve().Route("/", "", "page body").URL("/")
+	u := testutil.New(b).Serve().Route("/", "", "page body").URL("/")
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			launch := launcher.New().UserDataDir(filepath.Join("tmp", "cleanup", utils.RandString(8)))
-			b.Cleanup(launch.Cleanup)
-
 			url := launch.MustLaunch()
+			b.Cleanup(func() {
+				launch.Kill()
+				launch.Cleanup()
+			})
 
 			browser := rod.New().ControlURL(url).MustConnect()
 			b.Cleanup(browser.MustClose)

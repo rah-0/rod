@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 func main() {
@@ -34,7 +34,7 @@ func main() {
 
 	utils.E(utils.OutputFile("lib/js/helper.go", out))
 
-	utils.Exec("gofumpt -w lib/js/helper.go")
+	utils.Exec("gofmt -w lib/js/helper.go")
 }
 
 var regDeps = regexp.MustCompile(`\Wfunctions.(\w+)`)
@@ -55,9 +55,10 @@ func fnName(name string) string {
 	return strings.ToUpper(name[0:1]) + name[1:]
 }
 
-func getList() gson.JSON {
+func getList() jsonvalue.Value {
 	utils.UseNode(false)
-	code := utils.ExecLine(false, "npx -ys -- uglify-js@3.17.4 -c -m -- lib/js/helper.js")
+	code, err := utils.ReadString("lib/js/helper.js")
+	utils.E(err)
 
 	script := fmt.Sprintf(`
 		%s
@@ -77,5 +78,5 @@ func getList() gson.JSON {
 
 	utils.E(utils.OutputFile(tmp, script))
 
-	return gson.NewFrom(utils.ExecLine(false, "node", tmp))
+	return jsonvalue.NewFrom(utils.ExecLine(false, "node", tmp))
 }

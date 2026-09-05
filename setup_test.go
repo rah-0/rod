@@ -15,51 +15,48 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/cdp"
-	"github.com/go-rod/rod/lib/defaults"
-	"github.com/go-rod/rod/lib/launcher"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/got"
-	"github.com/ysmood/gotrace"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/internal/goroutines"
+	"github.com/rah-0/rod/internal/testutil"
+	"github.com/rah-0/rod/lib/cdp"
+	"github.com/rah-0/rod/lib/defaults"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/launcher"
+	"github.com/rah-0/rod/lib/proto"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 var TimeoutEach = flag.Duration("timeout-each", time.Minute, "timeout for each test")
 
 var LogDir = slash(fmt.Sprintf("tmp/cdp-log/%s", time.Now().Format("2006-01-02_15-04-05")))
 
-func init() {
-	got.DefaultFlags("timeout=5m", "run=/")
-
-	utils.E(os.MkdirAll(slash("tmp/cdp-log"), 0o755))
-
-	launcher.NewBrowser().MustGet() // preload browser to local
-}
-
 var testerPool rod.Pool[G]
 
+const maxBrowserProcesses = 4
+
 func TestMain(m *testing.M) {
+	utils.E(os.MkdirAll(slash("tmp/cdp-log"), 0o755))
+	defaults.Load()
 	testerPool = newTesterPool()
 
 	code := m.Run()
+	testerPool.Cleanup(func(g *G) {
+		_ = g.browser.Close()
+		g.launcher.Kill()
+		g.launcher.Cleanup()
+	})
 	if code != 0 {
 		os.Exit(code)
 	}
 
-	testerPool.Cleanup(func(g *G) {
-		g.browser.MustClose()
-	})
-
-	if err := gotrace.Check(0, gotrace.IgnoreFuncs("internal/poll.runtime_pollWait")); err != nil {
+	if err := goroutines.Check(0, goroutines.Functions("internal/poll.runtime_pollWait")); err != nil {
 		log.Fatal(err)
 	}
 }
 
 // G is a tester. Testers are thread-safe, they shouldn't race each other.
 type G struct {
-	got.G
+	testutil.G
 
 	// mock client for proxy the cdp requests
 	mc *MockClient
@@ -72,16 +69,20 @@ type G struct {
 	// or it may affect other test cases.
 	page *rod.Page
 
+	// launcher owns the local browser process and its temporary profile.
+	launcher *launcher.Launcher
+
 	// use it to cancel the TimeoutEach for current test case
 	cancelTimeout func()
 }
 
 // If we don't use pool to cache, the total time will be much longer.
 func newTesterPool() rod.Pool[G] {
-	parallel := got.Parallel()
+	parallel := testutil.Parallel()
 	if parallel == 0 {
 		parallel = runtime.GOMAXPROCS(0)
 	}
+	parallel = min(parallel, maxBrowserProcesses)
 
 	fmt.Println("parallel test", parallel) //nolint: forbidigo
 
@@ -89,7 +90,8 @@ func newTesterPool() rod.Pool[G] {
 }
 
 func newTester() *G {
-	u := launcher.New().Set("proxy-bypass-list", "<-loopback>").NoSandbox(true).MustLaunch()
+	l := launcher.New().Set("proxy-bypass-list", "<-loopback>").NoSandbox(true)
+	u := l.MustLaunch()
 
 	mc := newMockClient(u)
 
@@ -105,31 +107,50 @@ func newTester() *G {
 	}
 
 	return &G{
-		mc:      mc,
-		browser: browser,
-		page:    page,
+		mc:       mc,
+		browser:  browser,
+		page:     page,
+		launcher: l,
 	}
 }
 
 func setup(t *testing.T) G {
 	t.Helper()
 
-	if got.Parallel() != 1 {
+	if testutil.Parallel() != 1 {
 		t.Parallel()
 	}
 
 	tester := testerPool.MustGet(newTester)
 	t.Cleanup(func() { testerPool.Put(tester) })
 
-	tester.G = got.New(t)
+	tester.G = testutil.New(t)
 	tester.mc.t = t
-	tester.mc.log.SetOutput(tester.Open(true, filepath.Join(LogDir, tester.mc.id, t.Name()+".log")))
+	tester.mc.log.SetOutput(openTestLog(t, filepath.Join(LogDir, tester.mc.id, t.Name()+".log")))
 
 	tester.checkLeaking()
 
 	tester.page.MustNavigate("")
 
 	return *tester
+}
+
+func openTestLog(t *testing.T, path string) *os.File {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = f.Close()
+		if !t.Failed() {
+			_ = os.Remove(path)
+		}
+	})
+	return f
 }
 
 func (g G) enableCDPLog() {
@@ -171,12 +192,12 @@ func (g G) newPage(u ...string) *rod.Page {
 }
 
 func (g *G) checkLeaking() {
-	ig := gotrace.CombineIgnores(gotrace.IgnoreCurrent(), gotrace.IgnoreNonChildren())
-	gotrace.CheckLeak(g.Testable, 0, ig)
+	ig := goroutines.Combine(goroutines.Current(), goroutines.NonChildren())
+	goroutines.CheckLeak(g.Testable, 0, ig)
 
-	self := gotrace.Get(false)[0]
+	self := goroutines.Snapshot(false)[0]
 	g.cancelTimeout = g.DoAfter(*TimeoutEach, func() {
-		t := gotrace.Get(true).Filter(func(t *gotrace.Trace) bool {
+		t := goroutines.Snapshot(true).Filter(func(t *goroutines.Trace) bool {
 			if t.GoroutineID == self.GoroutineID {
 				return false
 			}
@@ -191,14 +212,7 @@ running goroutines: %s`, g.Name(), *TimeoutEach, t))
 			return
 		}
 
-		// close all other pages other than g.page
-		res, err := proto.TargetGetTargets{}.Call(g.browser)
-		g.E(err)
-		for _, info := range res.TargetInfos {
-			if info.TargetID != g.page.TargetID {
-				g.E(proto.TargetCloseTarget{TargetID: info.TargetID}.Call(g.browser))
-			}
-		}
+		g.closeExtraPages()
 
 		if g.browser.LoadState(g.page.SessionID, &proto.FetchEnable{}) {
 			g.Logf("leaking FetchEnable")
@@ -209,6 +223,61 @@ running goroutines: %s`, g.Name(), *TimeoutEach, t))
 	})
 }
 
+func (g *G) closeExtraPages() {
+	res, err := proto.TargetGetTargets{}.Call(g.browser)
+	g.E(err)
+
+	closing := map[proto.TargetTargetID]struct{}{}
+	for _, info := range res.TargetInfos {
+		if info.Type != proto.TargetTargetInfoTypePage || info.TargetID == g.page.TargetID {
+			continue
+		}
+
+		_, err := proto.TargetCloseTarget{TargetID: info.TargetID}.Call(g.browser)
+		if err != nil {
+			if targetAlreadyGone(err) {
+				continue
+			}
+			g.E(err)
+		}
+		closing[info.TargetID] = struct{}{}
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for len(closing) != 0 {
+		res, err := proto.TargetGetTargets{}.Call(g.browser)
+		g.E(err)
+
+		for targetID := range closing {
+			found := false
+			for _, info := range res.TargetInfos {
+				if info.TargetID == targetID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				delete(closing, targetID)
+			}
+		}
+
+		if len(closing) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			g.Fatalf("timed out waiting for %d page targets to close", len(closing))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func targetAlreadyGone(err error) bool {
+	var protocolErr *cdp.Error
+	return errors.As(err, &protocolErr) &&
+		protocolErr.Code == -32602 &&
+		protocolErr.Message == "No target with given id found"
+}
+
 type Call func(ctx context.Context, sessionID, method string, params interface{}) ([]byte, error)
 
 var _ rod.CDPClient = &MockClient{}
@@ -216,7 +285,7 @@ var _ rod.CDPClient = &MockClient{}
 type MockClient struct {
 	sync.RWMutex
 	id        string
-	t         got.Testable
+	t         testutil.Testable
 	log       *log.Logger
 	principal *cdp.Client
 	call      Call
@@ -304,11 +373,11 @@ func (mc *MockClient) stubCounter() {
 	})
 }
 
-type StubSend func() (gson.JSON, error)
+type StubSend func() (jsonvalue.Value, error)
 
 // When call the cdp.Client.Call the nth time use fn instead.
 // Use p to filter method.
-func (mc *MockClient) stub(nth int, p proto.Request, fn func(send StubSend) (gson.JSON, error)) {
+func (mc *MockClient) stub(nth int, p proto.Request, fn func(send StubSend) (jsonvalue.Value, error)) {
 	if p == nil {
 		mc.t.Logf("p must be specified")
 		mc.t.FailNow()
@@ -320,9 +389,9 @@ func (mc *MockClient) stub(nth int, p proto.Request, fn func(send StubSend) (gso
 		if method == p.ProtoReq() {
 			if int(atomic.AddInt64(&count, 1)) == nth {
 				mc.resetCall()
-				j, err := fn(func() (gson.JSON, error) {
+				j, err := fn(func() (jsonvalue.Value, error) {
 					b, err := mc.principal.Call(ctx, sessionID, method, params)
-					return gson.New(b), err
+					return jsonvalue.New(b), err
 				})
 				if err != nil {
 					return nil, err
@@ -337,8 +406,8 @@ func (mc *MockClient) stub(nth int, p proto.Request, fn func(send StubSend) (gso
 // When call the cdp.Client.Call the nth time return error.
 // Use p to filter method.
 func (mc *MockClient) stubErr(nth int, p proto.Request) {
-	mc.stub(nth, p, func(_ StubSend) (gson.JSON, error) {
-		return gson.New(nil), errors.New("mock error")
+	mc.stub(nth, p, func(_ StubSend) (jsonvalue.Value, error) {
+		return jsonvalue.New(nil), errors.New("mock error")
 	})
 }
 

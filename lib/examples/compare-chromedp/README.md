@@ -32,4 +32,4 @@ To run an example:
 | [visible](./visible)               | [visible](https://github.com/chromedp/examples/blob/master/visible)               | wait until an element is visible                                           |
 
 Occasionally, some of these examples may break if the specific websites these examples use get updated.
-We suggest you create an [issue](https://github.com/go-rod/rod/issues/new/choose).
+We suggest you create an [issue](https://github.com/rah-0/rod/issues/new/choose).

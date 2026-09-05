@@ -35,14 +35,36 @@
     <div id="targets"></div>
 
     <script>
+      const targets = document.getElementById('targets')
+
       async function update() {
         const list = await (await fetch('/api/pages')).json()
-        let html = ''
-        list.forEach((el) => {
-          html += `<a href='/page/${el.targetId}' title="${el.url}">${el.title}</a>`
+        const links = document.createDocumentFragment()
+
+        list.forEach((target) => {
+          if (
+            typeof target.targetId !== 'string' ||
+            target.targetId.length === 0 ||
+            typeof target.title !== 'string' ||
+            typeof target.url !== 'string'
+          ) {
+            return
+          }
+
+          const url = new URL(
+            `/page/${encodeURIComponent(target.targetId)}`,
+            window.location.origin,
+          )
+          if (url.origin !== window.location.origin) return
+
+          const link = document.createElement('a')
+          link.href = url.href
+          link.title = target.url
+          link.textContent = target.title
+          links.appendChild(link)
         })
 
-        window.targets.innerHTML = html
+        targets.replaceChildren(links)
 
         setTimeout(update, 1000)
       }

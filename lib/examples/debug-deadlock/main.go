@@ -2,10 +2,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/signal"
 
-	"github.com/go-rod/rod"
-	"github.com/ysmood/gotrace"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/internal/goroutines"
 )
 
 // This example shows how to detect the hanging points of golang code.
@@ -27,7 +30,7 @@ func yourCodeHere() {
 
 /*
 goroutine 7 [select]:
-github.com/go-rod/rod.(*Page).MustElement(0xc00037e000, 0xc00063a0f0, 0x1, 0x1, 0x0)
+github.com/rah-0/rod.(*Page).MustElement(0xc00037e000, 0xc00063a0f0, 0x1, 0x1, 0x0)
 	rod/must.go:425 +0x4d
 created by main.yourCodeHere
 	rod/lib/examples/debug-deadlock/main.go:22 +0xb8
@@ -36,9 +39,10 @@ created by main.yourCodeHere
 // From it we know the line 22 is blocking the code.
 
 func checkLock() func() {
-	ctx := gotrace.Signal()
-	ignored := gotrace.IgnoreCurrent()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ignored := goroutines.Current()
 	return func() {
-		fmt.Println(gotrace.Wait(ctx, ignored))
+		defer stop()
+		fmt.Println(goroutines.Wait(ctx, ignored))
 	}
 }

@@ -3,14 +3,14 @@ package input_test
 import (
 	"testing"
 
-	"github.com/go-rod/rod/lib/input"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/ysmood/got"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/internal/testutil"
+	"github.com/rah-0/rod/lib/input"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/proto"
 )
 
 func TestKeyMap(t *testing.T) {
-	g := got.T(t)
+	g := testutil.T(t)
 
 	k := input.Key('a')
 	g.Eq(k.Info(), input.KeyInfo{
@@ -67,7 +67,7 @@ func TestKeyMap(t *testing.T) {
 }
 
 func TestKeyModifier(t *testing.T) {
-	g := got.T(t)
+	g := testutil.T(t)
 
 	check := func(k input.Key, m int) {
 		g.Helper()
@@ -83,7 +83,7 @@ func TestKeyModifier(t *testing.T) {
 }
 
 func TestKeyEncode(t *testing.T) {
-	g := got.T(t)
+	g := testutil.T(t)
 
 	g.Eq(input.Key('a').Encode(proto.InputDispatchKeyEventTypeKeyDown, 0), &proto.InputDispatchKeyEvent{
 		Type:                  "keyDown",
@@ -92,7 +92,7 @@ func TestKeyEncode(t *testing.T) {
 		Code:                  "KeyA",
 		Key:                   "a",
 		WindowsVirtualKeyCode: 65,
-		Location:              gson.Int(0),
+		Location:              jsonvalue.Int(0),
 	})
 
 	g.Eq(input.Key('a').Encode(proto.InputDispatchKeyEventTypeKeyUp, 0), &proto.InputDispatchKeyEvent{
@@ -102,7 +102,7 @@ func TestKeyEncode(t *testing.T) {
 		Code:                  "KeyA",
 		Key:                   "a",
 		WindowsVirtualKeyCode: 65,
-		Location:              gson.Int(0),
+		Location:              jsonvalue.Int(0),
 	})
 
 	g.Eq(input.AltLeft.Encode(proto.InputDispatchKeyEventTypeKeyDown, 0), &proto.InputDispatchKeyEvent{
@@ -110,7 +110,7 @@ func TestKeyEncode(t *testing.T) {
 		Code:                  "AltLeft",
 		Key:                   "Alt",
 		WindowsVirtualKeyCode: 18,
-		Location:              gson.Int(1),
+		Location:              jsonvalue.Int(1),
 	})
 
 	g.Eq(input.Numpad1.Encode(proto.InputDispatchKeyEventTypeKeyDown, 0), &proto.InputDispatchKeyEvent{
@@ -125,7 +125,7 @@ func TestKeyEncode(t *testing.T) {
 }
 
 func TestMac(t *testing.T) {
-	g := got.T(t)
+	g := testutil.T(t)
 
 	old := input.IsMac
 	input.IsMac = true

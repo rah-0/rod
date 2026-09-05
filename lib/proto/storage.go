@@ -3,7 +3,7 @@
 package proto
 
 import (
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/jsonvalue"
 )
 
 /*
@@ -1104,7 +1104,7 @@ type StorageGetInterestGroupDetailsResult struct {
 	// https://wicg.github.io/turtledove/#dictdef-generatebidinterestgroup
 	// but has absolute expirationTime instead of relative lifetimeMs and
 	// also adds joiningOrigin.
-	Details map[string]gson.JSON `json:"details"`
+	Details map[string]jsonvalue.Value `json:"details"`
 }
 
 // StorageSetInterestGroupTracking (experimental) Enables/Disables issuing of interestGroupAccessed events.
@@ -1515,7 +1515,7 @@ type StorageInterestGroupAuctionEventOccurred struct {
 	ParentAuctionID StorageInterestGroupAuctionID `json:"parentAuctionId,omitempty"`
 
 	// AuctionConfig (optional) Set for started and configResolved
-	AuctionConfig map[string]gson.JSON `json:"auctionConfig,omitempty"`
+	AuctionConfig map[string]jsonvalue.Value `json:"auctionConfig,omitempty"`
 }
 
 // ProtoEvent name.

@@ -8,16 +8,19 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/go-rod/rod/lib/launcher"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/launcher"
+	"github.com/rah-0/rod/lib/utils"
 )
 
-func getSchema() gson.JSON {
-	l := launcher.New().Bin(launcher.NewBrowser().MustGet())
-	defer l.Kill()
-
+func getSchema() jsonvalue.Value {
+	l := launcher.New()
 	u := l.MustLaunch()
+	defer func() {
+		l.Kill()
+		l.Cleanup()
+	}()
+
 	parsed, err := url.Parse(u)
 	utils.E(err)
 	parsed.Scheme = "http"
@@ -30,7 +33,7 @@ func getSchema() gson.JSON {
 	data, err := io.ReadAll(res.Body)
 	utils.E(err)
 
-	obj := gson.New(data)
+	obj := jsonvalue.New(data)
 
 	utils.E(utils.OutputFile("tmp/proto.json", obj.JSON("", "  ")))
 
@@ -44,12 +47,12 @@ func mapType(n string) string {
 		"integer": "int",
 		"string":  "string",
 		"binary":  "[]byte",
-		"object":  "map[string]gson.JSON",
-		"any":     "gson.JSON",
+		"object":  "map[string]jsonvalue.Value",
+		"any":     "jsonvalue.Value",
 	}[n]
 }
 
-func typeName(domain *domain, schema gson.JSON) string {
+func typeName(domain *domain, schema jsonvalue.Value) string {
 	typeName := ""
 	if schema.Has("type") {
 		typeName = schema.Get("type").Str()
@@ -88,7 +91,7 @@ func typeName(domain *domain, schema gson.JSON) string {
 	return typeName
 }
 
-func enumList(schema gson.JSON) []string {
+func enumList(schema jsonvalue.Value) []string {
 	var enum []string
 	if schema.Has("enum") {
 		enum = []string{}

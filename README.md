@@ -1,74 +1,97 @@
-# Overview
+# rod
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/go-rod/rod.svg)](https://pkg.go.dev/github.com/go-rod/rod)
-[![Discord Chat](https://img.shields.io/discord/719933559456006165.svg)][discord room]
+## Credits
 
-## [Documentation](https://go-rod.github.io/) | [API reference](https://pkg.go.dev/github.com/go-rod/rod?tab=doc) | [FAQ](https://go-rod.github.io/#/faq/README)
+Rod was created by [Yad Smood](https://github.com/ysmood) and developed with
+the [go-rod contributors](https://github.com/go-rod/rod/graphs/contributors).
+This repository is a maintained fork of
+[go-rod/rod](https://github.com/go-rod/rod). The original and fork copyright
+notices are preserved in the [MIT license](LICENSE).
 
-Rod is a high-level driver directly based on [DevTools Protocol](https://chromedevtools.github.io/devtools-protocol).
-It's designed for web automation and scraping for both high-level and low-level use, senior developers can use the low-level packages and functions to easily
-customize or build up their own version of Rod, the high-level functions are just examples to build a default version of Rod.
+## Overview
 
-[中文 API 文档](https://pkg.go.dev/github.com/go-rod/go-rod-chinese)
+A high-level Go driver for the Chrome DevTools Protocol, built for browser automation and scraping.
 
-## Features
+- Chainable, context-aware API with automatic waiting
+- Support for nested frames and shadow DOMs
+- Page interaction, request interception, screenshots, PDFs, and downloads
+- Concurrent-safe browser operations
+- Dependency-free core module
+- Direct local browser execution without downloaded binaries
 
-- Chained context design, intuitive to timeout or cancel the long-running task
-- Auto-wait elements to be ready
-- Debugging friendly, auto input tracing, remote monitoring headless browser
-- Thread-safe for all operations
-- Automatically find or download [browser](lib/launcher)
-- High-level helpers like WaitStable, WaitRequestIdle, HijackRequests, WaitDownload, etc
-- Two-step WaitEvent design, never miss an event ([how it works](https://github.com/ysmood/goob))
-- Correctly handles nested iframes or shadow DOMs
-- No zombie browser process after the crash ([how it works](https://github.com/ysmood/leakless))
-- [CI](https://github.com/go-rod/rod/actions) enforced 100% test coverage
+## Differences from upstream Rod
 
-## Examples
+This fork keeps Rod's CDP-based automation API while changing browser setup,
+dependencies, and process ownership. The main differences from
+[go-rod/rod](https://github.com/go-rod/rod) are:
 
-Please check the [examples_test.go](examples_test.go) file first, then check the [examples](lib/examples) folder.
+| Area | This fork |
+| --- | --- |
+| Go and dependencies | Requires Go 1.27.1. The core module has no third-party Go dependencies; upstream's [helper dependencies](https://github.com/go-rod/rod/blob/main/go.mod) have been removed or replaced with repository-owned code. Testcontainers dependencies stay in a separate test module. |
+| Browser provisioning | Uses an installed Chrome, Chromium, or Edge executable, or an explicit `Launcher.Bin` path. Upstream's [automatic browser downloads and revision selection](https://github.com/go-rod/rod/blob/main/lib/launcher/launcher.go) have been removed. A missing browser returns an error. |
+| Process lifecycle | Launches the browser directly, without upstream's `leakless` helper executable. Call `Browser.Close` or `Launcher.Kill` during normal shutdown; abrupt process termination has no portable cleanup guarantee. `Launcher.Cleanup` preserves caller-supplied profiles. See [launcher lifecycle](lib/launcher). |
+| JSON types | Replaces `gson.JSON` with [`lib/jsonvalue.Value`](lib/jsonvalue). Serialization uses standard `encoding/json`; direct `encoding/json/v2` imports are prohibited. |
+| Remote management | Adds mandatory bearer authentication, loopback-only listening by default, and restrictions on client-supplied launch settings. Use TLS or an encrypted tunnel for remote access. The manager owns each session's browser and temporary profile. See [remote manager configuration](lib/launcher#remote-manager-security). |
+| Development monitor | Listens on loopback by default and has no authentication. Use an authenticated proxy when exposing it remotely. |
+| Browser compatibility testing | Adds an explicit [Testcontainers test](lib/docker) that pulls `chromedp/headless-shell:latest` on every run to detect compatibility changes. Container execution is optional; local development continues to use an installed browser. |
 
-For more detailed examples, please search the unit tests.
-Such as the usage of method `HandleAuth`, you can search all the `*_test.go` files that contain `HandleAuth`,
-for example, use GitHub online [search in repository](https://github.com/go-rod/rod/search?q=HandleAuth&unscoped_q=HandleAuth).
-You can also search the GitHub [issues](https://github.com/go-rod/rod/issues) or [discussions](https://github.com/go-rod/rod/discussions),
-a lot of usage examples are recorded there.
+When migrating, switch imports to `github.com/rah-0/rod` and adapt any direct
+`gson.JSON` usage to `lib/jsonvalue.Value`. Download/revision and `Leakless`
+APIs are no longer available. Managed clients now pass a token to
+`NewManaged(serviceURL, authToken)` or `MustNewManaged(serviceURL, authToken)`;
+the server uses `NewManager(authToken)`. Remote `KeepUserDataDir` and the
+manager's `--allow-all` option have also been removed.
 
-[Here is a comparison](lib/examples/compare-chromedp) of the examples between rod and Chromedp.
+Command-line defaults are loaded through `defaults.Load()` rather than package
+initialization. Constructors call it automatically; applications that call
+`flag.Parse()` or override exported defaults must call it first.
 
-If you have questions, please raise an [issues](https://github.com/go-rod/rod/issues)/[discussions](https://github.com/go-rod/rod/discussions) or join the [chat room][discord room].
+## Requirements
 
-## Sponsors
+- Go 1.27.1 or later
+- Chrome, Chromium, or Edge installed locally
 
-Rod is sponsored by many organizations and individuals, thank you for your support!
+Rod never downloads a browser or helper executable. Use `launcher.Launcher.Bin`
+when an explicit browser path is required. Local launches use a fresh temporary
+automation profile by default; using an installed browser does not require
+using its personal profile. Set `Launcher.UserDataDir` explicitly when session
+state should persist.
 
-Please contact [yad@ysmood.org](mailto:yad@ysmood.org) if you want to be listed here.
+## Installation
 
-<!-- markdownlint-disable MD033 -->
+```sh
+go get github.com/rah-0/rod
+```
 
-<table style="border-collapse: collapse">
-  <tr>
-    <td>
-      <p>Browser testing via</p>
-      <a href="https://www.testmuai.com/?utm_medium=sponsor&utm_source=go-rod" target="_blank">
-        <img
-          src="https://github.com/user-attachments/assets/3efebe85-726b-49f1-b4c9-7c0103b192f3"
-          alt="TestMu AI Logo"
-          height="90"
-        />
-      </a>
-    </td>
-  </tr>
-</table>
+See the [API reference](https://pkg.go.dev/github.com/rah-0/rod).
 
-<!-- markdownlint-enable MD033 -->
+## Development
 
-## Join us
+The core module has no third-party Go dependencies. Code generation requires a
+locally installed Chromium-family browser and Node.js executable; it downloads
+neither.
 
-Your help is more than welcome! Even just open an issue to ask a question may greatly help others.
+Run the root test suite without live-site documentation examples:
 
-Please read [How To Ask Questions The Smart Way](http://www.catb.org/~esr/faqs/smart-questions.html) before you ask questions.
+```sh
+GODEBUG=tracebackancestors=100 go test -count=1 -race -cover -covermode=atomic -run '^Test' ./...
+```
 
-If you want to contribute please read the [Contributor Guide](.github/CONTRIBUTING.md).
+The separate [Testcontainers compatibility test](lib/docker) uses
+`WithAlwaysPull()` to test `docker.io/chromedp/headless-shell:latest` on every
+run. The floating tag is intentional so newly published browser versions are
+checked for compatibility:
 
-[discord room]: https://discord.gg/CpevuvY
+```sh
+go test -count=1 -race -cover -covermode=atomic ./lib/docker
+```
+
+## License
+
+Rod is available under the [MIT License](LICENSE).
+
+## ☕ Support
+
+If this saved you time or brought value to your project, feel free to show some support. Every bit is appreciated 🙂
+
+[![Buy Me A Coffee](https://cdn.buymeacoffee.com/buttons/default-orange.png)](https://www.buymeacoffee.com/rah.0)

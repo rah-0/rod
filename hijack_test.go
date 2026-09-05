@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/proto"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 func TestHijack(t *testing.T) {
@@ -236,8 +236,8 @@ func TestHijackOnErrorLog(t *testing.T) {
 
 	go router.Run()
 
-	g.mc.stub(1, proto.FetchContinueRequest{}, func(_ StubSend) (gson.JSON, error) {
-		return gson.New(nil), errors.New("err")
+	g.mc.stub(1, proto.FetchContinueRequest{}, func(_ StubSend) (jsonvalue.Value, error) {
+		return jsonvalue.New(nil), errors.New("err")
 	})
 
 	go func() {
@@ -273,9 +273,9 @@ func TestHijackFailRequest(t *testing.T) {
 	g.page.MustWait(`() => document.title === 'Failed to fetch'`)
 
 	{ // test error log
-		g.mc.stub(1, proto.FetchFailRequest{}, func(send StubSend) (gson.JSON, error) {
+		g.mc.stub(1, proto.FetchFailRequest{}, func(send StubSend) (jsonvalue.Value, error) {
 			_, _ = send()
-			return gson.JSON{}, errors.New("err")
+			return jsonvalue.Value{}, errors.New("err")
 		})
 		_ = g.page.Navigate(s.URL("/a"))
 	}
@@ -334,7 +334,7 @@ func TestHijackResponseErr(t *testing.T) {
 		}
 
 		ctx.MustLoadResponse()
-		g.mc.stub(1, proto.FetchFulfillRequest{}, func(send StubSend) (gson.JSON, error) {
+		g.mc.stub(1, proto.FetchFulfillRequest{}, func(send StubSend) (jsonvalue.Value, error) {
 			res, _ := send()
 			return res, errors.New("err")
 		})

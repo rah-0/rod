@@ -3,15 +3,16 @@
 package main
 
 import (
+	"encoding/base64"
 	"testing"
 
-	"github.com/go-rod/rod"
-	"github.com/ysmood/got"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/internal/testutil"
 )
 
 // test context.
 type G struct {
-	got.G
+	testutil.G
 
 	browser *rod.Browser
 }
@@ -23,12 +24,13 @@ var setup = func() func(t *testing.T) G {
 	return func(t *testing.T) G {
 		t.Parallel() // run each test concurrently
 
-		return G{got.New(t), browser}
+		return G{testutil.New(t), browser}
 	}
 }()
 
 // a helper function to create an incognito page.
-func (g G) page(url string) *rod.Page {
+func (g G) page(html string) *rod.Page {
+	url := "data:text/html;base64," + base64.StdEncoding.EncodeToString([]byte(html))
 	page := g.browser.MustIncognito().MustPage(url)
 	g.Cleanup(page.MustClose)
 	return page

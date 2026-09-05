@@ -19,7 +19,13 @@ func (e *Error) Error() string {
 // Is stdlib interface.
 func (e Error) Is(target error) bool {
 	err, ok := target.(*Error)
-	return ok && e == *err
+	if !ok {
+		return false
+	}
+	if err == ErrCtxDestroyed && e.Code == err.Code {
+		return e.Message == err.Message || e.Message == "Inspected target navigated or closed"
+	}
+	return e == *err
 }
 
 // ErrCtxNotFound type.

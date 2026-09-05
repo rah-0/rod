@@ -5,7 +5,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/go-rod/rod"
+	"github.com/rah-0/rod"
 )
 
 // This example demonstrates  how to extract text from a specific element.

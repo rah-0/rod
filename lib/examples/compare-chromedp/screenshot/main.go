@@ -4,9 +4,9 @@ package main
 import (
 	"os"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/proto"
 )
 
 // This example demonstrates how to take a screenshot of a specific element and
@@ -21,7 +21,7 @@ func main() {
 	// capture entire browser viewport, returning jpg with quality=90
 	buf, err := browser.MustPage("https://brank.as/").Screenshot(true, &proto.PageCaptureScreenshot{
 		Format:  proto.PageCaptureScreenshotFormatJpeg,
-		Quality: gson.Int(90),
+		Quality: jsonvalue.Int(90),
 	})
 	if err != nil {
 		panic(err)

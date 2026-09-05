@@ -4,18 +4,23 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/go-rod/rod/lib/cdp"
-	"github.com/go-rod/rod/lib/launcher"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/cdp"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/launcher"
+	"github.com/rah-0/rod/lib/proto"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 func ExampleClient() {
 	ctx := context.Background()
 
 	// launch a browser
-	url := launcher.New().MustLaunch()
+	l := launcher.New()
+	url := l.MustLaunch()
+	defer func() {
+		l.Kill()
+		l.Cleanup()
+	}()
 
 	// create a controller
 	client := cdp.New().Start(cdp.MustConnectWS(url))
@@ -35,7 +40,7 @@ func ExampleClient() {
 	})
 	utils.E(err)
 
-	fmt.Println(len(gson.New(res).Get("targetId").Str()))
+	fmt.Println(len(jsonvalue.New(res).Get("targetId").Str()))
 
 	// close browser by using the proto lib to encode json
 	_ = proto.BrowserClose{}.Call(client)
@@ -44,9 +49,16 @@ func ExampleClient() {
 }
 
 func Example_customize_cdp_log() {
-	ws := cdp.MustConnectWS(launcher.New().MustLaunch())
+	l := launcher.New()
+	u := l.MustLaunch()
+	defer func() {
+		l.Kill()
+		l.Cleanup()
+	}()
 
-	cdp.New().
+	ws := cdp.MustConnectWS(u)
+
+	client := cdp.New().
 		Logger(utils.Log(func(args ...interface{}) {
 			switch v := args[0].(type) {
 			case *cdp.Request:
@@ -54,4 +66,6 @@ func Example_customize_cdp_log() {
 			}
 		})).
 		Start(ws)
+
+	_ = proto.BrowserClose{}.Call(client)
 }

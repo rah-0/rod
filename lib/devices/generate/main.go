@@ -2,14 +2,19 @@
 package main
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
 	"strings"
 
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/utils"
+)
+
+const (
+	deviceListURL = "https://raw.githubusercontent.com/ChromeDevTools/devtools-frontend/c4e2fefe3327aa9fe5f4398a1baddb8726c230d5/front_end/emulated_devices/module.json"
+	deviceListSHA = "c22caf7ea110abb68a712ab240cff2efec8e804c7492ec73ff157875d4006e27"
 )
 
 func main() {
@@ -22,7 +27,7 @@ func main() {
 
 		code += utils.S(`
 
-			// {{.name}} device
+			// {{.name}} device.
 			{{.name}} = Device{
 				Title:        "{{.title}}",
 				Capabilities: {{.capabilities}},
@@ -64,27 +69,23 @@ func main() {
 	path := "./lib/devices/list.go"
 	utils.E(utils.OutputFile(path, code))
 
-	utils.Exec("gofumpt -w", path)
-	utils.Exec(
-		"go run github.com/ysmood/golangci-lint@latest -- "+
-			"run --fix",
-		filepath.Dir(path),
-	)
+	utils.Exec("gofmt -w", path)
 }
 
-func getDeviceList() gson.JSON {
+func getDeviceList() jsonvalue.Value {
 	// we use the list from the web UI of devtools
 	// TODO: We should keep update with their latest list, using hash id is a temp solution
-	res, err := http.Get(
-		"https://raw.githubusercontent.com/ChromeDevTools/devtools-frontend/c4e2fefe3327aa9fe5f4398a1baddb8726c230d5/front_end/emulated_devices/module.json",
-	)
+	res, err := http.Get(deviceListURL)
 	utils.E(err)
 	defer func() { _ = res.Body.Close() }()
 
 	data, err := io.ReadAll(res.Body)
 	utils.E(err)
+	if fmt.Sprintf("%x", sha256.Sum256(data)) != deviceListSHA {
+		panic("device list checksum mismatch")
+	}
 
-	return gson.New(data).Get("extensions")
+	return jsonvalue.New(data).Get("extensions")
 }
 
 func normalizeName(name string) string {
@@ -102,7 +103,7 @@ func normalizeName(name string) string {
 	return strings.Join(list, "")
 }
 
-func getUserAgent(val gson.JSON) string {
+func getUserAgent(val jsonvalue.Value) string {
 	ua := val.Get("user-agent").String()
 	if ua == "" {
 		return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
@@ -111,7 +112,7 @@ func getUserAgent(val gson.JSON) string {
 	return ua
 }
 
-func toGoArr(val gson.JSON) string {
+func toGoArr(val jsonvalue.Value) string {
 	list := []string{}
 	for _, s := range val.Arr() {
 		list = append(list, s.String())

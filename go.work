@@ -1,8 +1,8 @@
-go 1.22
+go 1.27.1
 
 use (
 	.
+	./lib/docker
 	./lib/examples/custom-websocket
 	./lib/examples/e2e-testing
-	./lib/utils/check-issue
 )

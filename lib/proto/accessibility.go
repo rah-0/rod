@@ -3,7 +3,7 @@
 package proto
 
 import (
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/jsonvalue"
 )
 
 /*
@@ -186,7 +186,7 @@ type AccessibilityAXValue struct {
 	Type AccessibilityAXValueType `json:"type"`
 
 	// Value (optional) The computed value of this property.
-	Value gson.JSON `json:"value,omitempty"`
+	Value jsonvalue.Value `json:"value,omitempty"`
 
 	// RelatedNodes (optional) One or more related nodes, if applicable.
 	RelatedNodes []*AccessibilityAXRelatedNode `json:"relatedNodes,omitempty"`

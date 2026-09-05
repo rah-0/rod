@@ -3,7 +3,7 @@
 package proto
 
 import (
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/jsonvalue"
 )
 
 /*
@@ -131,7 +131,7 @@ const (
 )
 
 // NetworkHeaders Request / response headers as keys / values of JSON object.
-type NetworkHeaders map[string]gson.JSON
+type NetworkHeaders map[string]jsonvalue.Value
 
 // NetworkConnectionType The underlying connection technology that the browser is supposedly using.
 type NetworkConnectionType string
@@ -1654,7 +1654,7 @@ type NetworkReportingAPIReport struct {
 	CompletedAttempts int `json:"completedAttempts"`
 
 	// Body ...
-	Body map[string]gson.JSON `json:"body"`
+	Body map[string]jsonvalue.Value `json:"body"`
 
 	// Status ...
 	Status NetworkReportStatus `json:"status"`

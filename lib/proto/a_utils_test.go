@@ -3,16 +3,16 @@ package proto_test
 import (
 	"testing"
 
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/ysmood/got"
+	"github.com/rah-0/rod/internal/testutil"
+	"github.com/rah-0/rod/lib/proto"
 )
 
 type T struct {
-	got.G
+	testutil.G
 }
 
 func Test(t *testing.T) {
-	got.Each(t, T{})
+	testutil.Each(t, T{})
 }
 
 func (t T) PatternToReg() {

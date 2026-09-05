@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/cdp"
-	"github.com/go-rod/rod/lib/defaults"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/lib/cdp"
+	"github.com/rah-0/rod/lib/defaults"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/proto"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 func TestPageElements(t *testing.T) {
@@ -114,16 +114,16 @@ func TestSearch(t *testing.T) {
 
 	// when search result is not ready
 	{
-		g.mc.stub(1, proto.DOMGetSearchResults{}, func(_ StubSend) (gson.JSON, error) {
-			return gson.New(nil), cdp.ErrCtxNotFound
+		g.mc.stub(1, proto.DOMGetSearchResults{}, func(_ StubSend) (jsonvalue.Value, error) {
+			return jsonvalue.New(nil), cdp.ErrCtxNotFound
 		})
 		p.MustSearch("click me")
 	}
 
 	// when node id is zero
 	{
-		g.mc.stub(1, proto.DOMGetSearchResults{}, func(_ StubSend) (gson.JSON, error) {
-			return gson.New(proto.DOMGetSearchResultsResult{
+		g.mc.stub(1, proto.DOMGetSearchResults{}, func(_ StubSend) (jsonvalue.Value, error) {
+			return jsonvalue.New(proto.DOMGetSearchResultsResult{
 				NodeIDs: []proto.DOMNodeID{0},
 			}), nil
 		})

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha1"
+	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -62,7 +63,7 @@ func (ws *WebSocket) initDialer(u *url.URL) {
 	}
 
 	if u.Scheme == "wss" {
-		ws.Dialer = &tlsDialer{}
+		ws.Dialer = &tls.Dialer{}
 		if u.Port() == "" {
 			u.Host += ":443"
 		}

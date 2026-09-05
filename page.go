@@ -10,14 +10,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-rod/rod/lib/cdp"
-	"github.com/go-rod/rod/lib/devices"
-	"github.com/go-rod/rod/lib/js"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/goob"
-	"github.com/ysmood/got/lib/lcs"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/internal/observable"
+	"github.com/rah-0/rod/lib/cdp"
+	"github.com/rah-0/rod/lib/devices"
+	"github.com/rah-0/rod/lib/js"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/proto"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 // Page implements these interfaces.
@@ -57,7 +56,7 @@ type Page struct {
 	sleeper func() utils.Sleeper
 
 	browser *Browser
-	event   *goob.Observable
+	event   *observable.Observable[*Message]
 
 	// devices
 	Mouse    *Mouse
@@ -141,7 +140,7 @@ func (p *Page) SetExtraHeaders(dict []string) (func(), error) {
 	headers := proto.NetworkHeaders{}
 
 	for i := 0; i < len(dict); i += 2 {
-		headers[dict[i]] = gson.New(dict[i+1])
+		headers[dict[i]] = jsonvalue.New(dict[i+1])
 	}
 
 	return p.EnableDomain(&proto.NetworkEnable{}), proto.NetworkSetExtraHTTPHeaders{Headers: headers}.Call(p)
@@ -803,11 +802,9 @@ func (p *Page) WaitDOMStable(d time.Duration, diff float64) error {
 			return err
 		}
 
-		xs := lcs.NewWords(domSnapshot.Strings)
-		ys := lcs.NewWords(currentDomSnapshot.Strings)
-		lcs := xs.YadLCS(p.ctx, ys)
+		common := longestCommonSubsequenceLength(p.ctx, domSnapshot.Strings, currentDomSnapshot.Strings)
 
-		df := 1 - float64(len(lcs))/float64(len(ys))
+		df := 1 - float64(common)/float64(len(currentDomSnapshot.Strings))
 		if df <= diff {
 			break
 		}
@@ -909,7 +906,7 @@ func (p *Page) WaitElementsMoreThan(selector string, num int) error {
 }
 
 // ObjectToJSON by object id.
-func (p *Page) ObjectToJSON(obj *proto.RuntimeRemoteObject) (gson.JSON, error) {
+func (p *Page) ObjectToJSON(obj *proto.RuntimeRemoteObject) (jsonvalue.Value, error) {
 	if obj.ObjectID == "" {
 		return obj.Value, nil
 	}
@@ -920,7 +917,7 @@ func (p *Page) ObjectToJSON(obj *proto.RuntimeRemoteObject) (gson.JSON, error) {
 		ReturnByValue:       true,
 	}.Call(p)
 	if err != nil {
-		return gson.New(nil), err
+		return jsonvalue.New(nil), err
 	}
 	return res.Result.Value, nil
 }
@@ -1027,7 +1024,7 @@ func (p *Page) Event() <-chan *Message {
 				select {
 				case <-p.ctx.Done():
 					return
-				case dst <- msg.(*Message): //nolint: forcetypeassert
+				case dst <- msg:
 				}
 			}
 		}
@@ -1037,7 +1034,7 @@ func (p *Page) Event() <-chan *Message {
 }
 
 func (p *Page) initEvents() {
-	p.event = goob.New(p.ctx)
+	p.event = observable.New[*Message](p.ctx)
 	event := p.browser.Context(p.ctx).Event()
 
 	go func() {

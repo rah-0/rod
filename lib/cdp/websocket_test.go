@@ -9,11 +9,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/go-rod/rod/lib/cdp"
-	"github.com/go-rod/rod/lib/launcher"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/got"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/internal/testutil"
+	"github.com/rah-0/rod/lib/cdp"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/launcher"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 func TestWebSocketLargePayload(t *testing.T) {
@@ -79,11 +79,15 @@ func TestWebSocketHeader(t *testing.T) {
 	g.Eq(err.Error(), "websocket bad handshake: 200 OK. ")
 }
 
-func newPage(ctx context.Context, g got.G) (*cdp.Client, string) {
+func newPage(ctx context.Context, g testutil.G) (*cdp.Client, string) {
 	l := launcher.New()
-	g.Cleanup(l.Kill)
+	u := l.MustLaunch()
+	g.Cleanup(func() {
+		l.Kill()
+		l.Cleanup()
+	})
 
-	client := cdp.New().Start(cdp.MustConnectWS(l.MustLaunch()))
+	client := cdp.New().Start(cdp.MustConnectWS(u))
 
 	go func() {
 		for range client.Event() {
@@ -99,7 +103,7 @@ func newPage(ctx context.Context, g got.G) (*cdp.Client, string) {
 	})
 	g.E(err)
 
-	targetID := gson.New(res).Get("targetId").String()
+	targetID := jsonvalue.New(res).Get("targetId").String()
 
 	res, err = client.Call(ctx, "", "Target.attachToTarget", map[string]interface{}{
 		"targetId": targetID,
@@ -107,7 +111,7 @@ func newPage(ctx context.Context, g got.G) (*cdp.Client, string) {
 	})
 	g.E(err)
 
-	sessionID := gson.New(res).Get("sessionId").String()
+	sessionID := jsonvalue.New(res).Get("sessionId").String()
 
 	return client, sessionID
 }
@@ -116,9 +120,11 @@ func TestDuplicatedConnectErr(t *testing.T) {
 	g := setup(t)
 
 	l := launcher.New()
-	g.Cleanup(l.Kill)
-
 	u := l.MustLaunch()
+	g.Cleanup(func() {
+		l.Kill()
+		l.Cleanup()
+	})
 
 	ws := &cdp.WebSocket{}
 	g.E(ws.Connect(g.Context(), u, nil))

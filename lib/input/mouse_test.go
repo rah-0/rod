@@ -3,13 +3,13 @@ package input_test
 import (
 	"testing"
 
-	"github.com/go-rod/rod/lib/input"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/ysmood/got"
+	"github.com/rah-0/rod/internal/testutil"
+	"github.com/rah-0/rod/lib/input"
+	"github.com/rah-0/rod/lib/proto"
 )
 
 func TestMouseEncode(t *testing.T) {
-	g := got.T(t)
+	g := testutil.T(t)
 
 	b, flag := input.EncodeMouseButton([]proto.InputMouseButton{proto.InputMouseButtonLeft})
 

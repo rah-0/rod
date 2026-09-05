@@ -9,13 +9,19 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/launcher"
-	"github.com/go-rod/rod/lib/utils"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/lib/launcher"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 func main() {
-	url := launcher.New().MustLaunch()
+	l := launcher.New()
+	url := l.MustLaunch()
+	defer func() {
+		l.Kill()
+		l.Cleanup()
+	}()
+
 	b := rod.New().ControlURL(url).MustConnect()
 	defer b.MustClose()
 

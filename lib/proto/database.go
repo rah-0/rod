@@ -3,7 +3,7 @@
 package proto
 
 import (
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/jsonvalue"
 )
 
 /*
@@ -85,7 +85,7 @@ type DatabaseExecuteSQLResult struct {
 	ColumnNames []string `json:"columnNames,omitempty"`
 
 	// Values (optional) ...
-	Values []gson.JSON `json:"values,omitempty"`
+	Values []jsonvalue.Value `json:"values,omitempty"`
 
 	// SQLError (optional) ...
 	SQLError *DatabaseError `json:"sqlError,omitempty"`

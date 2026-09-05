@@ -3,7 +3,7 @@
 package proto
 
 import (
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/jsonvalue"
 )
 
 /*
@@ -1102,7 +1102,7 @@ type DebuggerPaused struct {
 	Reason DebuggerPausedReason `json:"reason"`
 
 	// Data (optional) Object containing break-specific auxiliary properties.
-	Data map[string]gson.JSON `json:"data,omitempty"`
+	Data map[string]jsonvalue.Value `json:"data,omitempty"`
 
 	// HitBreakpoints (optional) Hit breakpoints IDs
 	HitBreakpoints []string `json:"hitBreakpoints,omitempty"`
@@ -1157,7 +1157,7 @@ type DebuggerScriptFailedToParse struct {
 	Hash string `json:"hash"`
 
 	// ExecutionContextAuxData (optional) Embedder-specific auxiliary data likely matching {isDefault: boolean, type: 'default'|'isolated'|'worker', frameId: string}
-	ExecutionContextAuxData map[string]gson.JSON `json:"executionContextAuxData,omitempty"`
+	ExecutionContextAuxData map[string]jsonvalue.Value `json:"executionContextAuxData,omitempty"`
 
 	// SourceMapURL (optional) URL of source map associated with script (if any).
 	SourceMapURL string `json:"sourceMapURL,omitempty"`
@@ -1217,7 +1217,7 @@ type DebuggerScriptParsed struct {
 	Hash string `json:"hash"`
 
 	// ExecutionContextAuxData (optional) Embedder-specific auxiliary data likely matching {isDefault: boolean, type: 'default'|'isolated'|'worker', frameId: string}
-	ExecutionContextAuxData map[string]gson.JSON `json:"executionContextAuxData,omitempty"`
+	ExecutionContextAuxData map[string]jsonvalue.Value `json:"executionContextAuxData,omitempty"`
 
 	// IsLiveEdit (experimental) (optional) True, if this script is generated as a result of the live edit operation.
 	IsLiveEdit bool `json:"isLiveEdit,omitempty"`

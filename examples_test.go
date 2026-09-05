@@ -6,30 +6,59 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"time"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/cdp"
-	"github.com/go-rod/rod/lib/input"
-	"github.com/go-rod/rod/lib/launcher"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/lib/cdp"
+	"github.com/rah-0/rod/lib/input"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/launcher"
+	"github.com/rah-0/rod/lib/proto"
+	"github.com/rah-0/rod/lib/utils"
 )
 
-// This example opens https://github.com/, searches for "git",
-// and then gets the header element which gives the description for Git.
+// This example opens a local page, searches for "git",
+// and then gets the result element which gives the description for Git.
 func Example_basic() {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprint(w, `<!doctype html>
+<html>
+<head><title>Repository search</title></head>
+<body>
+<input id="query-builder-test" name="query">
+<span id="result"></span>
+<script>
+const query = document.querySelector("#query-builder-test")
+document.addEventListener("keydown", event => {
+	if (event.key === "/") {
+		event.preventDefault()
+		query.focus()
+	}
+})
+query.addEventListener("keydown", event => {
+	if (event.key === "Enter" && query.value.toLowerCase() === "git") {
+		document.querySelector("#result").textContent = "Git is the most widely used version control system."
+		document.title = "Repository search results"
+	}
+})
+</script>
+</body>
+</html>`)
+	}))
+	defer server.Close()
+
 	// Launch a new browser with default options, and connect to it.
 	browser := rod.New().MustConnect()
 
-	// Even you forget to close, rod will close it after main process ends.
+	// Close the implicitly launched browser when this function returns.
 	defer browser.MustClose()
 
 	// Create a new page
-	page := browser.MustPage("https://github.com").MustWaitStable()
+	page := browser.MustPage(server.URL).MustWaitStable()
 
 	// Trigger the search input with hotkey "/"
 	page.Keyboard.MustType(input.Slash)
@@ -57,14 +86,14 @@ func Example_basic() {
 
 	// Output:
 	// Git is the most widely used version control system.
-	// Found 9 input elements
+	// Found 1 input elements
 	// 1 + 2 = 3
-	// Repository search results · GitHub
+	// Repository search results
 }
 
 // Shows how to disable headless mode and debug.
-// Rod provides a lot of debug options, you can set them with setter methods or use environment variables.
-// Doc for environment variables: https://pkg.go.dev/github.com/go-rod/rod/lib/defaults
+// Rod provides a lot of debug options, you can set them with setter methods or command-line defaults.
+// Doc for command-line defaults: https://pkg.go.dev/github.com/rah-0/rod/lib/defaults
 func Example_disable_headless_to_debug() {
 	// Headless runs the browser on foreground, you can also use flag "-rod=show"
 	// Devtools opens the tab in each new tab opened automatically
@@ -72,9 +101,11 @@ func Example_disable_headless_to_debug() {
 		Headless(false).
 		Devtools(true)
 
-	defer l.Cleanup()
-
 	url := l.MustLaunch()
+	defer func() {
+		l.Kill()
+		l.Cleanup()
+	}()
 
 	// Trace shows verbose debug information for each action executed
 	// SlowMotion is a debug related function that waits 2 seconds between
@@ -110,7 +141,10 @@ func Example_disable_headless_to_debug() {
 // [Page.Timeout] or [Page.WithCancel] is just a shortcut for Page.Context.
 // Of course, Browser or Element works the same way.
 func Example_context_and_timeout() {
-	page := rod.New().MustConnect().MustPage("https://github.com")
+	browser := rod.New().MustConnect()
+	defer browser.MustClose()
+
+	page := browser.MustPage("https://github.com")
 
 	page.
 		// Set a 5-second timeout for all chained methods
@@ -169,7 +203,10 @@ func Example_context_and_EachEvent() {
 // the no-prefix version of them.
 // About why we use "Must" as the prefix, it's similar to https://golang.org/pkg/regexp/#MustCompile
 func Example_error_handling() {
-	page := rod.New().MustConnect().MustPage("https://mdn.dev")
+	browser := rod.New().MustConnect()
+	defer browser.MustClose()
+
+	page := browser.MustPage("https://mdn.dev")
 
 	// We use Go's standard way to check error types, no magic.
 	check := func(err error) {
@@ -230,7 +267,10 @@ func Example_search() {
 }
 
 func Example_page_screenshot() {
-	page := rod.New().MustConnect().MustPage("https://github.com").MustWaitLoad()
+	browser := rod.New().MustConnect()
+	defer browser.MustClose()
+
+	page := browser.MustPage("https://github.com").MustWaitLoad()
 
 	// simple version
 	page.MustScreenshot("my.png")
@@ -238,7 +278,7 @@ func Example_page_screenshot() {
 	// customization version
 	img, _ := page.Screenshot(true, &proto.PageCaptureScreenshot{
 		Format:  proto.PageCaptureScreenshotFormatJpeg,
-		Quality: gson.Int(90),
+		Quality: jsonvalue.Int(90),
 		Clip: &proto.PageViewport{
 			X:      0,
 			Y:      0,
@@ -253,11 +293,12 @@ func Example_page_screenshot() {
 
 func Example_page_scroll_screenshot() {
 	browser := rod.New().MustConnect()
+	defer browser.MustClose()
 
 	// capture entire browser viewport, returning jpg with quality=90
 	img, err := browser.MustPage("https://desktop.github.com/").MustWaitStable().ScrollScreenshot(&rod.ScrollScreenshotOptions{
 		Format:  proto.PageCaptureScreenshotFormatJpeg,
-		Quality: gson.Int(90),
+		Quality: jsonvalue.Int(90),
 	})
 	if err != nil {
 		panic(err)
@@ -267,15 +308,18 @@ func Example_page_scroll_screenshot() {
 }
 
 func Example_page_pdf() {
-	page := rod.New().MustConnect().MustPage("https://github.com").MustWaitLoad()
+	browser := rod.New().MustConnect()
+	defer browser.MustClose()
+
+	page := browser.MustPage("https://github.com").MustWaitLoad()
 
 	// simple version
 	page.MustPDF("my.pdf")
 
 	// customized version
 	pdf, _ := page.PDF(&proto.PagePrintToPDF{
-		PaperWidth:  gson.Num(8.5),
-		PaperHeight: gson.Num(11),
+		PaperWidth:  jsonvalue.Num(8.5),
+		PaperHeight: jsonvalue.Num(11),
 		PageRanges:  "1-3",
 	})
 	_ = utils.OutputFile("my.pdf", pdf)
@@ -288,6 +332,7 @@ func Example_race_selectors() {
 	const password = ""
 
 	browser := rod.New().MustConnect()
+	defer browser.MustClose()
 
 	page := browser.MustPage("https://leetcode.com/accounts/login/")
 
@@ -387,10 +432,14 @@ func Example_customize_retry_strategy() {
 // Usually you use launcher lib to set the browser's command line flags (switches).
 // Doc for flags: https://peter.sh/experiments/chromium-command-line-switches
 func Example_customize_browser_launch() {
-	url := launcher.New().
-		Proxy("127.0.0.1:8080").     // set flag "--proxy-server=127.0.0.1:8080"
-		Delete("use-mock-keychain"). // delete flag "--use-mock-keychain"
-		MustLaunch()
+	l := launcher.New().
+		Proxy("127.0.0.1:8080").    // set flag "--proxy-server=127.0.0.1:8080"
+		Delete("use-mock-keychain") // delete flag "--use-mock-keychain"
+	url := l.MustLaunch()
+	defer func() {
+		l.Kill()
+		l.Cleanup()
+	}()
 
 	browser := rod.New().ControlURL(url).MustConnect()
 	defer browser.MustClose()
@@ -408,9 +457,12 @@ func Example_customize_browser_launch() {
 }
 
 // When rod doesn't have a feature that you need. You can easily call the cdp to achieve it.
-// List of cdp API: https://github.com/go-rod/rod/tree/main/lib/proto
+// List of cdp API: https://github.com/rah-0/rod/tree/main/lib/proto
 func Example_direct_cdp() {
-	page := rod.New().MustConnect().MustPage()
+	browser := rod.New().MustConnect()
+	defer browser.MustClose()
+
+	page := browser.MustPage()
 
 	// Rod doesn't have a method to enable AD blocking,
 	// but you can call cdp interface directly to achieve it.
@@ -485,6 +537,8 @@ func Example_handle_events() {
 
 func Example_download_file() {
 	browser := rod.New().MustConnect()
+	defer browser.MustClose()
+
 	page := browser.MustPage("https://file-examples.com/index.php/sample-documents-download/sample-pdf-download/")
 
 	wait := browser.MustWaitDownload()
@@ -502,6 +556,16 @@ func Example_download_file() {
 //
 // The --req-> and --res-> are the parts that can be modified.
 func Example_hijack_requests() {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/app.js" {
+			w.Header().Set("Content-Type", "application/javascript")
+			_, _ = fmt.Fprint(w, `document.title = "before"`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `<script src="/app.js"></script>`)
+	}))
+	defer server.Close()
+
 	browser := rod.New().MustConnect()
 	defer browser.MustClose()
 
@@ -527,7 +591,7 @@ func Example_hijack_requests() {
 
 	go router.Run()
 
-	browser.MustPage("https://go-rod.github.io").MustWait(`() => document.title === 'hi'`)
+	browser.MustPage(server.URL).MustWait(`() => document.title === 'hi'`)
 
 	fmt.Println("done")
 
@@ -536,7 +600,10 @@ func Example_hijack_requests() {
 
 // Shows how to share a remote object reference between two Eval.
 func Example_eval_reuse_remote_object() {
-	page := rod.New().MustConnect().MustPage()
+	browser := rod.New().MustConnect()
+	defer browser.MustClose()
+
+	page := browser.MustPage()
 
 	fn := page.MustEvaluate(rod.Eval(`() => Math.random`).ByObject())
 
@@ -617,6 +684,10 @@ func ExamplePage_pool() {
 func ExampleBrowser_pool() {
 	// Create a new browser pool with a limit of 3
 	pool := rod.NewBrowserPool(3)
+	// Close every pooled browser when the example returns.
+	defer pool.Cleanup(func(browser *rod.Browser) {
+		browser.MustClose()
+	})
 
 	// Create a function that returns a new browser instance
 	create := func() *rod.Browser {
@@ -646,26 +717,28 @@ func ExampleBrowser_pool() {
 
 	// Wait for all the goroutines to finish
 	wg.Wait()
-
-	// Cleanup the pool by closing all the browser instances
-	pool.Cleanup(func(p *rod.Browser) {
-		p.MustClose()
-	})
 }
 
 func Example_load_extension() {
 	extPath, _ := filepath.Abs("fixtures/chrome-extension")
 
-	u := launcher.New().
+	l := launcher.New().
 		// Must use abs path for an extension
 		Set("load-extension", extPath).
 		// Headless mode doesn't support extension yet.
 		// Reason: https://bugs.chromium.org/p/chromium/issues/detail?id=706008#c5
-		// You can use XVFB to get rid of it: https://github.com/go-rod/rod/blob/main/lib/examples/launch-managed/main.go
-		Headless(false).
-		MustLaunch()
+		// On Linux, a trusted local launcher can use Launcher.XVFB for a virtual display.
+		Headless(false)
+	u := l.MustLaunch()
+	defer func() {
+		l.Kill()
+		l.Cleanup()
+	}()
 
-	page := rod.New().ControlURL(u).MustConnect().MustPage("http://mdn.dev")
+	browser := rod.New().ControlURL(u).MustConnect()
+	defer browser.MustClose()
+
+	page := browser.MustPage("http://mdn.dev")
 
 	page.MustWait(`() => document.title === 'test-extension'`)
 
@@ -676,6 +749,13 @@ func Example_load_extension() {
 }
 
 func Example_log_cdp_traffic() {
+	l := launcher.New()
+	u := l.MustLaunch()
+	defer func() {
+		l.Kill()
+		l.Cleanup()
+	}()
+
 	cdp := cdp.New().
 		// Here we can customize how to log the requests, responses, and events transferred between Rod and the browser.
 		Logger(utils.Log(func(args ...interface{}) {
@@ -684,7 +764,10 @@ func Example_log_cdp_traffic() {
 				fmt.Printf("id: %d", v.ID)
 			}
 		})).
-		Start(cdp.MustConnectWS(launcher.New().MustLaunch()))
+		Start(cdp.MustConnectWS(u))
 
-	rod.New().Client(cdp).MustConnect().MustPage("http://mdn.dev")
+	browser := rod.New().Client(cdp).MustConnect()
+	defer browser.MustClose()
+
+	browser.MustPage("http://mdn.dev")
 }

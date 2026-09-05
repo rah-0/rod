@@ -3,7 +3,7 @@
 package proto
 
 import (
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/jsonvalue"
 )
 
 /*
@@ -345,10 +345,10 @@ type DOMShapeOutsideInfo struct {
 	Bounds DOMQuad `json:"bounds"`
 
 	// Shape coordinate details
-	Shape []gson.JSON `json:"shape"`
+	Shape []jsonvalue.Value `json:"shape"`
 
 	// MarginShape Margin shape bounds
-	MarginShape []gson.JSON `json:"marginShape"`
+	MarginShape []jsonvalue.Value `json:"marginShape"`
 }
 
 // DOMRect Rectangle.

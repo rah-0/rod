@@ -7,10 +7,12 @@ import (
 	"log"
 	"strings"
 
-	"github.com/go-rod/rod"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/lib/defaults"
 )
 
 func main() {
+	defaults.Load()
 	flag.Parse()
 
 	// get the commandline arguments

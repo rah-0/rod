@@ -6,8 +6,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/go-rod/rod"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/lib/jsonvalue"
 )
 
 // An example to handle stripe 3DS callback.
@@ -37,7 +37,7 @@ func getRedirectURL() string {
 	).Get("next_action.redirect_to_url.url").Str()
 }
 
-func post(path, body string) gson.JSON {
+func post(path, body string) jsonvalue.Value {
 	req, _ := http.NewRequest(http.MethodPost, "https://api.stripe.com/v1"+path, bytes.NewBufferString(body))
 	req.Header.Add("Authorization", "Bearer sk_test_4eC39HqLyjWDarjtT1zdp7dc") // cSpell:ignore Darjt
 	res, _ := http.DefaultClient.Do(req)
@@ -45,5 +45,5 @@ func post(path, body string) gson.JSON {
 		defer func() { _ = res.Body.Close() }()
 	}
 	data, _ := io.ReadAll(res.Body)
-	return gson.New(data)
+	return jsonvalue.New(data)
 }

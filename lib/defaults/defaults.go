@@ -1,5 +1,5 @@
-// Package defaults of commonly used options parsed from environment.
-// Check ResetWith for details.
+// Package defaults provides commonly used Rod options.
+// Check Load and ResetWith for command-line configuration.
 package defaults
 
 import (
@@ -7,11 +7,11 @@ import (
 	"log"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/go-rod/rod/lib/utils"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 // Trace is the default of rod.Browser.Trace .
@@ -41,7 +41,7 @@ var Dir string
 
 // Port is the default of launcher.Launcher.RemoteDebuggingPort .
 // Option name is "port".
-var Port string
+var Port = "0"
 
 // Bin is the default of launcher.Launcher.Bin .
 // Option name is "bin".
@@ -51,20 +51,31 @@ var Bin string
 // Option name is "proxy".
 var Proxy string
 
-// LockPort is the default of launcher.Browser.LockPort
-// Option name is "lock".
-var LockPort int
-
 // URL is the default websocket url for remote control a browser.
 // Option name is "url".
 var URL string
 
 // CDP is the default of cdp.Client.Logger
 // Option name is "cdp".
-var CDP utils.Logger
+var CDP = utils.LoggerQuiet
 
-// Reset all flags to their init values.
+var loadOnce sync.Once
+
+// Load applies the optional -rod command-line configuration once.
+// Applications that call flag.Parse or override exported defaults must call Load first.
+// Test binaries can do this in TestMain before calling m.Run.
+func Load() {
+	loadOnce.Do(loadCLI)
+}
+
+// Reset restores all options to their base values.
 func Reset() {
+	// An explicit reset must not be undone by a later constructor calling Load.
+	loadOnce.Do(func() {})
+	resetValues()
+}
+
+func resetValues() {
 	Trace = false
 	Slow = 0
 	Monitor = ""
@@ -74,7 +85,6 @@ func Reset() {
 	Port = "0"
 	Bin = ""
 	Proxy = ""
-	LockPort = 2978
 	URL = ""
 	CDP = utils.LoggerQuiet
 }
@@ -93,7 +103,7 @@ var envParsers = map[string]func(string){
 		}
 	},
 	"monitor": func(v string) {
-		Monitor = ":0"
+		Monitor = "127.0.0.1:0"
 		if v != "" {
 			Monitor = v
 		}
@@ -116,12 +126,6 @@ var envParsers = map[string]func(string){
 	"proxy": func(v string) {
 		Proxy = v
 	},
-	"lock": func(v string) {
-		i, err := strconv.ParseInt(v, 10, 32)
-		if err == nil {
-			LockPort = int(i)
-		}
-	},
 	"url": func(v string) {
 		URL = v
 	},
@@ -130,14 +134,9 @@ var envParsers = map[string]func(string){
 	},
 }
 
-// Parse the flags.
-func init() {
-	ResetWith("")
-}
-
 // ResetWith options and "-rod" command line flag.
-// It will be called in an init() , so you don't have to call it manually.
-// It will try to load the cli flag "-rod" and then the options, the later override the former.
+// It resets the defaults, loads the command-line flag, and then applies options.
+// Explicit options override values from the command line.
 // If you want to disable the global cli argument flag, set env DISABLE_ROD_FLAG.
 // Values are separated by commas, key and value are separated by "=". For example:
 //
@@ -146,7 +145,11 @@ func init() {
 //	go run main.go --rod="slow=1s,dir=path/has /space,monitor=:9223"
 func ResetWith(options string) {
 	Reset()
+	loadCLI()
+	parse(options)
+}
 
+func loadCLI() {
 	if _, has := os.LookupEnv("DISABLE_ROD_FLAG"); !has {
 		if !flag.Parsed() && flag.Lookup("rod") == nil {
 			flag.String("rod", "", `Set the default value of options used by rod.`)
@@ -154,8 +157,6 @@ func ResetWith(options string) {
 
 		parseFlag(os.Args)
 	}
-
-	parse(options)
 }
 
 func parseFlag(args []string) {

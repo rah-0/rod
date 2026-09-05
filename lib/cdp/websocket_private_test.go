@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ysmood/got"
+	"github.com/rah-0/rod/internal/testutil"
 )
 
-var setup = got.Setup(nil)
+var setup = testutil.Setup(nil)
 
 func TestWebSocketErr(t *testing.T) {
 	g := setup(t)
@@ -47,9 +47,76 @@ func TestWebSocketErr(t *testing.T) {
 
 	mc.errOnCount = 1
 	g.Err(ws.handshake(g.Context(), u, nil))
+}
 
-	tls := &tlsDialer{}
-	g.Err(tls.DialContext(context.Background(), "", ""))
+func TestWebSocketTLSCancellation(t *testing.T) {
+	for _, phase := range []string{"before_dial", "during_handshake"} {
+		t.Run(phase, func(t *testing.T) {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			clientHello := make(chan error, 1)
+			serverDone := make(chan struct{})
+			connectDone := make(chan struct{})
+			t.Cleanup(func() {
+				_ = listener.Close()
+				<-serverDone
+				<-connectDone
+			})
+
+			go func() {
+				defer close(serverDone)
+				conn, err := listener.Accept()
+				if err != nil {
+					clientHello <- err
+					return
+				}
+				defer func() { _ = conn.Close() }()
+				stop := context.AfterFunc(t.Context(), func() { _ = conn.Close() })
+				defer stop()
+
+				var firstByte [1]byte
+				_, err = conn.Read(firstByte[:])
+				clientHello <- err
+				// Keep the TLS handshake unanswered until test cleanup.
+				<-t.Context().Done()
+			}()
+
+			if phase == "before_dial" {
+				cancel()
+			}
+			result := make(chan error, 1)
+			go func() {
+				defer close(connectDone)
+				result <- new(WebSocket).Connect(ctx, "wss://"+listener.Addr().String(), nil)
+			}()
+
+			if phase == "during_handshake" {
+				select {
+				case err := <-clientHello:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("TLS client did not start its handshake")
+				}
+				cancel()
+			}
+
+			select {
+			case err := <-result:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("Connect error = %v, want context.Canceled", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("TLS connection ignored cancellation")
+			}
+		})
+	}
 }
 
 type MockConn struct {

@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-rod/rod/lib/assets"
-	"github.com/go-rod/rod/lib/js"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/go-rod/rod/lib/utils"
+	"github.com/rah-0/rod/lib/assets"
+	"github.com/rah-0/rod/lib/js"
+	"github.com/rah-0/rod/lib/proto"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 // TraceType for logger.
@@ -46,6 +46,8 @@ const (
 
 // ServeMonitor starts the monitor server.
 // The reason why not to use "chrome://inspect/#devices" is one target cannot be driven by multiple controllers.
+// The monitor has no authentication. Keep host on loopback or protect it with
+// a trusted authenticated proxy.
 func (b *Browser) ServeMonitor(host string) string {
 	u, mux, closeSvr := serve(host)
 	go func() {

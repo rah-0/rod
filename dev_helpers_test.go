@@ -4,13 +4,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/defaults"
-	"github.com/go-rod/rod/lib/js"
-	"github.com/go-rod/rod/lib/launcher"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/lib/defaults"
+	"github.com/rah-0/rod/lib/js"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/launcher"
+	"github.com/rah-0/rod/lib/proto"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 func TestMonitor(t *testing.T) {
@@ -24,7 +24,16 @@ func TestMonitor(t *testing.T) {
 	defer cancel()
 	host := b.Context(g.Context()).ServeMonitor("")
 
+	const title = `<img src=x onerror="window.monitorXSS = true">`
+	p.MustEval(`title => document.title = title`, title)
+
 	page := g.page.MustNavigate(host)
+	page.MustWait(`title => {
+		const link = document.querySelector('#targets a')
+		return link && link.textContent === title
+	}`, title)
+	g.False(page.MustHas("#targets img"))
+	g.False(page.MustEval(`() => window.monitorXSS === true`).Bool())
 	g.Has(page.MustElement("#targets a").MustParent().MustHTML(), string(p.TargetID))
 
 	page.MustNavigate(host + "/page/" + string(p.TargetID))
@@ -35,7 +44,7 @@ func TestMonitor(t *testing.T) {
 
 	res := g.Req("", host+"/api/page/test")
 	g.Eq(400, res.StatusCode)
-	g.Eq(-32602, gson.New(res.Body).Get("code").Int())
+	g.Eq(-32602, jsonvalue.New(res.Body).Get("code").Int())
 }
 
 func TestMonitorErr(t *testing.T) {
@@ -43,7 +52,10 @@ func TestMonitorErr(t *testing.T) {
 
 	l := launcher.New()
 	u := l.MustLaunch()
-	defer l.Kill()
+	defer func() {
+		l.Kill()
+		l.Cleanup()
+	}()
 
 	g.Panic(func() {
 		rod.New().Monitor("abc").ControlURL(u).MustConnect()

@@ -4,7 +4,6 @@ package launcher
 import (
 	"context"
 	"crypto"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,10 +13,9 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/go-rod/rod/lib/defaults"
-	"github.com/go-rod/rod/lib/launcher/flags"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/leakless"
+	"github.com/rah-0/rod/lib/defaults"
+	"github.com/rah-0/rod/lib/launcher/flags"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 // DefaultUserDataDirPrefix ...
@@ -32,32 +30,36 @@ type Launcher struct {
 
 	logger io.Writer
 
-	browser *Browser
-	parser  *URLParser
-	pid     int
-	exit    chan struct{}
+	parser *URLParser
+	pid    int
+	exit   chan struct{}
 
-	managed    bool
-	serviceURL string
+	profileRoot      *os.Root
+	ownedUserDataDir string
+
+	managed      bool
+	serviceURL   string
+	managerToken string
 
 	isLaunched int32 // zero means not launched
 }
 
 // New returns the default arguments to start browser.
 // Headless will be enabled by default.
-// Leakless will be enabled by default.
 // UserDataDir will use OS tmp dir by default, this folder will usually be cleaned up by the OS after reboot.
-// It will auto download the browser binary according to the current platform,
-// check [Launcher.Bin] and [Launcher.Revision] for more info.
+// If [Launcher.Bin] is empty, it searches for an installed Chrome, Chromium, or Edge browser.
 func New() *Launcher {
+	defaults.Load()
+
 	dir := defaults.Dir
+	ownedUserDataDir := ""
 	if dir == "" {
 		dir = filepath.Join(DefaultUserDataDirPrefix, utils.RandString(8))
+		ownedUserDataDir = dir
 	}
 
 	defaultFlags := map[flags.Flag][]string{
-		flags.Bin:      {defaults.Bin},
-		flags.Leakless: nil,
+		flags.Bin: {defaults.Bin},
 
 		flags.UserDataDir: {dir},
 
@@ -111,13 +113,13 @@ func New() *Launcher {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Launcher{
-		ctx:       ctx,
-		ctxCancel: cancel,
-		Flags:     defaultFlags,
-		exit:      make(chan struct{}),
-		browser:   NewBrowser(),
-		parser:    NewURLParser(),
-		logger:    io.Discard,
+		ctx:              ctx,
+		ctxCancel:        cancel,
+		Flags:            defaultFlags,
+		exit:             make(chan struct{}),
+		parser:           NewURLParser(),
+		logger:           io.Discard,
+		ownedUserDataDir: ownedUserDataDir,
 	}
 }
 
@@ -136,10 +138,9 @@ func NewUserMode() *Launcher {
 			"no-startup-window":       nil,
 			flags.Bin:                 {bin},
 		},
-		browser: NewBrowser(),
-		exit:    make(chan struct{}),
-		parser:  NewURLParser(),
-		logger:  io.Discard,
+		exit:   make(chan struct{}),
+		parser: NewURLParser(),
+		logger: io.Discard,
 	}
 }
 
@@ -210,15 +211,9 @@ func (l *Launcher) Delete(name flags.Flag) *Launcher {
 	return l
 }
 
-// Bin of the browser binary path to launch, if the path is not empty the auto download will be disabled.
+// Bin sets the browser executable path. If empty, Launcher searches for an installed browser.
 func (l *Launcher) Bin(path string) *Launcher {
 	return l.Set(flags.Bin, path)
-}
-
-// Revision of the browser to auto download.
-func (l *Launcher) Revision(rev int) *Launcher {
-	l.browser.Revision = rev
-	return l
 }
 
 // Headless switch. Whether to run browser in headless mode. A mode without visible UI.
@@ -249,7 +244,8 @@ func (l *Launcher) NoSandbox(enable bool) *Launcher {
 	return l.Delete(flags.NoSandbox)
 }
 
-// XVFB enables to run browser in by XVFB. Useful when you want to run headful mode on linux.
+// XVFB enables a virtual display for a trusted local browser launch on Linux.
+// [Manager] rejects remote XVFB configuration.
 func (l *Launcher) XVFB(args ...string) *Launcher {
 	return l.Set(flags.XVFB, args...)
 }
@@ -265,15 +261,6 @@ func (l *Launcher) Preferences(pref string) *Launcher {
 // It will set chromium user preferences to enable the always_open_pdf_externally option.
 func (l *Launcher) AlwaysOpenPDFExternally() *Launcher {
 	return l.Set(flags.Preferences, `{"plugins":{"always_open_pdf_externally": true}}`)
-}
-
-// Leakless switch. If enabled, the browser will be force killed after the Go process exits.
-// The doc of leakless: https://github.com/ysmood/leakless.
-func (l *Launcher) Leakless(enable bool) *Launcher {
-	if enable {
-		return l.Set(flags.Leakless)
-	}
-	return l.Delete(flags.Leakless)
 }
 
 // Devtools switch to auto open devtools for each tab.
@@ -326,8 +313,8 @@ func (l *Launcher) ProfileDir(dir string) *Launcher {
 }
 
 // RemoteDebuggingPort to launch the browser. Zero for a random port. Zero is the default value.
-// If it's not zero and the Launcher.Leakless is disabled, the launcher will try to reconnect to it first,
-// if the reconnection fails it will launch a new browser.
+// If it is not zero, the launcher tries to reconnect to that port first. If
+// reconnection fails, it launches a new browser.
 func (l *Launcher) RemoteDebuggingPort(port int) *Launcher {
 	return l.Set(flags.RemoteDebuggingPort, fmt.Sprintf("%d", port))
 }
@@ -347,12 +334,13 @@ func (l *Launcher) WindowPosition(x, y int) *Launcher {
 	return l.Set(flags.WindowPosition, fmt.Sprintf("%d,%d", x, y))
 }
 
-// WorkingDir to launch the browser process.
+// WorkingDir to launch the browser process. [Manager] keeps it server-owned.
 func (l *Launcher) WorkingDir(path string) *Launcher {
 	return l.Set(flags.WorkingDir, path)
 }
 
-// Env to launch the browser process. The default value is [os.Environ]().
+// Env to launch the browser process. [Manager] keeps it server-owned.
+// The default value is [os.Environ]().
 // Usually you use it to set the timezone env. Such as:
 //
 //	Env(append(os.Environ(), "TZ=Asia/Tokyo")...)
@@ -431,22 +419,15 @@ func (l *Launcher) Launch() (string, error) {
 
 	l.setupUserPreferences()
 
-	var ll *leakless.Launcher
-	var cmd *exec.Cmd
-
 	args := l.FormatArgs()
-
-	if l.Has(flags.Leakless) && leakless.Support() {
-		ll = leakless.New()
-		cmd = ll.Command(bin, args...)
-	} else {
-		port := l.Get(flags.RemoteDebuggingPort)
+	port := l.Get(flags.RemoteDebuggingPort)
+	if port != "" && port != "0" {
 		u, err := ResolveURL(port)
 		if err == nil {
 			return u, nil
 		}
-		cmd = exec.Command(bin, args...)
 	}
+	cmd := exec.Command(bin, args...)
 
 	l.setupCmd(cmd)
 
@@ -455,14 +436,7 @@ func (l *Launcher) Launch() (string, error) {
 		return "", err
 	}
 
-	if ll == nil {
-		l.pid = cmd.Process.Pid
-	} else {
-		l.pid = <-ll.Pid()
-		if ll.Err() != "" {
-			return "", errors.New(ll.Err())
-		}
-	}
+	l.pid = cmd.Process.Pid
 
 	go func() {
 		_ = cmd.Wait()
@@ -497,6 +471,11 @@ func (l *Launcher) setupUserPreferences() {
 	if profile == "" {
 		profile = "Default"
 	}
+	if l.profileRoot != nil {
+		utils.E(l.profileRoot.MkdirAll(profile, 0o700))
+		utils.E(l.profileRoot.WriteFile(filepath.Join(profile, "Preferences"), []byte(pref), 0o600))
+		return
+	}
 
 	path := filepath.Join(userDir, profile, "Preferences")
 
@@ -516,12 +495,19 @@ func (l *Launcher) setupCmd(cmd *exec.Cmd) {
 }
 
 func (l *Launcher) getBin() (string, error) {
-	bin := l.Get(flags.Bin)
-	if bin == "" {
-		l.browser.Context = l.ctx
-		return l.browser.Get()
+	return resolveBin(l.Get(flags.Bin), LookPath)
+}
+
+func resolveBin(configured string, search func() (string, bool)) (string, error) {
+	if configured != "" {
+		return configured, nil
 	}
-	return bin, nil
+
+	if bin, found := search(); found {
+		return bin, nil
+	}
+
+	return "", ErrBrowserNotFound
 }
 
 func (l *Launcher) getURL() (u string, err error) {
@@ -542,11 +528,15 @@ func (l *Launcher) PID() int {
 
 // Kill the browser process.
 func (l *Launcher) Kill() {
+	if l.PID() == 0 || l.exited() { // avoid killing the current or a reused process id
+		return
+	}
+
 	// TODO: If kill too fast, the browser's children processes may not be ready.
 	// Browser don't have an API to tell if the children processes are ready.
 	utils.Sleep(1)
 
-	if l.PID() == 0 { // avoid killing the current process
+	if l.exited() {
 		return
 	}
 
@@ -557,10 +547,24 @@ func (l *Launcher) Kill() {
 	}
 }
 
-// Cleanup wait until the Browser exits and remove [flags.UserDataDir].
+func (l *Launcher) exited() bool {
+	select {
+	case <-l.exit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Cleanup waits until the browser exits and removes only the temporary user
+// data directory generated by New. An explicitly configured directory remains
+// owned by the caller.
 func (l *Launcher) Cleanup() {
 	<-l.exit
 
 	dir := l.Get(flags.UserDataDir)
+	if dir == "" || dir != l.ownedUserDataDir {
+		return
+	}
 	_ = os.RemoveAll(dir)
 }

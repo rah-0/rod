@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/go-rod/rod/lib/utils"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 func main() {
@@ -24,7 +24,6 @@ func main() {
 
 		import (
 			"reflect"
-			"github.com/ysmood/gson"
 		)
 
 		// Version of cdp protocol
@@ -38,33 +37,24 @@ func main() {
 		package proto_test
 
 		import (
-			"github.com/go-rod/rod/lib/proto"
+			"github.com/rah-0/rod/lib/proto"
 		)
 	`
 
 	for _, domain := range parse(schema) {
-		code := comment + `
-
-			package proto
-
-			import (
-				"github.com/ysmood/gson"
-			)
-		`
-
-		code += fmt.Sprintf("/*\n\n%s\n\n", domain.name)
+		body := fmt.Sprintf("/*\n\n%s\n\n", domain.name)
 
 		if domain.description != "" {
-			code += domain.description + "\n\n"
+			body += domain.description + "\n\n"
 		}
-		code += "*/\n\n"
+		body += "*/\n\n"
 
 		for _, definition := range domain.definitions {
 			if definition.skip {
 				continue
 			}
 
-			code += definition.format()
+			body += definition.format()
 			testsCode += definition.formatTests()
 
 			if definition.originName != "" {
@@ -75,6 +65,12 @@ func main() {
 				)
 			}
 		}
+
+		code := comment + "\n\npackage proto\n"
+		if strings.Contains(body, "jsonvalue.") {
+			code += "\nimport \"github.com/rah-0/rod/lib/jsonvalue\"\n"
+		}
+		code += "\n" + body
 
 		utils.E(utils.OutputFile(
 			filepath.FromSlash(
@@ -89,13 +85,7 @@ func main() {
 	utils.E(utils.OutputFile(filepath.FromSlash("lib/proto/definitions.go"), init))
 	utils.E(utils.OutputFile(filepath.FromSlash("lib/proto/definitions_test.go"), testsCode))
 
-	path := "./lib/proto"
-	utils.Exec("gofumpt -w", path)
-	utils.Exec("go run golang.org/x/tools/cmd/goimports@latest -w", path)
-	utils.Exec(
-		"go run github.com/ysmood/golangci-lint@latest -- run --fix",
-		path,
-	)
+	utils.Exec("go fmt ./lib/proto")
 }
 
 func (d *definition) comment() string {

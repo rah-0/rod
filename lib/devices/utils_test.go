@@ -3,12 +3,12 @@ package devices_test
 import (
 	"testing"
 
-	"github.com/go-rod/rod/lib/devices"
-	"github.com/ysmood/got"
+	"github.com/rah-0/rod/internal/testutil"
+	"github.com/rah-0/rod/lib/devices"
 )
 
 func TestErr(t *testing.T) {
-	as := got.New(t)
+	as := testutil.New(t)
 
 	v := devices.IPad.MetricsEmulation()
 	touch := devices.IPad.TouchEmulation()

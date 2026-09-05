@@ -1,35 +1,29 @@
 package launcher
 
 import (
-	"fmt"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/go-rod/rod/lib/cdp"
-	"github.com/go-rod/rod/lib/defaults"
-	"github.com/go-rod/rod/lib/launcher/flags"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/got"
+	"github.com/rah-0/rod/internal/testutil"
+	"github.com/rah-0/rod/lib/cdp"
+	"github.com/rah-0/rod/lib/defaults"
+	"github.com/rah-0/rod/lib/launcher/flags"
+	"github.com/rah-0/rod/lib/utils"
 )
 
-func HostTest(host string) Host {
-	return func(revision int) string {
-		return fmt.Sprintf(
-			"%s/chromium-browser-snapshots/%s/%d/%s",
-			host,
-			hostConf.urlPrefix,
-			revision,
-			hostConf.zipName,
-		)
-	}
-}
+var setup = testutil.Setup(nil)
 
-var setup = got.Setup(nil)
+const managerTestToken = "test-manager-token-0123456789abcdef0123456789abcdef"
 
 func TestToHTTP(t *testing.T) {
 	g := setup(t)
@@ -54,6 +48,7 @@ func TestToWS(t *testing.T) {
 func TestLaunchOptions(t *testing.T) {
 	g := setup(t)
 
+	defaults.Load()
 	defaults.Show = true
 	defaults.Devtools = true
 	inContainer = true
@@ -91,21 +86,59 @@ func TestGetURLErr(t *testing.T) {
 	g.Eq("[launcher] Failed to get the debug url: err", err.Error())
 }
 
+func TestCleanupPreservesConfiguredUserDataDir(t *testing.T) {
+	dir := t.TempDir()
+	sentinel := filepath.Join(dir, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	defaults.Load()
+	previousDir := defaults.Dir
+	defaults.Dir = dir
+	t.Cleanup(func() { defaults.Dir = previousDir })
+
+	l := New()
+	close(l.exit)
+	l.Cleanup()
+
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("explicit user data directory was removed: %v", err)
+	}
+}
+
 func TestManaged(t *testing.T) {
 	g := setup(t)
 
 	ctx := g.Timeout(5 * time.Second)
 
-	s := got.New(g).Serve()
-	rl := NewManager()
+	s := testutil.New(g).Serve()
+	rl := NewManager(managerTestToken)
+	rl.userDataRoot = t.TempDir()
+	profilePath := make(chan string, 1)
+	rl.BeforeLaunch = func(l *Launcher, _ http.ResponseWriter, _ *http.Request) {
+		profilePath <- l.Get(flags.UserDataDir)
+	}
 	s.Mux.Handle("/", rl)
 
-	l := MustNewManaged(s.URL()).KeepUserDataDir().Delete(flags.KeepUserDataDir)
+	l := MustNewManaged(s.URL(), managerTestToken)
+	if l.Has("disable-http2") {
+		t.Fatal("managed launcher retained the obsolete Docker HTTP/2 workaround")
+	}
 	c := l.MustClient()
 	g.E(c.Call(ctx, "", "Browser.getVersion", nil))
+	var dir string
+	select {
+	case dir = <-profilePath:
+	case <-ctx.Done():
+		t.Fatal("manager did not report its browser profile")
+	}
+	if rel, err := filepath.Rel(rl.userDataRoot, dir); err != nil || rel == "." || !filepath.IsLocal(rel) {
+		t.Fatalf("managed profile %q is outside %q", dir, rl.userDataRoot)
+	}
+	g.E(os.Stat(dir))
 	utils.Sleep(1)
 	_, _ = c.Call(ctx, "", "Browser.crash", nil)
-	dir := l.Get(flags.UserDataDir)
 
 	for ctx.Err() == nil {
 		utils.Sleep(0.1)
@@ -116,9 +149,9 @@ func TestManaged(t *testing.T) {
 	}
 	g.Err(os.Stat(dir))
 
-	u, h := MustNewManaged(s.URL()).Bin("go").ClientHeader()
+	u, h := MustNewManaged(s.URL(), managerTestToken).Bin("go").ClientHeader()
 	_, err := cdp.StartWithURL(ctx, u, h)
-	g.Eq(err.(*cdp.BadHandshakeError).Body, "[rod-manager] not allowed rod-bin path: go (use --allow-all to disable the protection)")
+	g.Eq(err.(*cdp.BadHandshakeError).Body, "[rod-manager] remote option is not allowed: rod-bin\n")
 }
 
 func TestLaunchErrs(t *testing.T) {
@@ -127,15 +160,396 @@ func TestLaunchErrs(t *testing.T) {
 	l := New().Bin("echo")
 	_, err := l.Launch()
 	g.Err(err)
+}
 
-	s := g.Serve()
-	s.Route("/", "", nil)
-	l = New().Bin("")
-	l.browser.Logger = utils.LoggerQuiet
-	l.browser.RootDir = filepath.Join("tmp", "browser-from-mirror", g.RandStr(16))
-	l.browser.Hosts = []Host{HostTest(s.URL())}
-	_, err = l.Launch()
-	g.Err(err)
+func TestResolveBin(t *testing.T) {
+	g := setup(t)
+
+	searched := false
+	bin, err := resolveBin("/configured/browser", func() (string, bool) {
+		searched = true
+		return "", false
+	})
+	g.E(err)
+	g.Eq("/configured/browser", bin)
+	g.False(searched)
+
+	bin, err = resolveBin("", func() (string, bool) {
+		return "/local/browser", true
+	})
+	g.E(err)
+	g.Eq("/local/browser", bin)
+
+	bin, err = resolveBin("", func() (string, bool) {
+		return "", false
+	})
+	g.Eq("", bin)
+	g.True(errors.Is(err, ErrBrowserNotFound))
+}
+
+func TestManagerBrowserBin(t *testing.T) {
+	g := setup(t)
+
+	defaults.Load()
+	allowed := defaults.Bin
+	m := NewManager(managerTestToken)
+	m.validateLaunchOptions(New().Bin(allowed), httptest.NewRecorder())
+
+	w := httptest.NewRecorder()
+	g.Panic(func() {
+		m.validateLaunchOptions(New().Bin(allowed+"-not-allowed"), w)
+	})
+	g.Has(w.Body.String(), "remote option is not allowed: rod-bin")
+}
+
+func TestManagerBrowserEnvironment(t *testing.T) {
+	t.Setenv(ManagerTokenEnv, "do-not-inherit")
+	t.Setenv("ROD_MANAGER_TEST_KEEP", "keep")
+
+	l := New()
+	l.Env("ROD_MANAGER_TEST_KEEP=override", ManagerTokenEnv+"=override")
+	env := managerBrowserEnvironment(l)
+
+	if slices.Contains(env, ManagerTokenEnv+"=override") {
+		t.Fatal("manager token was retained in the configured browser environment")
+	}
+	if !slices.Contains(env, "ROD_MANAGER_TEST_KEEP=override") {
+		t.Fatal("manager removed an unrelated configured browser environment value")
+	}
+
+	l.Delete(flags.Env)
+	env = managerBrowserEnvironment(l)
+	for _, value := range env {
+		name, _, _ := strings.Cut(value, "=")
+		if strings.EqualFold(name, ManagerTokenEnv) {
+			t.Fatal("manager token was inherited from the process environment")
+		}
+	}
+	if !slices.Contains(env, "ROD_MANAGER_TEST_KEEP=keep") {
+		t.Fatal("manager removed an unrelated inherited browser environment value")
+	}
+}
+
+func TestManagerRejectsRemoteProfilePaths(t *testing.T) {
+	m := NewManager(managerTestToken)
+	m.validateLaunchOptions(New().ProfileDir("Profile 1"), httptest.NewRecorder())
+	m.validateLaunchOptions(New().UserDataDir(filepath.Join("..", "ignored")), httptest.NewRecorder())
+	absoluteProfile, err := filepath.Abs("outside")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		configure func(*Launcher)
+	}{
+		{"profile traversal", func(l *Launcher) { l.ProfileDir(filepath.Join("..", "outside")) }},
+		{"nested profile", func(l *Launcher) { l.ProfileDir(filepath.Join("nested", "profile")) }},
+		{"absolute profile", func(l *Launcher) { l.ProfileDir(absoluteProfile) }},
+		{"empty preferences values", func(l *Launcher) { l.Flags[flags.Preferences] = nil }},
+		{"empty debugging port values", func(l *Launcher) { l.Flags[flags.RemoteDebuggingPort] = nil }},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			l := New()
+			test.configure(l)
+			w := httptest.NewRecorder()
+
+			deferredPanic := false
+			func() {
+				defer func() { deferredPanic = recover() != nil }()
+				m.validateLaunchOptions(l, w)
+			}()
+
+			if !deferredPanic {
+				t.Fatal("manager accepted an unsafe remote path")
+			}
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+			}
+		})
+	}
+}
+
+func TestManagerOwnsProfileAndDebuggingPort(t *testing.T) {
+	m := NewManager(managerTestToken)
+	temp := t.TempDir()
+	m.userDataRoot = filepath.Join(temp, "profiles")
+	m.allowedBin = "echo"
+
+	outsideSibling := m.userDataRoot + "-outside"
+	outsideTraversal := filepath.Join(m.userDataRoot, "..", "outside")
+	for _, dir := range []string{outsideSibling, outsideTraversal} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "keep"), []byte("keep"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var launched *Launcher
+	m.BeforeLaunch = func(l *Launcher, _ http.ResponseWriter, _ *http.Request) {
+		launched = l
+		l.UserDataDir(outsideTraversal).RemoteDebuggingPort(9223)
+	}
+
+	l := New().Bin("echo").UserDataDir(outsideSibling).RemoteDebuggingPort(9222)
+	req := httptest.NewRequest(http.MethodGet, "http://manager", nil)
+	req.Header.Set("Authorization", "Bearer "+managerTestToken)
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set(HeaderName, string(l.JSON()))
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		m.ServeHTTP(httptest.NewRecorder(), req)
+	}()
+	if recovered == nil {
+		t.Fatal("test browser unexpectedly produced a DevTools URL")
+	}
+	if launched == nil {
+		t.Fatal("BeforeLaunch was not called")
+	}
+	if got := launched.Get(flags.RemoteDebuggingPort); got != "0" {
+		t.Fatalf("debugging port = %q, want 0", got)
+	}
+	managedDir := launched.Get(flags.UserDataDir)
+	if managedDir == outsideSibling || managedDir == outsideTraversal {
+		t.Fatal("manager retained a client or hook supplied user data directory")
+	}
+	if rel, err := filepath.Rel(m.userDataRoot, managedDir); err != nil || rel == "." || !filepath.IsLocal(rel) {
+		t.Fatalf("managed profile %q is outside %q", managedDir, m.userDataRoot)
+	}
+	if _, err := os.Stat(managedDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("managed profile was not removed: %v", err)
+	}
+	for _, dir := range []string{outsideSibling, outsideTraversal} {
+		if _, err := os.Stat(filepath.Join(dir, "keep")); err != nil {
+			t.Fatalf("outside directory %q was changed: %v", dir, err)
+		}
+	}
+}
+
+func TestManagerCleanupStaysInOpenedRoot(t *testing.T) {
+	base := t.TempDir()
+	actual := filepath.Join(base, "actual")
+	victim := filepath.Join(base, "victim")
+	alias := filepath.Join(base, "profiles")
+	for _, dir := range []string{actual, victim} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(actual, alias); err != nil {
+		t.Skipf("symlinks are not available: %v", err)
+	}
+
+	m := NewManager(managerTestToken)
+	m.userDataRoot = alias
+	profile, err := m.newManagedProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := New().UserDataDir(profile.path).ProfileDir("Default").Set(flags.Preferences, `{}`)
+	l.profileRoot = profile.root
+	l.setupUserPreferences()
+
+	if err := os.Remove(alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, alias); err != nil {
+		t.Fatal(err)
+	}
+	victimProfile := filepath.Join(victim, profile.name)
+	if err := os.Mkdir(victimProfile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(victimProfile, "keep")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m.cleanup(l, profile)
+	if _, err := os.Stat(filepath.Join(actual, profile.name)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("original managed profile was not removed: %v", err)
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("cleanup escaped through the repointed symlink: %v", err)
+	}
+}
+
+func TestManagerAuthentication(t *testing.T) {
+	g := setup(t)
+
+	m := NewManager(managerTestToken)
+	defaultsCalled := false
+	m.Defaults = func(_ http.ResponseWriter, r *http.Request) *Launcher {
+		defaultsCalled = true
+		g.Eq("", r.Header.Get("Authorization"))
+		return New()
+	}
+	s := httptest.NewServer(m)
+	defer s.Close()
+
+	res, err := http.Get(s.URL) //nolint: noctx
+	g.E(err)
+	g.Eq(http.StatusUnauthorized, res.StatusCode)
+	g.Eq("Bearer", res.Header.Get("WWW-Authenticate"))
+	g.E(res.Body.Close())
+	g.False(defaultsCalled)
+
+	launchHookCalled := false
+	m.BeforeLaunch = func(_ *Launcher, _ http.ResponseWriter, _ *http.Request) {
+		launchHookCalled = true
+	}
+	upgrade := httptest.NewRequest(http.MethodGet, "http://manager", nil)
+	upgrade.Header.Set("Upgrade", "websocket")
+	upgrade.Header.Set(HeaderName, string(New().JSON()))
+	upgradeResult := httptest.NewRecorder()
+	m.ServeHTTP(upgradeResult, upgrade)
+	g.Eq(http.StatusUnauthorized, upgradeResult.Code)
+	g.False(launchHookCalled)
+
+	_, err = NewManaged(s.URL, "wrong-token")
+	g.True(errors.Is(err, ErrManagerUnauthorized))
+	g.False(defaultsCalled)
+
+	l, err := NewManaged(s.URL, managerTestToken)
+	g.E(err)
+	g.True(defaultsCalled)
+
+	_, header := l.ClientHeader()
+	g.Eq("Bearer "+managerTestToken, header.Get("Authorization"))
+	g.False(strings.Contains(string(l.JSON()), managerTestToken))
+
+	locked := httptest.NewServer(NewManager(""))
+	defer locked.Close()
+	_, err = NewManaged(locked.URL, managerTestToken)
+	g.True(errors.Is(err, ErrManagerUnauthorized))
+	_, err = NewManaged("http://192.0.2.1:7317", managerTestToken)
+	g.True(errors.Is(err, ErrManagerInsecureTransport))
+	_, err = NewManaged("ws://manager.example:7317", managerTestToken)
+	g.True(errors.Is(err, ErrManagerInsecureTransport))
+
+	redirectedAuthorization := ""
+	redirectTarget := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		redirectedAuthorization = r.Header.Get("Authorization")
+	}))
+	defer redirectTarget.Close()
+	redirectSource := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, redirectTarget.URL, http.StatusFound)
+	}))
+	defer redirectSource.Close()
+	_, err = NewManaged(redirectSource.URL, managerTestToken)
+	g.Has(err.Error(), "HTTP status 302")
+	g.Eq("", redirectedAuthorization)
+}
+
+func TestManagerRejectsRemoteProcessOptions(t *testing.T) {
+	workingDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		configure func(*Launcher)
+	}{
+		{"environment", func(l *Launcher) { l.Env("LD_PRELOAD=/tmp/library") }},
+		{"working directory sibling prefix", func(l *Launcher) { l.WorkingDir(workingDir + "-outside") }},
+		{"working directory traversal", func(l *Launcher) {
+			l.WorkingDir(filepath.Join(workingDir, "..", "outside"))
+		}},
+		{"xvfb", func(l *Launcher) { l.XVFB("/bin/sh") }},
+		{"argument smuggling", func(l *Launcher) {
+			l.StartURL("--renderer-cmd-prefix=/bin/sh")
+		}},
+		{"windows argument smuggling", func(l *Launcher) {
+			l.StartURL("/renderer-cmd-prefix=/bin/sh")
+		}},
+		{"option smuggling", func(l *Launcher) {
+			l.Flags["renderer-cmd-prefix=/bin/sh"] = nil
+		}},
+	}
+
+	for _, f := range []flags.Flag{
+		"browser-subprocess-path",
+		"disable-extensions-except",
+		"gpu-launcher",
+		"gssapi-library-name",
+		"load-component-extension",
+		"load-extension",
+		"nacl-loader-cmd-prefix",
+		"plugin-launcher",
+		"ppapi-plugin-launcher",
+		"register-pepper-plugins",
+		"renderer-cmd-prefix",
+		"utility-cmd-prefix",
+		"zygote-cmd-prefix",
+	} {
+		tests = append(tests, struct {
+			name      string
+			configure func(*Launcher)
+		}{string(f), func(l *Launcher) { l.Set(f, "/bin/sh") }})
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := NewManager(managerTestToken)
+			hookCalled := false
+			m.BeforeLaunch = func(_ *Launcher, _ http.ResponseWriter, _ *http.Request) {
+				hookCalled = true
+			}
+
+			l := New()
+			test.configure(l)
+			req := httptest.NewRequest(http.MethodGet, "http://manager", nil)
+			req.Header.Set("Authorization", "Bearer "+managerTestToken)
+			req.Header.Set("Upgrade", "websocket")
+			req.Header.Set(HeaderName, string(l.JSON()))
+			w := httptest.NewRecorder()
+
+			func() {
+				defer func() { _ = recover() }()
+				m.ServeHTTP(w, req)
+			}()
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+			}
+			if hookCalled {
+				t.Fatal("BeforeLaunch ran for a restricted remote option")
+			}
+		})
+	}
+
+	NewManager(managerTestToken).validateLaunchOptions(
+		New().Set("disable-gpu"),
+		httptest.NewRecorder(),
+	)
+}
+
+func TestManagerStripsControlHeaders(t *testing.T) {
+	g := setup(t)
+
+	m := NewManager(managerTestToken)
+	m.BeforeLaunch = func(_ *Launcher, w http.ResponseWriter, r *http.Request) {
+		g.Eq("", r.Header.Get("Authorization"))
+		g.Eq("", r.Header.Get(HeaderName))
+		rejectManagerLaunch(w, "[rod-manager] test stop")
+	}
+
+	l := New()
+	req := httptest.NewRequest(http.MethodGet, "http://manager", nil)
+	req.Header.Set("Authorization", "Bearer "+managerTestToken)
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set(HeaderName, string(l.JSON()))
+
+	g.Panic(func() {
+		m.ServeHTTP(httptest.NewRecorder(), req)
+	})
 }
 
 func TestURLParserErr(t *testing.T) {
@@ -149,7 +563,7 @@ func TestURLParserErr(t *testing.T) {
 	g.Eq(u.Err().Error(), "[launcher] Failed to get the debug url: error")
 
 	u.Buffer = "/tmp/rod/chromium-818858/chrome: error while loading shared libraries: libgobject-2.0.so.0: cannot open shared object file: No such file or directory"
-	g.Eq(u.Err().Error(), "[launcher] Failed to launch the browser, the doc might help https://go-rod.github.io/#/compatibility?id=os: /tmp/rod/chromium-818858/chrome: error while loading shared libraries: libgobject-2.0.so.0: cannot open shared object file: No such file or directory")
+	g.Eq(u.Err().Error(), "[launcher] Failed to launch the browser: /tmp/rod/chromium-818858/chrome: error while loading shared libraries: libgobject-2.0.so.0: cannot open shared object file: No such file or directory")
 }
 
 func TestTestOpen(_ *testing.T) {
@@ -168,14 +582,15 @@ func TestLaunchClient(t *testing.T) {
 
 	ctx := g.Timeout(5 * time.Second)
 
-	s := got.New(g).Serve()
-	rl := NewManager()
+	s := testutil.New(g).Serve()
+	rl := NewManager(managerTestToken)
 	s.Mux.Handle("/", rl)
 
-	l := MustNewManaged(s.URL()).KeepUserDataDir().Delete(flags.KeepUserDataDir)
+	l := MustNewManaged(s.URL(), managerTestToken)
 	c, err := l.Client()
 	if err != nil {
 		g.Err(err)
 	}
 	g.E(c.Call(ctx, "", "Browser.getVersion", nil))
+	g.E(c.Call(ctx, "", "Browser.close", nil))
 }

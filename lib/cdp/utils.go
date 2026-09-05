@@ -2,23 +2,15 @@ package cdp
 
 import (
 	"context"
-	"crypto/tls"
 	"net"
 	"net/http"
 
-	"github.com/go-rod/rod/lib/utils"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 // Dialer interface for WebSocket connection.
 type Dialer interface {
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
-}
-
-// TODO: replace it with tls.Dialer once golang v1.15 is widely used.
-type tlsDialer struct{}
-
-func (d *tlsDialer) DialContext(_ context.Context, network, address string) (net.Conn, error) {
-	return tls.Dial(network, address, nil)
 }
 
 // MustConnectWS helper to make a websocket connection.

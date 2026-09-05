@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 var _ io.Writer = &URLParser{}
@@ -77,7 +77,7 @@ func (r *URLParser) Err() error {
 	msg := "[launcher] Failed to get the debug url: "
 
 	if strings.Contains(r.Buffer, "error while loading shared libraries") {
-		msg = "[launcher] Failed to launch the browser, the doc might help https://go-rod.github.io/#/compatibility?id=os: "
+		msg = "[launcher] Failed to launch the browser: "
 	}
 
 	return errors.New(msg + r.Buffer)
@@ -128,7 +128,7 @@ func ResolveURL(u string) (string, error) {
 	data, err := io.ReadAll(res.Body)
 	utils.E(err)
 
-	wsURL := gson.New(data).Get("webSocketDebuggerUrl").Str()
+	wsURL := jsonvalue.New(data).Get("webSocketDebuggerUrl").Str()
 
 	parsedWS, err := url.Parse(wsURL)
 	utils.E(err)

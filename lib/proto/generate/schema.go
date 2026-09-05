@@ -3,7 +3,7 @@ package main
 import (
 	"strings"
 
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/jsonvalue"
 )
 
 type objType int
@@ -26,10 +26,10 @@ type domain struct {
 	experimental bool
 	description  string
 	definitions  []*definition
-	global       gson.JSON
+	global       jsonvalue.Value
 }
 
-func (schema *domain) find(id string) gson.JSON {
+func (schema *domain) find(id string) jsonvalue.Value {
 	domain := schema.name
 	list := strings.Split(id, ".")
 	if len(list) == 2 {
@@ -70,7 +70,7 @@ type definition struct {
 	skip         bool
 }
 
-func parse(schema gson.JSON) []*domain {
+func parse(schema jsonvalue.Value) []*domain {
 	patch(schema)
 
 	list := []*domain{}
@@ -82,7 +82,7 @@ func parse(schema gson.JSON) []*domain {
 	return list
 }
 
-func parseDomain(global, schema gson.JSON) *domain {
+func parseDomain(global, schema jsonvalue.Value) *domain {
 	domain := &domain{
 		name:         schema.Get("domain").Str(),
 		experimental: schema.Get("experimental").Bool(),
@@ -103,7 +103,7 @@ func parseDomain(global, schema gson.JSON) *domain {
 	return domain
 }
 
-func parseDef(domain *domain, cdpType cdpType, schema gson.JSON) []*definition {
+func parseDef(domain *domain, cdpType cdpType, schema jsonvalue.Value) []*definition {
 	list := []*definition{}
 
 	switch cdpType {
@@ -139,7 +139,7 @@ func parseDef(domain *domain, cdpType cdpType, schema gson.JSON) []*definition {
 	return list
 }
 
-func parseStruct(domain *domain, cdpType cdpType, name string, isCommand bool, schema gson.JSON, propsPath string) []*definition {
+func parseStruct(domain *domain, cdpType cdpType, name string, isCommand bool, schema jsonvalue.Value, propsPath string) []*definition {
 	list := []*definition{}
 
 	props := []*definition{}

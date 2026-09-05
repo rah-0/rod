@@ -16,13 +16,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/cdp"
-	"github.com/go-rod/rod/lib/defaults"
-	"github.com/go-rod/rod/lib/devices"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/lib/cdp"
+	"github.com/rah-0/rod/lib/defaults"
+	"github.com/rah-0/rod/lib/devices"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/proto"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 func TestGetPageBrowser(t *testing.T) {
@@ -134,12 +134,15 @@ func TestSetUserAgent(t *testing.T) {
 	lang := ""
 
 	wg := sync.WaitGroup{}
+	once := sync.Once{}
 	wg.Add(1)
 
 	s.Mux.HandleFunc("/", func(_ http.ResponseWriter, r *http.Request) {
-		ua = r.Header.Get("User-Agent")
-		lang = r.Header.Get("Accept-Language")
-		wg.Done()
+		once.Do(func() {
+			ua = r.Header.Get("User-Agent")
+			lang = r.Header.Get("Accept-Language")
+			wg.Done()
+		})
 	})
 
 	g.newPage().MustSetUserAgent(nil).MustNavigate(s.URL())
@@ -362,8 +365,8 @@ func TestPageCloseWhenNotAttached(t *testing.T) {
 
 	p := g.browser.MustPage(g.blank())
 
-	g.mc.stub(1, proto.PageClose{}, func(_ StubSend) (gson.JSON, error) {
-		return gson.New(nil), cdp.ErrNotAttachedToActivePage
+	g.mc.stub(1, proto.PageClose{}, func(_ StubSend) (jsonvalue.Value, error) {
+		return jsonvalue.New(nil), cdp.ErrNotAttachedToActivePage
 	})
 
 	g.E(p.Close())
@@ -767,8 +770,8 @@ func TestScreenshotFullPage(t *testing.T) {
 	})
 
 	g.Panic(func() {
-		g.mc.stub(1, proto.PageGetLayoutMetrics{}, func(_ StubSend) (gson.JSON, error) {
-			return gson.New(proto.PageGetLayoutMetricsResult{}), nil
+		g.mc.stub(1, proto.PageGetLayoutMetrics{}, func(_ StubSend) (jsonvalue.Value, error) {
+			return jsonvalue.New(proto.PageGetLayoutMetricsResult{}), nil
 		})
 		p.MustScreenshotFullPage()
 	})
@@ -813,16 +816,16 @@ func TestScrollScreenshotErrors(t *testing.T) {
 		p.MustScrollScreenshot()
 	})
 	g.Panic(func() {
-		g.mc.stub(1, proto.PageGetLayoutMetrics{}, func(_ StubSend) (gson.JSON, error) {
-			return gson.New(proto.PageGetLayoutMetricsResult{
+		g.mc.stub(1, proto.PageGetLayoutMetrics{}, func(_ StubSend) (jsonvalue.Value, error) {
+			return jsonvalue.New(proto.PageGetLayoutMetricsResult{
 				CSSVisualViewport: &proto.PageVisualViewport{},
 			}), nil
 		})
 		p.MustScrollScreenshot()
 	})
 	g.Panic(func() {
-		g.mc.stub(1, proto.PageGetLayoutMetrics{}, func(_ StubSend) (gson.JSON, error) {
-			return gson.New(proto.PageGetLayoutMetricsResult{
+		g.mc.stub(1, proto.PageGetLayoutMetrics{}, func(_ StubSend) (jsonvalue.Value, error) {
+			return jsonvalue.New(proto.PageGetLayoutMetricsResult{
 				CSSContentSize: &proto.DOMRect{},
 			}), nil
 		})
@@ -848,7 +851,7 @@ func TestScrollScreenshotErrors(t *testing.T) {
 	_, err := p.ScrollScreenshot(&rod.ScrollScreenshotOptions{
 		/* cspell: disable-next-line */
 		Format:  proto.PageCaptureScreenshotFormatWebp,
-		Quality: gson.Int(10),
+		Quality: jsonvalue.Int(10),
 	})
 	g.Err(err)
 }
@@ -1026,9 +1029,9 @@ func TestPageTriggerFavicon(t *testing.T) {
 	{
 		page := g.newPage()
 		page.MustNavigate(s.URL())
-		g.mc.stub(1, proto.BrowserGetBrowserCommandLine{}, func(_ StubSend) (gson.JSON, error) {
+		g.mc.stub(1, proto.BrowserGetBrowserCommandLine{}, func(_ StubSend) (jsonvalue.Value, error) {
 			commandLine := proto.BrowserGetBrowserCommandLineResult{Arguments: []string{""}}
-			return gson.New(commandLine), nil
+			return jsonvalue.New(commandLine), nil
 		})
 		err := page.TriggerFavicon()
 		g.Eq(err.Error(), "browser is no-headless")

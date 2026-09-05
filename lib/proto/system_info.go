@@ -3,7 +3,7 @@
 package proto
 
 import (
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod/lib/jsonvalue"
 )
 
 /*
@@ -131,10 +131,10 @@ type SystemInfoGPUInfo struct {
 	Devices []*SystemInfoGPUDevice `json:"devices"`
 
 	// AuxAttributes (optional) An optional dictionary of additional GPU related attributes.
-	AuxAttributes map[string]gson.JSON `json:"auxAttributes,omitempty"`
+	AuxAttributes map[string]jsonvalue.Value `json:"auxAttributes,omitempty"`
 
 	// FeatureStatus (optional) An optional dictionary of graphics features and their status.
-	FeatureStatus map[string]gson.JSON `json:"featureStatus,omitempty"`
+	FeatureStatus map[string]jsonvalue.Value `json:"featureStatus,omitempty"`
 
 	// DriverBugWorkarounds An optional array of GPU driver bug workarounds.
 	DriverBugWorkarounds []string `json:"driverBugWorkarounds"`

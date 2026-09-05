@@ -9,24 +9,31 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/cdp"
-	"github.com/go-rod/rod/lib/defaults"
-	"github.com/go-rod/rod/lib/launcher"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/got"
-	"github.com/ysmood/gotrace"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/internal/goroutines"
+	"github.com/rah-0/rod/internal/testutil"
+	"github.com/rah-0/rod/lib/cdp"
+	"github.com/rah-0/rod/lib/defaults"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/launcher"
+	"github.com/rah-0/rod/lib/utils"
 )
 
-var setup = got.Setup(nil)
+var setup = testutil.Setup(nil)
 
 func TestBasic(t *testing.T) {
 	g := setup(t)
 
 	ctx := g.Context()
 
-	client := cdp.New().Logger(defaults.CDP).Start(cdp.MustConnectWS(launcher.New().MustLaunch()))
+	l := launcher.New()
+	u := l.MustLaunch()
+	g.Cleanup(func() {
+		l.Kill()
+		l.Cleanup()
+	})
+
+	client := cdp.New().Logger(defaults.CDP).Start(cdp.MustConnectWS(u))
 
 	defer func() {
 		_, _ = client.Call(ctx, "", "Browser.close", nil)
@@ -46,7 +53,7 @@ func TestBasic(t *testing.T) {
 	})
 	g.E(err)
 
-	targetID := gson.New(res).Get("targetId").String()
+	targetID := jsonvalue.New(res).Get("targetId").String()
 
 	res, err = client.Call(ctx, "", "Target.attachToTarget", map[string]interface{}{
 		"targetId": targetID,
@@ -54,7 +61,7 @@ func TestBasic(t *testing.T) {
 	})
 	g.E(err)
 
-	sessionID := gson.New(res).Get("sessionId").String()
+	sessionID := jsonvalue.New(res).Get("sessionId").String()
 
 	_, err = client.Call(ctx, sessionID, "Page.enable", nil)
 	g.E(err)
@@ -83,15 +90,15 @@ func TestBasic(t *testing.T) {
 			"expression": `document.querySelector('iframe')`,
 		})
 
-		return err == nil && gson.New(res).Get("result.subtype").String() != "null", nil
+		return err == nil && jsonvalue.New(res).Get("result.subtype").String() != "null", nil
 	}))
 
 	res, err = client.Call(ctx, sessionID, "DOM.describeNode", map[string]interface{}{
-		"objectId": gson.New(res).Get("result.objectId").String(),
+		"objectId": jsonvalue.New(res).Get("result.objectId").String(),
 	})
 	g.E(err)
 
-	frameID := gson.New(res).Get("node.frameId").String()
+	frameID := jsonvalue.New(res).Get("node.frameId").String()
 
 	timeout = g.Context()
 
@@ -104,19 +111,19 @@ func TestBasic(t *testing.T) {
 		g.E(err)
 
 		res, err = client.Call(ctx, sessionID, "Runtime.evaluate", map[string]interface{}{
-			"contextId":  gson.New(res).Get("executionContextId").Int(),
+			"contextId":  jsonvalue.New(res).Get("executionContextId").Int(),
 			"expression": `document.querySelector('h4')`,
 		})
 
-		return err == nil && gson.New(res).Get("result.subtype").String() != "null", nil
+		return err == nil && jsonvalue.New(res).Get("result.subtype").String() != "null", nil
 	}))
 
 	res, err = client.Call(ctx, sessionID, "DOM.getOuterHTML", map[string]interface{}{
-		"objectId": gson.New(res).Get("result.objectId").String(),
+		"objectId": jsonvalue.New(res).Get("result.objectId").String(),
 	})
 	g.E(err)
 
-	g.Eq("<h4>it works</h4>", gson.New(res).Get("outerHTML").String())
+	g.Eq("<h4>it works</h4>", jsonvalue.New(res).Get("outerHTML").String())
 }
 
 func TestError(t *testing.T) {
@@ -136,7 +143,14 @@ func TestCrash(t *testing.T) {
 
 	ctx := g.Context()
 
-	client := cdp.MustStartWithURL(ctx, launcher.New().MustLaunch(), nil)
+	l := launcher.New()
+	u := l.MustLaunch()
+	g.Cleanup(func() {
+		l.Kill()
+		l.Cleanup()
+	})
+
+	client := cdp.MustStartWithURL(ctx, u, nil)
 
 	go func() {
 		for range client.Event() {
@@ -152,7 +166,7 @@ func TestCrash(t *testing.T) {
 	})
 	g.E(err)
 
-	targetID := gson.New(res).Get("targetId").String()
+	targetID := jsonvalue.New(res).Get("targetId").String()
 
 	res, err = client.Call(ctx, "", "Target.attachToTarget", map[string]interface{}{
 		"targetId": targetID,
@@ -160,7 +174,7 @@ func TestCrash(t *testing.T) {
 	})
 	g.E(err)
 
-	sessionID := gson.New(res).Get("sessionId").String()
+	sessionID := jsonvalue.New(res).Get("sessionId").String()
 
 	_, err = client.Call(ctx, sessionID, "Page.enable", nil)
 	g.E(err)
@@ -209,7 +223,7 @@ func TestFormat(t *testing.T) {
 func TestSlowSend(t *testing.T) {
 	g := setup(t)
 
-	gotrace.CheckLeak(g, 0)
+	goroutines.CheckLeak(g, 0)
 
 	id := 0
 	wait := make(chan int)
@@ -244,7 +258,7 @@ func TestSlowSend(t *testing.T) {
 func TestCancelCallLeak(t *testing.T) {
 	g := setup(t)
 
-	gotrace.CheckLeak(g, 0)
+	goroutines.CheckLeak(g, 0)
 
 	for i := 0; i < 30; i++ {
 		id := 0
@@ -282,7 +296,7 @@ func TestCancelCallLeak(t *testing.T) {
 func TestConcurrentCall(t *testing.T) {
 	g := setup(t)
 
-	gotrace.CheckLeak(g, 0)
+	goroutines.CheckLeak(g, 0)
 
 	req := make(chan []byte, 30)
 	t.Cleanup(func() { close(req) })
@@ -306,7 +320,7 @@ func TestConcurrentCall(t *testing.T) {
 
 			return json.Marshal(cdp.Response{
 				ID:     req.ID,
-				Result: json.RawMessage(gson.New(req.Params).JSON("", "")),
+				Result: json.RawMessage(jsonvalue.New(req.Params).JSON("", "")),
 				Error:  nil,
 			})
 		},
@@ -322,7 +336,7 @@ func TestConcurrentCall(t *testing.T) {
 
 			res, err := c.Call(g.Context(), "1234567890", "method", i)
 			g.E(err)
-			g.Eq(gson.New(res).Int(), i)
+			g.Eq(jsonvalue.New(res).Int(), i)
 		})
 	}
 }

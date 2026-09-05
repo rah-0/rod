@@ -13,14 +13,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-rod/rod"
-	"github.com/go-rod/rod/lib/cdp"
-	"github.com/go-rod/rod/lib/devices"
-	"github.com/go-rod/rod/lib/input"
-	"github.com/go-rod/rod/lib/launcher"
-	"github.com/go-rod/rod/lib/proto"
-	"github.com/go-rod/rod/lib/utils"
-	"github.com/ysmood/gson"
+	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/lib/cdp"
+	"github.com/rah-0/rod/lib/devices"
+	"github.com/rah-0/rod/lib/input"
+	"github.com/rah-0/rod/lib/jsonvalue"
+	"github.com/rah-0/rod/lib/launcher"
+	"github.com/rah-0/rod/lib/proto"
+	"github.com/rah-0/rod/lib/utils"
 )
 
 func TestGetElementPage(t *testing.T) {
@@ -287,7 +287,13 @@ func TestIframeCrossDomains(t *testing.T) {
 		<iframe sandbox src="`+u1+`"></iframe>
 	</html>`)
 
-	u := launcher.New().HeadlessNew(true).NoSandbox(true).MustLaunch()
+	l := launcher.New().HeadlessNew(true).NoSandbox(true)
+	u := l.MustLaunch()
+	defer func() {
+		l.Kill()
+		l.Cleanup()
+	}()
+
 	browser := rod.New().ControlURL(u).NoDefaultDevice().MustConnect()
 	defer browser.MustClose()
 
@@ -670,7 +676,7 @@ func TestWaitStable(t *testing.T) {
 	g.Gt(time.Since(start), time.Second)
 
 	ctx := g.Context()
-	g.mc.stub(1, proto.DOMGetContentQuads{}, func(send StubSend) (gson.JSON, error) {
+	g.mc.stub(1, proto.DOMGetContentQuads{}, func(send StubSend) (jsonvalue.Value, error) {
 		go func() {
 			utils.Sleep(0.1)
 			ctx.Cancel()
@@ -732,8 +738,8 @@ func TestResource(t *testing.T) {
 	el := p.MustElement("img")
 	g.Eq(len(el.MustResource()), 22661)
 
-	g.mc.stub(1, proto.PageGetResourceContent{}, func(_ StubSend) (gson.JSON, error) {
-		return gson.New(proto.PageGetResourceContentResult{
+	g.mc.stub(1, proto.PageGetResourceContent{}, func(_ StubSend) (jsonvalue.Value, error) {
+		return jsonvalue.New(proto.PageGetResourceContentResult{
 			Content:       "ok",
 			Base64Encoded: false,
 		}), nil

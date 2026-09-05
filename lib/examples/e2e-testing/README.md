@@ -7,4 +7,4 @@ Use standard Go commands to test the project, such as run `go test` to execute a
 
 ## Debugging
 
-Same as the tutorial here: [See what's under the hood](https://go-rod.github.io/#/get-started/README?id=see-what39s-under-the-hood)
+Use Rod's trace, slow-motion, and DevTools options to inspect a test run.
