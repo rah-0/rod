@@ -16,11 +16,11 @@ import (
 
 func main() {
 	l := launcher.New()
-	url := l.MustLaunch()
 	defer func() {
 		l.Kill()
 		l.Cleanup()
 	}()
+	url := l.MustLaunch()
 
 	b := rod.New().ControlURL(url).MustConnect()
 	defer b.MustClose()

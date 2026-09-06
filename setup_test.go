@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -29,20 +28,16 @@ import (
 
 var TimeoutEach = flag.Duration("timeout-each", time.Minute, "timeout for each test")
 
-var testerPool rod.Pool[G]
-
-const maxBrowserProcesses = 4
+// Browser tests run sequentially and reuse this tester after successful setup.
+var cachedTester *G
 
 func TestMain(m *testing.M) {
 	defaults.Load()
-	testerPool = newTesterPool()
-
 	code := m.Run()
-	testerPool.Cleanup(func(g *G) {
-		_ = g.browser.Close()
-		g.launcher.Kill()
-		g.launcher.Cleanup()
-	})
+	if cachedTester != nil {
+		cachedTester.close()
+		cachedTester = nil
+	}
 	if code != 0 {
 		os.Exit(code)
 	}
@@ -52,19 +47,17 @@ func TestMain(m *testing.M) {
 	}
 }
 
-// G is a tester. Testers are thread-safe, they shouldn't race each other.
+// G is a tester shared by sequential browser tests.
 type G struct {
 	testutil.G
 
 	// mock client for proxy the cdp requests
 	mc *MockClient
 
-	// a random browser instance from the pool. If you have changed state of it, you must reset it
-	// or it may affect other test cases.
+	// browser is reused across tests; reset changed state before the next test.
 	browser *rod.Browser
 
-	// a random page instance from the pool. If you have changed state of it, you must reset it
-	// or it may affect other test cases.
+	// page is reused across tests; reset changed state before the next test.
 	page *rod.Page
 
 	// launcher owns the local browser process and its temporary profile.
@@ -74,22 +67,21 @@ type G struct {
 	cancelTimeout func()
 }
 
-// If we don't use pool to cache, the total time will be much longer.
-func newTesterPool() rod.Pool[G] {
-	parallel := testutil.Parallel()
-	if parallel == 0 {
-		parallel = runtime.GOMAXPROCS(0)
-	}
-	parallel = min(parallel, maxBrowserProcesses)
-
-	fmt.Println("parallel test", parallel)
-
-	return rod.NewPool[G](parallel)
-}
-
 func newTester(t *testing.T) *G {
-	l := launcher.New().Set("proxy-bypass-list", "<-loopback>").NoSandbox(true)
+	ctx, cancel := context.WithTimeout(context.Background(), *TimeoutEach)
+	defer cancel()
+	l := launcher.New().Context(ctx).Set("proxy-bypass-list", "<-loopback>").NoSandbox(true)
+	owned := true
+	defer func() {
+		// Cache a tester only after initialization has completed.
+		if owned {
+			l.Kill()
+			l.Cleanup()
+		}
+	}()
 	u := l.MustLaunch()
+	stop := context.AfterFunc(ctx, l.Kill)
+	defer stop()
 
 	mc := newMockClient(t, u)
 
@@ -104,23 +96,41 @@ func newTester(t *testing.T) *G {
 		page = pages.First()
 	}
 
-	return &G{
+	tester := &G{
 		mc:       mc,
 		browser:  browser,
 		page:     page,
 		launcher: l,
 	}
+	owned = false
+	return tester
+}
+
+func (g *G) close() {
+	defer g.launcher.Cleanup()
+	defer g.launcher.Kill()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stop := context.AfterFunc(ctx, g.launcher.Kill)
+	defer stop()
+	// A failed test may leave a stub installed, so bypass the mock during shutdown.
+	_, _ = g.mc.principal.Call(ctx, "", "Browser.close", nil)
 }
 
 func setup(t *testing.T) G {
 	t.Helper()
 
-	if testutil.Parallel() != 1 {
-		t.Parallel()
+	if cachedTester == nil {
+		cachedTester = newTester(t)
 	}
-
-	tester := testerPool.MustGet(func() *G { return newTester(t) })
-	t.Cleanup(func() { testerPool.Put(tester) })
+	tester := cachedTester
+	t.Cleanup(func() {
+		if t.Failed() {
+			cachedTester = nil
+			tester.close()
+		}
+	})
 
 	tester.G = testutil.New(t)
 	tester.mc.t = t

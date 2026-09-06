@@ -16,11 +16,11 @@ func ExampleClient() {
 
 	// launch a browser
 	l := launcher.New()
-	url := l.MustLaunch()
 	defer func() {
 		l.Kill()
 		l.Cleanup()
 	}()
+	url := l.MustLaunch()
 
 	// create a controller
 	client := cdp.New().Start(cdp.MustConnectWS(url))
@@ -50,11 +50,11 @@ func ExampleClient() {
 
 func Example_customize_cdp_log() {
 	l := launcher.New()
-	u := l.MustLaunch()
 	defer func() {
 		l.Kill()
 		l.Cleanup()
 	}()
+	u := l.MustLaunch()
 
 	ws := cdp.MustConnectWS(u)
 

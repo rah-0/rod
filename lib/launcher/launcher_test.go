@@ -28,11 +28,11 @@ func TestLaunch(t *testing.T) {
 	defer func() { defaults.ResetWith("") }()
 
 	l := launcher.New().Preferences("").AlwaysOpenPDFExternally()
-	u := l.MustLaunch()
-	defer func() {
+	t.Cleanup(func() {
 		l.Kill()
 		l.Cleanup()
-	}()
+	})
+	u := l.MustLaunch()
 
 	g.Regex(`\Aws://.+\z`, u)
 
@@ -101,11 +101,15 @@ func TestLaunchUserMode(t *testing.T) {
 		"about:blank",
 	})
 
-	url := l.MustLaunch()
-	defer func() {
+	// Create the profile before registering process cleanup: testing runs
+	// cleanups in reverse order, and Chrome must stop before TempDir is removed.
+	profile := t.TempDir()
+	t.Cleanup(func() {
 		l.Kill()
 		l.Cleanup()
-	}()
+	})
+	// Exercise the user-mode preset without opening the developer's profile.
+	url := l.UserDataDir(profile).MustLaunch()
 
 	g.Eq(url, launcher.NewUserMode().RemoteDebuggingPort(port).MustLaunch())
 }
@@ -149,8 +153,11 @@ func TestLaunchErr(t *testing.T) {
 	})
 	{
 		l := launcher.New().XVFB()
+		t.Cleanup(func() {
+			l.Kill()
+			l.Cleanup()
+		})
 		_, _ = l.Launch()
-		l.Kill()
 	}
 }
 
@@ -166,11 +173,11 @@ func TestProfileDir(t *testing.T) {
 		g.Skip("It's not CI friendly, so we skip it!")
 	}
 
-	url.MustLaunch()
-	defer func() {
+	t.Cleanup(func() {
 		url.Kill()
 		url.Cleanup()
-	}()
+	})
+	url.MustLaunch()
 
 	userDataDir := url.Get(flags.UserDataDir)
 	file, err := os.Stat(filepath.Join(userDataDir, "test-profile-dir"))
@@ -248,13 +255,13 @@ func TestLaunchMultiTimes(t *testing.T) {
 
 	// first time launch, success.
 	l := launcher.New()
+	t.Cleanup(func() {
+		l.Kill()
+		l.Cleanup()
+	})
 	u, e := l.Launch()
 	g.Neq(u, "")
 	g.E(e)
-	defer func() {
-		l.Kill()
-		l.Cleanup()
-	}()
 
 	// second time launch, failed with ErrAlreadyLaunched.
 	_, e = l.Launch()

@@ -5,11 +5,22 @@ version first. Each entry compares that version with its previous release and
 names the affected functions, types, fields, or commands with their migration.
 When skipping releases, apply every intervening entry, oldest to newest.
 
-Add pending changes under the planned next version, above all released versions,
-and mark its status as planned. Each heading names the target version and the
-previous release it changes. At release time, replace the planned status with
-the release date. Keep released entries as history; add later changes under
-their own planned version without moving older changes into it.
+Group changes under the version that introduces them, above earlier versions.
+Each heading names that version and the previous version it changes. Describe
+the implementation for the named version. Keep historical entries intact; add
+later changes under their own version.
+
+## v0.119.0 — compared with v0.118.0
+
+### Browser lifetime
+
+| Affected behavior | Change | Migration |
+| --- | --- | --- |
+| Unix `Launcher.Launch` | A supervisor now owns each started browser and stops it when the launching application exits, including abnormal exit. Linux also reaps detached descendants. | Keep the owning application alive for the browser's intended lifetime. See [launcher platform and initializer requirements](../lib/launcher/README.md). |
+| Generated temporary profiles | Removed automatically when the browser exits or startup fails. `Cleanup` waits for removal. | Supply `UserDataDir` explicitly when profile data must persist. Caller-selected profiles are never removed. |
+| Unix browser `TMPDIR` | Each supervised browser receives a private child directory, removed after its descendants exit. | A `TMPDIR` supplied through `Launcher.Env` selects the parent. Do not rely on the browser seeing that exact value; the caller's parent directory and existing files are preserved. |
+| Automatically launched `Browser` | Cancellation of the original `Connect` context or loss of its CDP connection stops the owned browser. `Close` uses an independent five-second graceful shutdown budget before forced cleanup. | Give `Connect` a context spanning the desired browser lifetime; use later context clones for individual operations. URL-attached browsers retain their existing ownership semantics. |
+| Launcher startup diagnostics | Internal output capture retains at most 64 KiB before the DevTools endpoint appears. | Use `Logger` for complete output, with a writer that does not block indefinitely. |
 
 ## v0.118.0 — compared with v0.117.0
 

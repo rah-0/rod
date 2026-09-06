@@ -44,7 +44,6 @@ func TestMain(m *testing.M) {
 
 func setup(t *testing.T) G {
 	t.Helper()
-	t.Parallel()
 	// Connect only when a selected test needs the browser.
 	browserOnce.Do(func() { suiteBrowser = rod.New().MustConnect() })
 	return G{testutil.New(t), suiteBrowser.Context(t.Context())}

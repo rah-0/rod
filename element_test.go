@@ -288,11 +288,11 @@ func TestIframeCrossDomains(t *testing.T) {
 	</html>`)
 
 	l := launcher.New().HeadlessNew(true).NoSandbox(true)
-	u := l.MustLaunch()
 	defer func() {
 		l.Kill()
 		l.Cleanup()
 	}()
+	u := l.MustLaunch()
 
 	browser := rod.New().ControlURL(u).NoDefaultDevice().MustConnect()
 	defer browser.MustClose()

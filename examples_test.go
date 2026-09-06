@@ -100,11 +100,11 @@ func Example_disable_headless_to_debug() {
 		Headless(false).
 		Devtools(true)
 
-	url := l.MustLaunch()
 	defer func() {
 		l.Kill()
 		l.Cleanup()
 	}()
+	url := l.MustLaunch()
 
 	// Trace shows verbose debug information for each action executed
 	// SlowMotion is a debug related function that waits 2 seconds between
@@ -433,11 +433,11 @@ func Example_customize_browser_launch() {
 	l := launcher.New().
 		Proxy("127.0.0.1:8080").    // set flag "--proxy-server=127.0.0.1:8080"
 		Delete("use-mock-keychain") // delete flag "--use-mock-keychain"
-	url := l.MustLaunch()
 	defer func() {
 		l.Kill()
 		l.Cleanup()
 	}()
+	url := l.MustLaunch()
 
 	browser := rod.New().ControlURL(url).MustConnect()
 	defer browser.MustClose()
@@ -728,11 +728,11 @@ func Example_load_extension() {
 		// Reason: https://bugs.chromium.org/p/chromium/issues/detail?id=706008#c5
 		// On Linux, a trusted local launcher can use Launcher.XVFB for a virtual display.
 		Headless(false)
-	u := l.MustLaunch()
 	defer func() {
 		l.Kill()
 		l.Cleanup()
 	}()
+	u := l.MustLaunch()
 
 	browser := rod.New().ControlURL(u).MustConnect()
 	defer browser.MustClose()
@@ -749,11 +749,11 @@ func Example_load_extension() {
 
 func Example_log_cdp_traffic() {
 	l := launcher.New()
-	u := l.MustLaunch()
 	defer func() {
 		l.Kill()
 		l.Cleanup()
 	}()
+	u := l.MustLaunch()
 
 	cdp := cdp.New().
 		// Here we can customize how to log the requests, responses, and events transferred between Rod and the browser.

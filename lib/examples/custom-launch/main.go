@@ -12,11 +12,11 @@ func main() {
 	l := launcher.New()
 
 	// For more info: https://pkg.go.dev/github.com/rah-0/rod/lib/launcher
-	u := l.MustLaunch()
 	defer func() {
 		l.Kill()
 		l.Cleanup()
 	}()
+	u := l.MustLaunch()
 
 	browser := rod.New().ControlURL(u).MustConnect()
 	defer browser.MustClose()

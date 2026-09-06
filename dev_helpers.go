@@ -5,6 +5,7 @@
 package rod
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -50,10 +51,9 @@ const (
 // a trusted authenticated proxy.
 func (b *Browser) ServeMonitor(host string) string {
 	u, mux, closeSvr := serve(host)
-	go func() {
-		<-b.ctx.Done()
+	context.AfterFunc(b.ctx, func() {
 		utils.E(closeSvr())
-	}()
+	})
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		httHTML(w, assets.Monitor)

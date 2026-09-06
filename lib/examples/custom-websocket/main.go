@@ -16,11 +16,11 @@ import (
 
 func main() {
 	l := launcher.New()
-	u := l.MustLaunch()
 	defer func() {
 		l.Kill()
 		l.Cleanup()
 	}()
+	u := l.MustLaunch()
 
 	w := NewWebSocket(u)
 

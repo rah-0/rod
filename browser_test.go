@@ -448,6 +448,15 @@ func TestBrowserPool(t *testing.T) {
 	g := testutil.T(t)
 
 	pool := rod.NewBrowserPool(3)
+	t.Cleanup(func() {
+		pool.Cleanup(func(p *rod.Browser) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := p.Context(ctx).Close(); err != nil {
+				t.Errorf("close pooled browser: %v", err)
+			}
+		})
+	})
 
 	b, err := pool.Get(func() (*rod.Browser, error) {
 		browser := rod.New()
@@ -458,21 +467,17 @@ func TestBrowserPool(t *testing.T) {
 
 	b = pool.MustGet(func() *rod.Browser { return rod.New().MustConnect() })
 	pool.Put(b)
-
-	pool.Cleanup(func(p *rod.Browser) {
-		p.MustClose()
-	})
 }
 
 func TestBrowserLostConnection(t *testing.T) {
 	g := setup(t)
 
 	l := launcher.New()
-	u := l.MustLaunch()
 	defer func() {
 		l.Kill()
 		l.Cleanup()
 	}()
+	u := l.MustLaunch()
 
 	p := rod.New().ControlURL(u).MustConnect().MustPage(g.blank())
 

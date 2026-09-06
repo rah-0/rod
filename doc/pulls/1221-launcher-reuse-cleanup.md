@@ -2,11 +2,15 @@
 
 **Priority:** P1 — shutdown can hang indefinitely.
 
+**Status:** Implemented. `TestCleanupReusedBrowser` covers discovery reuse,
+repeated cleanup, endpoint survival, and caller-owned profile preservation.
+`TestCleanupWithoutProcess` covers unused launchers and failed startup.
+
 **Source:** [upstream PR #1221](https://github.com/go-rod/rod/pull/1221).
 
-## Why this still applies
+## Original failure
 
-[Launcher.Launch](../../lib/launcher/launcher.go) returns successfully when discovery finds a browser on the requested port. It starts no process and leaves `l.exit` open. `Launcher.Cleanup` nevertheless waits unconditionally on that channel. `Kill` returns immediately when the launcher's PID is zero, so calling it first does not unblock cleanup.
+[Launcher.Launch](../../lib/launcher/launcher.go) returned successfully when discovery found a browser on the requested port, but left `l.exit` open without starting a process. `Launcher.Cleanup` waited unconditionally on that channel. `Kill` returned immediately when the launcher's PID was zero, so calling it first did not unblock cleanup. Launch now completes its exit bookkeeping on every path that starts no process.
 
 A reproduction served a valid `/json/version` response with `httptest`, then called `New().Bin("/bin/true").RemoteDebuggingPort(port).Launch()`. Launch returned a URL, no error, and PID zero; cleanup remained blocked after 200 ms. This requires no browser process.
 

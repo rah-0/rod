@@ -222,6 +222,7 @@ func (m *Manager) launch(w http.ResponseWriter, r *http.Request) {
 	}
 	l.UserDataDir(profile.path).RemoteDebuggingPort(0)
 	l.profileRoot = profile.root
+	l.managedProfile = profile
 	defer m.cleanup(l, profile)
 
 	m.BeforeLaunch(l, w, r)
@@ -230,6 +231,7 @@ func (m *Manager) launch(w http.ResponseWriter, r *http.Request) {
 	// port must remain server-owned at the final process boundary.
 	l.UserDataDir(profile.path).RemoteDebuggingPort(0)
 	l.profileRoot = profile.root
+	l.managedProfile = profile
 
 	u := l.MustLaunch()
 

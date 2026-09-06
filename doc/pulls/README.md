@@ -8,7 +8,7 @@ Follow this order for the retained pull-request tasks. It prioritizes crashes, h
 | --- | --- | --- | --- |
 | 1 | P1 | [#1240 — Helper cache after context reset](1240-helper-cache-reset.md) | Prevents a panic during concurrent evaluation and navigation; a focused fix with deterministic coverage. |
 | 2 | P1 | [#1241 — Repaint cancellation](1241-repaint-context.md) | Restores deadlines for repaint and element stability waits, preventing automation from hanging. Includes #1225 and #1219. |
-| 3 | P1 | [#1221 — Cleanup after browser reuse](1221-launcher-reuse-cleanup.md) | Removes an indefinite shutdown wait while preserving browser and profile ownership. |
+| 3 | P1 | [#1221 — Cleanup after browser reuse](1221-launcher-reuse-cleanup.md) | Implemented: cleanup returns after browser reuse and failed startup while preserving browser and profile ownership. |
 | 4 | P1 | [#1228 — Valid WebSocket handshake key](1228-valid-websocket-handshake-key.md) | Makes connections work with strict WebSocket servers and fixes header overrides. Includes #1210. |
 | 5 | P1 | [#1187 — WebSocket control frames](1187-handle-websocket-control-frames.md) | Keeps valid Ping/Pong traffic from terminating CDP sessions and handles Close correctly. Follows the handshake work in the same transport. |
 | 6 | P1 | [#1235 — Release closed-page session state](1235-release-closed-page-session-state.md) | Stops cached request data accumulating in long-running browser sessions. |

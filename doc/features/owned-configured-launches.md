@@ -18,8 +18,10 @@ profiles, output logging, killing, and cleanup.
 
 The remaining gap is ownership for an explicitly configured launch, together
 with a bounded public cleanup contract. Connecting through `ControlURL` does
-not transfer launcher ownership. The internal shutdown waits for cleanup without
-a deadline, and `Launcher.Cleanup` itself has no cancellation or error result.
+not transfer launcher ownership. Owned `Browser.Close` now has an independent
+five-second graceful shutdown budget and forces cleanup when it expires. The
+subsequent process cleanup wait and `Launcher.Cleanup` still have no cancellation
+or error result.
 
 ## Proposed behavior
 
@@ -58,9 +60,8 @@ promise cleanup after a host crash or portable termination of every descendant.
 ## Related work
 
 The [launcher reuse cleanup task](../pulls/1221-launcher-reuse-cleanup.md)
-addresses a standalone launcher waiting on a process it did not start. Resolve
-that ownership edge case once in the lifecycle implementation; this proposal
-adds the public composition for a configured launch.
+is implemented and covers a standalone launcher waiting on a process it did not
+start. This proposal adds the public composition for a configured launch.
 
 Automatic browser discovery, fresh default profiles, and automatic-launch
 ownership are existing functionality and should be reused.

@@ -67,14 +67,16 @@ type localBrowserProcess struct {
 	done     chan struct{}
 }
 
-func ownLocalBrowserProcess(l *launcher.Launcher) *localBrowserProcess {
+func ownLocalBrowserProcess(ctx context.Context, l *launcher.Launcher) *localBrowserProcess {
 	p := &localBrowserProcess{
 		launcher: l,
 		done:     make(chan struct{}),
 	}
+	stop := context.AfterFunc(ctx, p.shutdown)
 	go func() {
 		l.Cleanup()
 		close(p.done)
+		stop()
 	}()
 	return p
 }
@@ -174,7 +176,16 @@ func (b *Browser) NoDefaultDevice() *Browser {
 
 // Connect to the browser and start to control it.
 // If it fails to connect, it tries to launch an installed local browser.
+// A browser launched by Connect is stopped when this context is canceled or
+// its connection ends. Context clones created after Connect do not own its lifetime.
 func (b *Browser) Connect() error {
+	connected := false
+	defer func() {
+		if !connected {
+			b.process.shutdown()
+		}
+	}()
+
 	if b.client == nil {
 		u := b.controlURL
 		if u == "" {
@@ -182,17 +193,15 @@ func (b *Browser) Connect() error {
 			var err error
 			u, err = l.Launch()
 			if l.PID() != 0 {
-				b.process = ownLocalBrowserProcess(l)
+				b.process = ownLocalBrowserProcess(b.ctx, l)
 			}
 			if err != nil {
-				b.process.shutdown()
 				return err
 			}
 		}
 
 		c, err := cdp.StartWithURL(b.ctx, u, nil)
 		if err != nil {
-			b.process.shutdown()
 			return err
 		}
 		b.client = c
@@ -207,16 +216,26 @@ func (b *Browser) Connect() error {
 	}
 
 	err := proto.TargetSetDiscoverTargets{Discover: true}.Call(b)
-	if err != nil {
-		b.process.shutdown()
-	}
+	connected = err == nil
 	return err
 }
 
-// Close the browser.
+// Close the browser. For an automatically launched browser, Close allows five
+// seconds for graceful shutdown independently of the current operation context,
+// then kills the owned process and waits for its temporary profile cleanup.
+// Closing an incognito browser disposes only that browser context.
 func (b *Browser) Close() error {
 	if b.BrowserContextID == "" {
-		defer b.process.shutdown()
+		if b.process != nil {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(b.ctx), 5*time.Second)
+			defer cancel()
+			// Kill on timeout even if a blocked transport write prevents the CDP
+			// request from observing its context cancellation.
+			stop := context.AfterFunc(ctx, b.process.shutdown)
+			defer stop()
+			defer b.process.shutdown()
+			b = b.Context(ctx)
+		}
 		return proto.BrowserClose{}.Call(b)
 	}
 	return proto.TargetDisposeBrowserContext{BrowserContextID: b.BrowserContextID}.Call(b)
@@ -451,6 +470,7 @@ func (b *Browser) initEvents() {
 
 	go func() {
 		defer cancel()
+		defer b.process.shutdown()
 		for e := range event {
 			b.event.Publish(&Message{
 				SessionID: proto.TargetSessionID(e.SessionID),

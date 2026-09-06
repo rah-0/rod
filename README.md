@@ -24,6 +24,9 @@ A high-level Go driver for the Chrome DevTools Protocol, built for browser autom
 - Go 1.27.1 or later
 - Chrome, Chromium, or Edge installed locally
 
+See the [platform support matrix](doc/PLATFORM_SUPPORT.md) for exact tested OS,
+CPU, browser, and Go versions, plus known cleanup limitations on other systems.
+
 Rod never downloads a browser or helper executable. Use `launcher.Launcher.Bin`
 when an explicit browser path is required. Local launches use a fresh temporary
 automation profile by default; using an installed browser does not require
@@ -92,15 +95,21 @@ bash scripts/check.sh fix
 ```
 
 The second command prints advisory `go fix -diff` suggestions for review; it
-does not apply them. Review callback panic behavior and protocol encoding before
-applying suggestions. The [modernization record](doc/MODERNIZATION.md) explains
-the retained exceptions.
+does not apply them. Review protocol encoding before applying suggestions, and
+keep explicit `WaitGroup.Add`/`Done` calls around callbacks that may panic or call
+`runtime.Goexit`.
 
 Run the root and e2e test suites with an installed browser:
 
 ```sh
 bash scripts/check.sh browser
 ```
+
+The test runner runs packages and test cases sequentially (`-p=1 -parallel=1`).
+The root suite reuses one browser, retires it after a failed test, and bounds
+graceful shutdown before killing owned processes and removing profiles. Root and
+e2e browser cases stay sequential even with a higher `-parallel` setting. The
+cleanup benchmark also runs one browser lifecycle at a time.
 
 Live-site documentation examples run separately with `bash scripts/check.sh live`.
 Tests store screenshots, PDFs, and failed-test CDP logs in `t.ArtifactDir()`.

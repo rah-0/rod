@@ -18,6 +18,8 @@ import (
 
 var _ io.Writer = &URLParser{}
 
+const maxBrowserOutput = 64 * 1024
+
 // URLParser to get control url from stderr.
 type URLParser struct {
 	URL    chan string
@@ -31,7 +33,7 @@ type URLParser struct {
 // NewURLParser instance.
 func NewURLParser() *URLParser {
 	return &URLParser{
-		URL:  make(chan string),
+		URL:  make(chan string, 1),
 		lock: &sync.Mutex{},
 		ctx:  context.Background(),
 	}
@@ -51,7 +53,16 @@ func (r *URLParser) Write(p []byte) (n int, err error) {
 	defer r.lock.Unlock()
 
 	if !r.done {
-		r.Buffer += string(p)
+		// Retain only recent startup diagnostics if the browser never advertises
+		// DevTools. A failing, noisy browser must not grow memory without bound.
+		if len(p) >= maxBrowserOutput {
+			r.Buffer = string(p[len(p)-maxBrowserOutput:])
+		} else {
+			if excess := len(r.Buffer) + len(p) - maxBrowserOutput; excess > 0 {
+				r.Buffer = r.Buffer[excess:]
+			}
+			r.Buffer += string(p)
+		}
 
 		str := regWS.FindString(r.Buffer)
 		if str != "" {

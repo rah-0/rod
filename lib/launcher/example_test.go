@@ -1,40 +1,42 @@
 package launcher_test
 
 import (
-	"context"
 	"os"
-	"os/exec"
+	"time"
 
 	"github.com/rah-0/rod"
 	"github.com/rah-0/rod/lib/launcher"
-	"github.com/rah-0/rod/lib/utils"
 )
 
 func Example_use_system_browser() {
 	if path, exists := launcher.LookPath(); exists {
 		l := launcher.New().Bin(path)
-		u := l.MustLaunch()
 		defer func() {
 			l.Kill()
 			l.Cleanup()
 		}()
+		u := l.MustLaunch()
 
 		browser := rod.New().ControlURL(u).MustConnect()
-		defer browser.MustClose()
+		defer func() {
+			browser.Timeout(5 * time.Second).MustClose()
+		}()
 	}
 }
 
 func Example_print_browser_CLI_output() {
 	// Pipe the browser stderr and stdout to os.Stdout .
 	l := launcher.New().Logger(os.Stdout)
-	u := l.MustLaunch()
 	defer func() {
 		l.Kill()
 		l.Cleanup()
 	}()
+	u := l.MustLaunch()
 
 	browser := rod.New().ControlURL(u).MustConnect()
-	defer browser.MustClose()
+	defer func() {
+		browser.Timeout(5 * time.Second).MustClose()
+	}()
 }
 
 func Example_custom_launch() {
@@ -44,21 +46,16 @@ func Example_custom_launch() {
 		return
 	}
 
-	// use the FormatArgs to construct args, this line is optional, you can construct the args manually
-	args := launcher.New().FormatArgs()
-
-	cmd := exec.Command(path, args...)
-
-	parser := launcher.NewURLParser()
-	cmd.Stderr = parser
-	utils.E(cmd.Start())
+	// Keep process and profile ownership when customizing the browser command.
+	l := launcher.New().Bin(path).Set("disable-gpu").Logger(os.Stdout)
 	defer func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		l.Kill()
+		l.Cleanup()
 	}()
-
-	u := launcher.MustResolveURL(context.Background(), <-parser.URL)
+	u := l.MustLaunch()
 
 	browser := rod.New().ControlURL(u).MustConnect()
-	defer browser.MustClose()
+	defer func() {
+		browser.Timeout(5 * time.Second).MustClose()
+	}()
 }

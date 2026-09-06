@@ -4,7 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export GODEBUG="${GODEBUG:+$GODEBUG,}tracebackancestors=100"
 modules=(. lib/docker lib/examples/custom-websocket lib/examples/e2e-testing)
-test_flags=(-mod=readonly -count=1 -race -cover -covermode=atomic)
+# Keep package test binaries and test cases sequential to bound browser resources.
+test_flags=(-mod=readonly -count=1 -race -cover -covermode=atomic -p=1 -parallel=1)
 
 case "${1:-pure}" in
 pure)
@@ -37,8 +38,8 @@ pure)
     go test "${test_flags[@]}" "${pure_packages[@]}"
     GOWORK=off go test "${test_flags[@]}" "${pure_packages[@]}"
     go test "${test_flags[@]}" -run '^Test(WebSocket(HandshakeLifecycle|EstablishmentContext|TLSCancellation|Err|Header)|Client(MarshalError|MalformedMessage|ResponseBeforeEOF|PendingResponseRouting)|SlowSend|CancelCallLeak|ConcurrentCall|Format|ContextDestroyedErrors)$' ./lib/cdp
-    go test "${test_flags[@]}" -run '^Test(ResolveURL.*|TestOpen)$' ./lib/launcher
-    go test "${test_flags[@]}" -run '^Test(LongestCommonSubsequence|SaveFileDefaultPaths|Typed|ShapesEqual)' .
+    go test "${test_flags[@]}" -run '^Test(ResolveURL.*|TestOpen|CleanupWithoutProcess|CleanupReusedBrowser|URLParserBoundedOutput|GuardianCleansDescendants|GuardianParentExit|GuardianManagedProfileCleanup|GuardianScratchCleanupOnStartupFailure|GuardianTemporaryCleanupConfined|GuardianTemporaryDirectoryResolvesSymlinks|ManagerLaunchStopsWhenRequestIsCanceled)$' ./lib/launcher
+    go test "${test_flags[@]}" -run '^Test(LongestCommonSubsequence|SaveFileDefaultPaths|Typed|ShapesEqual|OwnedBrowserClose.*|AttachedBrowserCloseContext|MonitorCancellation)' .
     ;;
 fix)
     # Review advisory suggestions for callback panic behavior and protocol encoding.

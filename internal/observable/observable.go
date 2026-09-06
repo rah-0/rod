@@ -47,17 +47,15 @@ func (o *Observable[T]) Subscribe(ctx context.Context) <-chan T {
 	o.subscribers[events] = write
 	o.mu.Unlock()
 
-	go func() {
-		select {
-		case <-ctx.Done():
-		case <-o.ctx.Done():
-		}
-
+	stop := context.AfterFunc(o.ctx, cancel)
+	context.AfterFunc(ctx, func() {
+		// Release the root callback when the subscription ends first. If it
+		// has already started, its only action is the concurrency-safe cancel.
+		stop()
 		o.mu.Lock()
 		delete(o.subscribers, events)
 		o.mu.Unlock()
-		cancel()
-	}()
+	})
 
 	return events
 }
