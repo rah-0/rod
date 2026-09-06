@@ -53,12 +53,13 @@ func (b *Browser) Sleeper(sleeper func() utils.Sleeper) *Browser {
 	return &newObj
 }
 
-// Context returns a clone with the specified ctx for chained sub-operations.
+// Context returns a view using ctx for chained operations, including input.
+// Views share their target session, caches, and physical input state. Session
+// termination still ends requests and events even when ctx remains live.
 func (p *Page) Context(ctx context.Context) *Page {
-	p.helpersLock.Lock()
 	newObj := *p
-	p.helpersLock.Unlock()
 	newObj.ctx = ctx
+	newObj.rebindInput()
 	return &newObj
 }
 
@@ -88,9 +89,9 @@ func (p *Page) WithCancel() (*Page, func()) {
 
 // Sleeper returns a clone with the specified sleeper for chained sub-operations.
 func (p *Page) Sleeper(sleeper func() utils.Sleeper) *Page {
-	newObj := *p
+	newObj := p.Context(p.ctx)
 	newObj.sleeper = sleeper
-	return &newObj
+	return newObj
 }
 
 // Context returns a clone with the specified ctx for chained sub-operations.
@@ -129,4 +130,19 @@ func (el *Element) Sleeper(sleeper func() utils.Sleeper) *Element {
 	newObj := *el
 	newObj.sleeper = sleeper
 	return &newObj
+}
+
+// contextWithSession links cancellation only for the operation or subscription,
+// so creating lightweight Page views never retains lifetime callbacks.
+func contextWithSession(ctx, session context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	if session == nil {
+		return ctx, cancel
+	}
+	stop := context.AfterFunc(session, cancel)
+	if session.Err() != nil {
+		cancel()
+	}
+	stopCaller := context.AfterFunc(ctx, func() { stop() })
+	return ctx, func() { stopCaller(); stop(); cancel() }
 }

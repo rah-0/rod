@@ -309,7 +309,7 @@ type BrowserSetDownloadBehavior struct {
 	DownloadPath string `json:"downloadPath,omitempty"`
 
 	// EventsEnabled (optional) Whether to emit download events (defaults to false).
-	EventsEnabled bool `json:"eventsEnabled,omitempty"`
+	EventsEnabled *bool `json:"eventsEnabled,omitempty"`
 }
 
 // ProtoReq name.
@@ -427,7 +427,7 @@ type BrowserGetHistograms struct {
 	Query string `json:"query,omitempty"`
 
 	// Delta (optional) If true, retrieve delta since last delta call.
-	Delta bool `json:"delta,omitempty"`
+	Delta *bool `json:"delta,omitempty"`
 }
 
 // ProtoReq name.
@@ -451,7 +451,7 @@ type BrowserGetHistogram struct {
 	Name string `json:"name"`
 
 	// Delta (optional) If true, retrieve delta since last delta call.
-	Delta bool `json:"delta,omitempty"`
+	Delta *bool `json:"delta,omitempty"`
 }
 
 // ProtoReq name.

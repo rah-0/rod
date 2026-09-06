@@ -3,6 +3,7 @@
 package proto
 
 import (
+	"math"
 	"time"
 )
 
@@ -93,6 +94,9 @@ func (q DOMQuad) Center() Point {
 // Area of the polygon
 // https://en.wikipedia.org/wiki/Polygon#Area
 func (q DOMQuad) Area() float64 {
+	if q.Len() < 3 {
+		return 0
+	}
 	area := 0.0
 	l := len(q)/2 - 1
 
@@ -101,7 +105,7 @@ func (q DOMQuad) Area() float64 {
 	}
 	area += q[l*2]*q[1] - q[0]*q[l*2+1]
 
-	return area / 2
+	return math.Abs(area) / 2
 }
 
 // OnePointInside the shape.
@@ -166,16 +170,24 @@ func (p *InputTouchPoint) MoveTo(x, y float64) {
 func CookiesToParams(cookies []*NetworkCookie) []*NetworkCookieParam {
 	list := []*NetworkCookieParam{}
 	for _, c := range cookies {
+		var sourcePort *int
+		if c.SourcePort != 0 {
+			sourcePort = new(c.SourcePort)
+		}
 		list = append(list, &NetworkCookieParam{
-			Name:     c.Name,
-			Value:    c.Value,
-			Domain:   c.Domain,
-			Path:     c.Path,
-			Secure:   c.Secure,
-			HTTPOnly: c.HTTPOnly,
-			SameSite: c.SameSite,
-			Expires:  c.Expires,
-			Priority: c.Priority,
+			Name:         c.Name,
+			Value:        c.Value,
+			Domain:       c.Domain,
+			Path:         c.Path,
+			Secure:       c.Secure,
+			HTTPOnly:     c.HTTPOnly,
+			SameSite:     c.SameSite,
+			Expires:      c.Expires,
+			Priority:     c.Priority,
+			SameParty:    c.SameParty,
+			SourceScheme: c.SourceScheme,
+			SourcePort:   sourcePort,
+			PartitionKey: c.PartitionKey,
 		})
 	}
 	return list

@@ -165,7 +165,7 @@ func (m TracingRecordClockSyncMarker) Call(c Client) error {
 // TracingRequestMemoryDump (experimental) Request a global memory dump.
 type TracingRequestMemoryDump struct {
 	// Deterministic (optional) Enables more deterministic results by forcing garbage collection
-	Deterministic bool `json:"deterministic,omitempty"`
+	Deterministic *bool `json:"deterministic,omitempty"`
 
 	// LevelOfDetail (optional) Specifies level of details in memory dump. Defaults to "detailed".
 	LevelOfDetail TracingMemoryDumpLevelOfDetail `json:"levelOfDetail,omitempty"`

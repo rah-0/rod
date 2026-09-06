@@ -3,11 +3,16 @@ package rod
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/rah-0/rod/lib/jsonvalue"
 	"github.com/rah-0/rod/lib/proto"
@@ -33,8 +38,13 @@ func (p *Page) HijackRequests() *HijackRouter {
 
 // HijackRouter context.
 type HijackRouter struct {
-	run      func()
+	run      func() error
 	stop     func()
+	stopOnce sync.Once
+	stopErr  error
+	setupErr error
+	mu       sync.Mutex
+	stopped  bool
 	handlers []*hijackHandler
 	enable   *proto.FetchEnable
 	client   proto.Client
@@ -61,19 +71,26 @@ func (r *HijackRouter) initEvents() *HijackRouter {
 		sessionID = tsa.GetSessionID()
 	}
 
-	eventCtx, cancel := context.WithCancel(ctx)
-	r.stop = cancel
-
-	_ = r.enable.Call(r.client)
+	eventCtx, cancel := context.WithCancelCause(ctx)
+	r.stop = func() { cancel(errWaitCompleted) }
+	if err := r.enable.Call(r.client); err != nil {
+		r.setupErr = errors.Join(err, r.Stop())
+		r.run = func() error { return r.setupErr }
+		return r
+	}
 
 	r.run = r.browser.Context(eventCtx).eachEvent(sessionID, On(func(e *proto.FetchRequestPaused, _ proto.TargetSessionID) bool {
 		go func() {
 			ctx := r.new(eventCtx, e)
-			for _, h := range r.handlers {
-				if !h.regexp.MatchString(e.Request.URL) {
+			r.mu.Lock()
+			handlers := slices.Clone(r.handlers)
+			r.mu.Unlock()
+			for _, h := range handlers {
+				if !h.regexp.MatchString(e.Request.URL) || (h.resourceType != "" && h.resourceType != e.ResourceType) {
 					continue
 				}
 
+				ctx.Skip = false
 				h.handler(ctx)
 
 				if ctx.continueRequest != nil {
@@ -100,8 +117,13 @@ func (r *HijackRouter) initEvents() *HijackRouter {
 				err := ctx.Response.payload.Call(r.client)
 				if err != nil {
 					ctx.OnError(err)
-					return
 				}
+				return
+			}
+			// A route may have been removed after Chrome paused this request.
+			// Continue unmatched or explicitly skipped requests.
+			if err := (proto.FetchContinueRequest{RequestID: e.RequestID}).Call(r.client); err != nil {
+				ctx.OnError(err)
 			}
 		}()
 
@@ -110,45 +132,78 @@ func (r *HijackRouter) initEvents() *HijackRouter {
 	return r
 }
 
-// Add a hijack handler to router, the doc of the pattern is the same as "proto.FetchRequestPattern.URLPattern".
+// Add a hijack handler using FetchRequestPattern.URLPattern glob syntax.
+// '?' matches exactly one character, as documented by CDP. Chrome versions that
+// also pause a zero-character match have that request continued without handling.
+// Failed updates leave the router's previous handlers and filters intact.
 func (r *HijackRouter) Add(pattern string, resourceType proto.NetworkResourceType, handler func(*Hijack)) error {
-	r.enable.Patterns = append(r.enable.Patterns, &proto.FetchRequestPattern{
+	if handler == nil {
+		return errors.New("hijack handler is nil")
+	}
+	reg, err := regexp.Compile(proto.PatternToReg(pattern))
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.setupErr != nil {
+		return r.setupErr
+	}
+	if r.stopped {
+		return errors.New("hijack router stopped")
+	}
+	enable := *r.enable
+	enable.Patterns = append(slices.Clone(r.enable.Patterns), &proto.FetchRequestPattern{
 		URLPattern:   pattern,
 		ResourceType: resourceType,
 	})
-
-	reg := regexp.MustCompile(proto.PatternToReg(pattern))
+	if err := enable.Call(r.client); err != nil {
+		return err
+	}
 
 	r.handlers = append(r.handlers, &hijackHandler{
-		pattern: pattern,
-		regexp:  reg,
-		handler: handler,
+		pattern:      pattern,
+		resourceType: resourceType,
+		regexp:       reg,
+		handler:      handler,
 	})
-
-	return r.enable.Call(r.client)
+	r.enable = &enable
+	return nil
 }
 
 // Remove handler via the pattern.
 func (r *HijackRouter) Remove(pattern string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.setupErr != nil {
+		return r.setupErr
+	}
+	if r.stopped {
+		return errors.New("hijack router stopped")
+	}
 	patterns := []*proto.FetchRequestPattern{}
 	handlers := []*hijackHandler{}
 	for _, h := range r.handlers {
 		if h.pattern != pattern {
-			patterns = append(patterns, &proto.FetchRequestPattern{URLPattern: h.pattern})
+			patterns = append(patterns, &proto.FetchRequestPattern{URLPattern: h.pattern, ResourceType: h.resourceType})
 			handlers = append(handlers, h)
 		}
 	}
-	r.enable.Patterns = patterns
+	enable := *r.enable
+	enable.Patterns = patterns
+	if err := enable.Call(r.client); err != nil {
+		return err
+	}
+	r.enable = &enable
 	r.handlers = handlers
-
-	return r.enable.Call(r.client)
+	return nil
 }
 
 // new context.
 func (r *HijackRouter) new(ctx context.Context, e *proto.FetchRequestPaused) *Hijack {
 	headers := http.Header{}
 	for k, v := range e.Request.Headers {
-		headers[k] = []string{v.String()}
+		headers.Set(k, v.String())
 	}
 
 	u, _ := url.Parse(e.Request.URL)
@@ -156,15 +211,24 @@ func (r *HijackRouter) new(ctx context.Context, e *proto.FetchRequestPaused) *Hi
 	req := &http.Request{
 		Method: e.Request.Method,
 		URL:    u,
-		Body:   io.NopCloser(strings.NewReader(e.Request.PostData)),
 		Header: headers,
+	}
+	request := &HijackRequest{event: e, req: req.WithContext(ctx)}
+	if e.Request.HasPostData || e.Request.PostData != "" || e.Request.PostDataEntries != nil {
+		body := []byte(e.Request.PostData)
+		if len(e.Request.PostDataEntries) != 0 {
+			body = nil
+			for _, entry := range e.Request.PostDataEntries {
+				if entry != nil {
+					body = append(body, entry.Bytes...)
+				}
+			}
+		}
+		request.SetBody(body)
 	}
 
 	return &Hijack{
-		Request: &HijackRequest{
-			event: e,
-			req:   req.WithContext(ctx),
-		},
+		Request: request,
 		Response: &HijackResponse{
 			payload: &proto.FetchFulfillRequest{
 				ResponseCode: 200,
@@ -180,22 +244,41 @@ func (r *HijackRouter) new(ctx context.Context, e *proto.FetchRequestPaused) *Hi
 	}
 }
 
-// Run the router, after you call it, you shouldn't add new handler to it.
-func (r *HijackRouter) Run() {
-	r.run()
+// Run waits until Stop, cancellation, or a connection error, then releases Fetch.
+// Setup, event-wait, and cleanup errors are returned. Handler errors use OnError.
+func (r *HijackRouter) Run() error {
+	if r.setupErr != nil {
+		return r.setupErr
+	}
+	return errors.Join(r.run(), r.Stop())
 }
 
 // Stop the router.
 func (r *HijackRouter) Stop() error {
-	r.stop()
-	return proto.FetchDisable{}.Call(r.client)
+	r.stopOnce.Do(func() {
+		r.mu.Lock()
+		r.stopped = true
+		r.mu.Unlock()
+		if r.stop != nil {
+			r.stop()
+		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.browser.ctx), 5*time.Second)
+		defer cancel()
+		var session string
+		if client, ok := r.client.(proto.Sessionable); ok {
+			session = string(client.GetSessionID())
+		}
+		_, r.stopErr = r.client.Call(ctx, session, (proto.FetchDisable{}).ProtoReq(), proto.FetchDisable{})
+	})
+	return r.stopErr
 }
 
 // hijackHandler to handle each request that match the regexp.
 type hijackHandler struct {
-	pattern string
-	regexp  *regexp.Regexp
-	handler func(*Hijack)
+	pattern      string
+	resourceType proto.NetworkResourceType
+	regexp       *regexp.Regexp
+	handler      func(*Hijack)
 }
 
 // Hijack context.
@@ -233,8 +316,12 @@ func (h *Hijack) LoadResponse(client *http.Client, loadBody bool) error {
 	h.Response.RawResponse = res
 
 	for k, vs := range res.Header {
-		for _, v := range vs {
-			h.Response.SetHeader(k, v)
+		if len(vs) == 0 {
+			continue
+		}
+		h.Response.SetHeader(k, vs[0])
+		for _, v := range vs[1:] {
+			h.Response.AddHeader(k, v)
 		}
 	}
 
@@ -253,6 +340,7 @@ func (h *Hijack) LoadResponse(client *http.Client, loadBody bool) error {
 type HijackRequest struct {
 	event *proto.FetchRequestPaused
 	req   *http.Request
+	body  []byte
 }
 
 // Type of the resource.
@@ -262,28 +350,34 @@ func (ctx *HijackRequest) Type() proto.NetworkResourceType {
 
 // Method of the request.
 func (ctx *HijackRequest) Method() string {
-	return ctx.event.Request.Method
+	return ctx.req.Method
 }
 
 // URL of the request.
 func (ctx *HijackRequest) URL() *url.URL {
-	u, _ := url.Parse(ctx.event.Request.URL)
-	return u
+	return ctx.req.URL
 }
 
 // Header via a key.
 func (ctx *HijackRequest) Header(key string) string {
-	return ctx.event.Request.Headers[key].String()
+	return ctx.req.Header.Get(key)
 }
 
-// Headers of request.
+// Headers returns a snapshot of the outgoing request headers. Use Req().Header
+// to modify them.
 func (ctx *HijackRequest) Headers() proto.NetworkHeaders {
-	return ctx.event.Request.Headers
+	headers := make(proto.NetworkHeaders, len(ctx.req.Header))
+	for key, values := range ctx.req.Header {
+		headers[key] = jsonvalue.New(strings.Join(values, "\n"))
+	}
+	return headers
 }
 
-// Body of the request, devtools API doesn't support binary data yet, only string can be captured.
+// Body returns the captured or SetBody replacement bytes as a Go string, which
+// preserves binary data. Bytes omitted by the browser, such as unavailable file
+// contents, cannot be recovered.
 func (ctx *HijackRequest) Body() string {
-	return ctx.event.Request.PostData
+	return string(ctx.body)
 }
 
 // JSONBody of the request.
@@ -302,7 +396,8 @@ func (ctx *HijackRequest) SetContext(c context.Context) *HijackRequest {
 	return ctx
 }
 
-// SetBody of the request, if obj is []byte or string, raw body will be used, else it will be encoded as json.
+// SetBody replaces the body and its replay function and content length. Byte
+// slices and strings are used directly as data; other values are JSON encoded.
 func (ctx *HijackRequest) SetBody(obj any) *HijackRequest {
 	var b []byte
 
@@ -315,7 +410,19 @@ func (ctx *HijackRequest) SetBody(obj any) *HijackRequest {
 		b = utils.MustToJSONBytes(body)
 	}
 
-	ctx.req.Body = io.NopCloser(bytes.NewBuffer(b))
+	ctx.body = bytes.Clone(b)
+	body := ctx.body
+	ctx.req.GetBody = func() (io.ReadCloser, error) {
+		if len(body) == 0 {
+			return http.NoBody, nil
+		}
+		return io.NopCloser(bytes.NewReader(body)), nil
+	}
+	ctx.req.Body, _ = ctx.req.GetBody()
+	ctx.req.ContentLength = int64(len(body))
+	if ctx.req.Header.Get("Content-Length") != "" {
+		ctx.req.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	}
 
 	return ctx
 }
@@ -343,7 +450,7 @@ func (ctx *HijackResponse) Body() string {
 }
 
 // Headers returns the clone of response headers.
-// If you want to modify the response headers use HijackResponse.SetHeader .
+// Use SetHeader to replace values or AddHeader to retain repeated values.
 func (ctx *HijackResponse) Headers() http.Header {
 	header := http.Header{}
 
@@ -354,26 +461,15 @@ func (ctx *HijackResponse) Headers() http.Header {
 	return header
 }
 
-// SetHeader of the payload via key-value pairs.
+// SetHeader replaces all values for each case-insensitive header name.
 func (ctx *HijackResponse) SetHeader(pairs ...string) *HijackResponse {
-	headerIndex := make(map[string]int, len(ctx.payload.ResponseHeaders))
-	for i, header := range ctx.payload.ResponseHeaders {
-		headerIndex[header.Name] = i
-	}
-
 	for i := 0; i < len(pairs); i += 2 {
 		name := pairs[i]
 		value := pairs[i+1]
-
-		if idx, exists := headerIndex[name]; exists {
-			ctx.payload.ResponseHeaders[idx].Value = value
-		} else {
-			ctx.payload.ResponseHeaders = append(ctx.payload.ResponseHeaders, &proto.FetchHeaderEntry{
-				Name:  name,
-				Value: value,
-			})
-			headerIndex[name] = len(ctx.payload.ResponseHeaders) - 1
-		}
+		ctx.payload.ResponseHeaders = slices.DeleteFunc(ctx.payload.ResponseHeaders, func(header *proto.FetchHeaderEntry) bool {
+			return strings.EqualFold(header.Name, name)
+		})
+		ctx.AddHeader(name, value)
 	}
 	return ctx
 }
@@ -411,45 +507,52 @@ func (ctx *HijackResponse) Fail(reason proto.NetworkErrorReason) *HijackResponse
 
 // HandleAuth for the next basic HTTP authentication.
 // It will prevent the popup that requires user to input user name and password.
+// Call the returned wait function to handle authentication and restore the
+// previous Fetch configuration. It returns setup, wait, and cleanup errors.
 // Ref: https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication
 func (b *Browser) HandleAuth(username, password string) func() error {
-	enable := b.DisableDomain("", &proto.FetchEnable{})
-	disable := b.EnableDomain("", &proto.FetchEnable{
-		HandleAuthRequests: true,
-	})
-
-	paused := &proto.FetchRequestPaused{}
-	auth := &proto.FetchAuthRequired{}
-
+	previous := &proto.FetchEnable{}
+	enabled := b.LoadState("", previous)
 	ctx, cancel := context.WithCancel(b.ctx)
-	waitPaused := b.Context(ctx).WaitEvent(paused)
-	waitAuth := b.Context(ctx).WaitEvent(auth)
+	b = b.Context(ctx)
+	setupErr := (proto.FetchEnable{HandleAuthRequests: new(true)}).Call(b)
+	var operationErr error
+	var wait func() error
+	if setupErr == nil {
+		wait = b.eachEvent("",
+			On(func(paused *proto.FetchRequestPaused, _ proto.TargetSessionID) bool {
+				operationErr = (proto.FetchContinueRequest{RequestID: paused.RequestID}).Call(b)
+				return operationErr != nil
+			}),
+			On(func(auth *proto.FetchAuthRequired, _ proto.TargetSessionID) bool {
+				operationErr = (proto.FetchContinueWithAuth{
+					RequestID: auth.RequestID,
+					AuthChallengeResponse: &proto.FetchAuthChallengeResponse{
+						Response: proto.FetchAuthChallengeResponseResponseProvideCredentials,
+						Username: username,
+						Password: password,
+					},
+				}).Call(b)
+				return true
+			}),
+		)
+	}
 
 	return func() (err error) {
-		defer enable()
-		defer disable()
-		defer cancel()
-
-		waitPaused()
-
-		err = proto.FetchContinueRequest{
-			RequestID: paused.RequestID,
-		}.Call(b)
-		if err != nil {
-			return
+		defer func() {
+			cancel()
+			cleanup, stop := context.WithTimeout(context.WithoutCancel(b.ctx), 5*time.Second)
+			defer stop()
+			if enabled {
+				err = errors.Join(err, previous.Call(b.Context(cleanup)))
+			} else {
+				err = errors.Join(err, (proto.FetchDisable{}).Call(b.Context(cleanup)))
+			}
+		}()
+		if setupErr != nil {
+			return setupErr
 		}
-
-		waitAuth()
-
-		err = proto.FetchContinueWithAuth{
-			RequestID: auth.RequestID,
-			AuthChallengeResponse: &proto.FetchAuthChallengeResponse{
-				Response: proto.FetchAuthChallengeResponseResponseProvideCredentials,
-				Username: username,
-				Password: password,
-			},
-		}.Call(b)
-
-		return
+		err = wait()
+		return errors.Join(err, operationErr)
 	}
 }

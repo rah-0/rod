@@ -3,9 +3,15 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 export GODEBUG="${GODEBUG:+$GODEBUG,}tracebackancestors=100"
-modules=(. lib/docker lib/examples/custom-websocket lib/examples/e2e-testing)
+modules=(. lib/docker examples/custom-websocket examples/e2e-testing)
 # Keep package test binaries and test cases sequential to bound browser resources.
 test_flags=(-mod=readonly -count=1 -race -cover -covermode=atomic -p=1 -parallel=1)
+
+# Join related test-name patterns while keeping package selections readable.
+test_pattern() {
+    local IFS='|'
+    printf '^Test(%s)$' "$*"
+}
 
 case "${1:-pure}" in
 pure)
@@ -37,9 +43,53 @@ pure)
         ./lib/launcher/rod-manager/...)
     go test "${test_flags[@]}" "${pure_packages[@]}"
     GOWORK=off go test "${test_flags[@]}" "${pure_packages[@]}"
-    go test "${test_flags[@]}" -run '^Test(WebSocket(HandshakeLifecycle|EstablishmentContext|TLSCancellation|Err|Header)|Client(MarshalError|MalformedMessage|ResponseBeforeEOF|PendingResponseRouting)|SlowSend|CancelCallLeak|ConcurrentCall|Format|ContextDestroyedErrors)$' ./lib/cdp
-    go test "${test_flags[@]}" -run '^Test(ResolveURL.*|TestOpen|CleanupWithoutProcess|CleanupReusedBrowser|URLParserBoundedOutput|GuardianCleansDescendants|GuardianParentExit|GuardianManagedProfileCleanup|GuardianScratchCleanupOnStartupFailure|GuardianTemporaryCleanupConfined|GuardianTemporaryDirectoryResolvesSymlinks|ManagerLaunchStopsWhenRequestIsCanceled)$' ./lib/launcher
-    go test "${test_flags[@]}" -run '^Test(LongestCommonSubsequence|SaveFileDefaultPaths|Typed|ShapesEqual|OwnedBrowserClose.*|AttachedBrowserCloseContext|MonitorCancellation)' .
+    # These mixed packages also contain browser tests. Select deterministic
+    # protocol, local HTTP, and helper-process fixtures explicitly.
+    cdp_tests=(
+        'WebSocket(HandshakeLifecycle|EstablishmentContext|TLSCancellation|Err|Header)'
+        'WebSocket(SendContext|CanceledSendPreservesTransport|ControlReplyTimeout)'
+        'WebSocketProtocol(Handshake|Frames|Close|MalformedFrames)'
+        'Client(MarshalError|MalformedMessage|ResponseBeforeEOF|PendingResponseRouting)'
+        'Client(CloseUnreadEvent|WebSocketPeerClose)'
+        'SlowSend|CancelCallLeak|ConcurrentCall|Format|ContextDestroyedErrors'
+    )
+    launcher_tests=(
+        'ResolveURL.*|TestOpen'
+        'Cleanup(WithoutProcess|ReusedBrowser|ContextBudget)'
+        'OutputTail|OwnedProfileCollision|URLParserBoundedOutput'
+        'ManagedInitializationCancellation|FormatArgsPreservesProfileOwnership|FreeBSDDiscovery'
+        'Guardian(CleansDescendants|ParentExit|ManagedProfileCleanup|ScratchCleanupOnStartupFailure)'
+        'Guardian(TemporaryCleanupConfined|TemporaryDirectoryResolvesSymlinks)'
+        'ManagerLaunchStopsWhenRequestIsCanceled|ManagerAuthentication'
+    )
+    rod_tests=(
+        'LongestCommonSubsequence|SaveFileDefaultPaths|ShapesEqual|Typed.*'
+        'OwnedBrowserClose(ExpiredContext|Timeout)|AttachedBrowserCloseContext|MonitorCancellation'
+        'ConfiguredBrowser(LaunchFailures|LaunchConflicts|CleanupBudget|OutputLimit|DiscoveryFailureClosesTransport)'
+        'Diagnostics(Lifecycle|SetupFailure|IncompleteStop|SharedDomains|CorrelationAndRevocation)'
+        'Diagnostics(RetentionAndConcurrentSnapshots|ValueFormatting|DomainTransitionCancellation|ExceptionPreservesStackURL)'
+        'Shared(DomainProtocolScope|LifecycleSetting)|EventWaitReportsSetupAndCancellation'
+        'Domain(SetupAndRestoreErrors|DisableRestoresConfiguration|RestoreBounded)|SetExtraHeadersDomainErrors'
+        'BrowserDisconnectClosesUnreadEvent|SessionLateReplyDoesNotRestoreState'
+        'Page(SessionViewsAndEviction|AttachLockCancellation|CloseRequiresClosureEvidence|WaitNavigationIgnoresChildFrames)'
+        'PageCloseAcknowledgementAfterSessionTermination'
+        'PageSessionEndClosesUnreadEvent'
+        'KeyboardStateCommitsAfterSuccess|KeyActionsFailureReleasesOwnedKeys'
+        'Download(ContextAndGUID|UnusedCancellationRestoresBehavior|SetupFailureRollsBack)'
+        'Download(BrowserCancellation|DistinctContexts|DisposedContextIsNotDefault)'
+        'Download(SharedEventsRestoration|FailedSetupPreservesSharedEvents)'
+        'Page(ReloadWaitErrors|HandleDialogWaitErrors|HandleFileDialogLifecycle)'
+        'StreamReader(FinalData|DrainsBufferedDataBeforeError|AdvancesExplicitOffset)'
+        'ElementEqualReturnsEvaluationError'
+        'JSHelperCache(InvalidationAcrossViews|UnsetInvalidatesSharedContext)'
+        'FrameContextErrorPreservesCause'
+        'Hijack(RepeatedHeaders|ReplayableBodies|RouteMutation|RouteDispatch|LifecycleErrors)'
+        'HandleAuthErrorsAndRestore'
+    )
+    go test "${test_flags[@]}" -run "$(test_pattern "${cdp_tests[@]}")" ./lib/cdp
+    go test "${test_flags[@]}" -run "$(test_pattern "${launcher_tests[@]}")" ./lib/launcher
+    go test "${test_flags[@]}" -run "$(test_pattern "${rod_tests[@]}")" .
+    go test "${test_flags[@]}" -run '^Test(HTMLHandler|InvalidConfiguration|SetupRollback)$' ./lib/fixture
     ;;
 fix)
     # Review advisory suggestions for callback panic behavior and protocol encoding.
@@ -63,9 +113,17 @@ fix)
         fi
     done
     ;;
+examples)
+    go test "${test_flags[@]}" ./examples/...
+    for module in examples/custom-websocket examples/e2e-testing; do
+        (cd "$module" && go test "${test_flags[@]}" ./...)
+    done
+    ;;
 browser)
     go test "${test_flags[@]}" -run '^Test' ./...
-    go test "${test_flags[@]}" ./lib/examples/e2e-testing/...
+    for module in examples/custom-websocket examples/e2e-testing; do
+        (cd "$module" && go test "${test_flags[@]}" ./...)
+    done
     ;;
 live)
     go test "${test_flags[@]}" -run '^Example' .
@@ -74,7 +132,7 @@ docker)
     go test "${test_flags[@]}" ./lib/docker/...
     ;;
 *)
-    printf 'usage: %s [pure|fix|browser|live|docker]\n' "$0" >&2
+    printf 'usage: %s [pure|fix|examples|browser|live|docker]\n' "$0" >&2
     exit 2
     ;;
 esac

@@ -1257,7 +1257,7 @@ type AuditsGetEncodedResponse struct {
 	Quality *float64 `json:"quality,omitempty"`
 
 	// SizeOnly (optional) Whether to only return the size information (defaults to false).
-	SizeOnly bool `json:"sizeOnly,omitempty"`
+	SizeOnly *bool `json:"sizeOnly,omitempty"`
 }
 
 // ProtoReq name.
@@ -1308,7 +1308,7 @@ func (m AuditsEnable) Call(c Client) error {
 // using Audits.issueAdded event.
 type AuditsCheckContrast struct {
 	// ReportAAA (optional) Whether to report WCAG AAA level issues. Default is false.
-	ReportAAA bool `json:"reportAAA,omitempty"`
+	ReportAAA *bool `json:"reportAAA,omitempty"`
 }
 
 // ProtoReq name.

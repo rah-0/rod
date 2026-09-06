@@ -3,9 +3,12 @@
 package rod
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rah-0/rod/lib/cdp"
@@ -14,6 +17,27 @@ import (
 	"github.com/rah-0/rod/lib/proto"
 	"github.com/rah-0/rod/lib/utils"
 )
+
+// ErrFrameContextChanged means an iframe document or renderer is no longer
+// available to this page view. Acquire a new view with [Element.Frame].
+var ErrFrameContextChanged = errors.New("iframe context changed; acquire a new view with Element.Frame")
+
+// jsHelperCache is shared by all Page views attached to the same session.
+type jsHelperCache struct {
+	sync.Mutex
+	contexts map[proto.RuntimeRemoteObjectID]map[string]proto.RuntimeRemoteObjectID
+}
+
+func (cache *jsHelperCache) addContext(id proto.RuntimeRemoteObjectID) {
+	cache.Lock()
+	defer cache.Unlock()
+	if cache.contexts == nil {
+		cache.contexts = map[proto.RuntimeRemoteObjectID]map[string]proto.RuntimeRemoteObjectID{}
+	}
+	if cache.contexts[id] == nil {
+		cache.contexts[id] = map[string]proto.RuntimeRemoteObjectID{}
+	}
+}
 
 // EvalOptions for Page.Evaluate.
 type EvalOptions struct {
@@ -135,7 +159,9 @@ func (p *Page) Evaluate(opts *EvalOptions) (res *proto.RuntimeRemoteObject, err 
 			if backoff == nil {
 				backoff = utils.BackoffSleeper(30*time.Millisecond, 3*time.Second, nil)
 			} else {
-				_ = backoff(p.ctx)
+				if err := backoff(p.ctx); err != nil {
+					return nil, err
+				}
 			}
 
 			p.unsetJSCtxID()
@@ -153,9 +179,9 @@ func (p *Page) evaluate(opts *EvalOptions) (*proto.RuntimeRemoteObject, error) {
 	}
 
 	req := proto.RuntimeCallFunctionOn{
-		AwaitPromise:        opts.AwaitPromise,
-		ReturnByValue:       opts.ByValue,
-		UserGesture:         opts.UserGesture,
+		AwaitPromise:        new(opts.AwaitPromise),
+		ReturnByValue:       new(opts.ByValue),
+		UserGesture:         new(opts.UserGesture),
 		FunctionDeclaration: opts.formatToJSFunc(),
 		Arguments:           args,
 	}
@@ -182,55 +208,118 @@ func (p *Page) evaluate(opts *EvalOptions) (*proto.RuntimeRemoteObject, error) {
 }
 
 // Expose fn to the page's window object with the name. The exposure survives reloads.
-// Call stop to unbind the fn.
+// Go errors and results that cannot be JSON-encoded reject the JavaScript promise
+// with an error message. Replies are delivered in the frame that called the function.
+// Call the idempotent stop function to remove the binding and reload script.
+// Cleanup has its own bounded context. A Go callback already running is not interrupted.
 func (p *Page) Expose(name string, fn func(jsonvalue.Value) (any, error)) (stop func() error, err error) {
+	releaseRuntime, err := p.browser.Context(p.ctx).acquireDomain(p.SessionID, proto.RuntimeEnable{})
+	if err != nil {
+		return nil, err
+	}
 	bind := "_" + utils.RandString(8)
-
-	err = proto.RuntimeAddBinding{Name: bind}.Call(p)
-	if err != nil {
-		return
-	}
-
-	_, err = p.Evaluate(Eval(js.ExposeFunc.Definition, name, bind))
-	if err != nil {
-		return
-	}
-
-	code := fmt.Sprintf(`(%s)("%s", "%s")`, js.ExposeFunc.Definition, name, bind)
-	remove, err := p.EvalOnNewDocument(code)
-	if err != nil {
-		return
-	}
-
-	p, cancel := p.WithCancel()
-
-	stop = func() error {
+	events, cancel := p.WithCancel()
+	messages := events.Event()
+	restoreRuntime := func() error {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(p.ctx), 5*time.Second)
 		defer cancel()
-		err := remove()
-		if err != nil {
-			return err
-		}
-		return proto.RuntimeRemoveBinding{Name: bind}.Call(p)
+		return releaseRuntime(ctx)
 	}
-
-	go p.EachEvent(On(func(e *proto.RuntimeBindingCalled, _ proto.TargetSessionID) bool {
-		if e.Name == bind {
-			payload := jsonvalue.NewFrom(e.Payload)
-			res, err := fn(payload.Get("req"))
-			code := fmt.Sprintf("(res, err) => %s(res, err)", payload.Get("cb").Str())
-			_, _ = p.Evaluate(Eval(code, res, err))
+	stopRestore := context.AfterFunc(events.ctx, func() { _ = restoreRuntime() })
+	var scriptID proto.PageScriptIdentifier
+	var bindingAdded bool
+	var once sync.Once
+	var cleanupErr error
+	cleanup := func() error {
+		once.Do(func() {
+			cancel()
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(p.ctx), 5*time.Second)
+			defer cancel()
+			page := p.Context(ctx)
+			if scriptID != "" {
+				cleanupErr = proto.PageRemoveScriptToEvaluateOnNewDocument{Identifier: scriptID}.Call(page)
+			}
+			if bindingAdded {
+				cleanupErr = errors.Join(cleanupErr, proto.RuntimeRemoveBinding{Name: bind}.Call(page))
+			}
+			stopRestore()
+			cleanupErr = errors.Join(cleanupErr, releaseRuntime(ctx))
+		})
+		return cleanupErr
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, cleanup())
 		}
-		return false
-	}))()
+	}()
 
-	return
+	// Subscribe before installing a callable function in the document.
+	go func() {
+		defer cancel()
+		for message := range messages {
+			var e proto.RuntimeBindingCalled
+			if !message.Load(&e) || e.Name != bind {
+				continue
+			}
+			var payload struct {
+				Request  jsonvalue.Value `json:"req"`
+				Callback string          `json:"cb"`
+			}
+			if json.Unmarshal([]byte(e.Payload), &payload) != nil || !strings.HasPrefix(payload.Callback, bind+"_cb") {
+				continue
+			}
+			result, callErr := fn(payload.Request)
+			data, marshalErr := json.Marshal(result)
+			if marshalErr != nil {
+				data = []byte("null")
+				callErr = errors.Join(callErr, fmt.Errorf("encode exposed function response: %w", marshalErr))
+			}
+			var errorMessage *string
+			if callErr != nil {
+				errorMessage = new(callErr.Error())
+			}
+			_, _ = proto.RuntimeCallFunctionOn{
+				ExecutionContextID: e.ExecutionContextID,
+				FunctionDeclaration: `function(callback, result, error) {
+				const resolve = globalThis[callback];
+				if (typeof resolve === "function") resolve(result, error);
+			}`,
+				Arguments: []*proto.RuntimeCallArgument{
+					{Value: jsonvalue.New(payload.Callback)},
+					{Value: jsonvalue.New(data)},
+					{Value: jsonvalue.New(errorMessage)},
+				},
+			}.Call(events)
+		}
+	}()
+
+	bindingAdded = true
+	if err = (proto.RuntimeAddBinding{Name: bind}).Call(p); err != nil {
+		return nil, err
+	}
+	if _, err = p.Evaluate(Eval(js.ExposeFunc.Definition, name, bind)); err != nil {
+		return nil, err
+	}
+	code := fmt.Sprintf(`(%s)(%s, %s)`, js.ExposeFunc.Definition, utils.MustToJSON(name), utils.MustToJSON(bind))
+	script, err := (proto.PageAddScriptToEvaluateOnNewDocument{Source: code}).Call(p)
+	if err != nil {
+		return nil, err
+	}
+	scriptID = script.Identifier
+	return cleanup, nil
 }
 
 func (p *Page) formatArgs(opts *EvalOptions) ([]*proto.RuntimeCallArgument, error) {
 	formatted := []*proto.RuntimeCallArgument{}
 	for _, arg := range opts.JSArgs {
 		if obj, ok := arg.(*proto.RuntimeRemoteObject); ok { // remote object
-			formatted = append(formatted, &proto.RuntimeCallArgument{ObjectID: obj.ObjectID})
+			if obj == nil {
+				formatted = append(formatted, &proto.RuntimeCallArgument{})
+			} else {
+				formatted = append(formatted, &proto.RuntimeCallArgument{
+					ObjectID: obj.ObjectID, Value: obj.Value, UnserializableValue: obj.UnserializableValue,
+				})
+			}
 		} else if obj, ok := arg.(*js.Function); ok { // js helper
 			id, err := p.ensureJSHelper(obj)
 			if err != nil {
@@ -262,7 +351,9 @@ func (p *Page) ensureJSHelper(fn *js.Function) (proto.RuntimeRemoteObjectID, err
 			return "", err
 		}
 		fnID = res.Result.ObjectID
-		p.setHelper(jsCtxID, js.Functions.Name, fnID)
+		if !p.setHelper(jsCtxID, js.Functions.Name, fnID) {
+			return "", cdp.ErrCtxNotFound
+		}
 	}
 
 	id, has := p.getHelper(jsCtxID, fn.Name)
@@ -290,35 +381,30 @@ func (p *Page) ensureJSHelper(fn *js.Function) (proto.RuntimeRemoteObjectID, err
 		}
 
 		id = res.Result.ObjectID
-		p.setHelper(jsCtxID, fn.Name, id)
+		if !p.setHelper(jsCtxID, fn.Name, id) {
+			return "", cdp.ErrCtxNotFound
+		}
 	}
 
 	return id, nil
 }
 
 func (p *Page) getHelper(jsCtxID proto.RuntimeRemoteObjectID, name string) (proto.RuntimeRemoteObjectID, bool) {
-	p.helpersLock.Lock()
-	defer p.helpersLock.Unlock()
+	p.helpers.Lock()
+	defer p.helpers.Unlock()
 
-	if p.helpers == nil {
-		p.helpers = map[proto.RuntimeRemoteObjectID]map[string]proto.RuntimeRemoteObjectID{}
-	}
-
-	list, ok := p.helpers[jsCtxID]
-	if !ok {
-		list = map[string]proto.RuntimeRemoteObjectID{}
-		p.helpers[jsCtxID] = list
-	}
-
-	id, ok := list[name]
+	id, ok := p.helpers.contexts[jsCtxID][name]
 	return id, ok
 }
 
-func (p *Page) setHelper(jsCtxID proto.RuntimeRemoteObjectID, name string, fnID proto.RuntimeRemoteObjectID) {
-	p.helpersLock.Lock()
-	defer p.helpersLock.Unlock()
-
-	p.helpers[jsCtxID][name] = fnID
+func (p *Page) setHelper(jsCtxID proto.RuntimeRemoteObjectID, name string, fnID proto.RuntimeRemoteObjectID) bool {
+	p.helpers.Lock()
+	defer p.helpers.Unlock()
+	if list := p.helpers.contexts[jsCtxID]; list != nil {
+		list[name] = fnID
+		return true
+	}
+	return false
 }
 
 // Returns the page's window object, the page can be an iframe.
@@ -330,41 +416,58 @@ func (p *Page) getJSCtxID() (proto.RuntimeRemoteObjectID, error) {
 		return *p.jsCtxID, nil
 	}
 
-	if !p.IsIframe() {
+	if !p.IsIframe() || p.SessionID != p.element.page.SessionID {
 		obj, err := proto.RuntimeEvaluate{Expression: "window"}.Call(p)
 		if err != nil {
 			return "", err
 		}
 
 		*p.jsCtxID = obj.Result.ObjectID
-		p.helpersLock.Lock()
-		p.helpers = nil
-		p.helpersLock.Unlock()
+		p.helpers.Lock()
+		p.helpers.contexts = map[proto.RuntimeRemoteObjectID]map[string]proto.RuntimeRemoteObjectID{
+			*p.jsCtxID: {},
+		}
+		p.helpers.Unlock()
 		return *p.jsCtxID, nil
 	}
 
-	node, err := p.element.Describe(1, true)
+	node, err := p.element.Context(p.ctx).Describe(1, true)
 	if err != nil {
-		return "", err
+		return "", p.frameContextError(err)
+	}
+	if node.ContentDocument == nil {
+		return "", fmt.Errorf("%w: %s", ErrFrameContextChanged, p.FrameID)
 	}
 
 	obj, err := proto.DOMResolveNode{BackendNodeID: node.ContentDocument.BackendNodeID}.Call(p)
 	if err != nil {
-		return "", err
+		return "", p.frameContextError(err)
 	}
 
-	p.helpersLock.Lock()
-	delete(p.helpers, *p.jsCtxID)
-	p.helpersLock.Unlock()
 	id, err := p.jsCtxIDByObjectID(obj.Object.ObjectID)
+	if err != nil {
+		return "", err
+	}
 	*p.jsCtxID = id
-	return *p.jsCtxID, err
+	p.helpers.addContext(id)
+	return id, nil
+}
+
+func (p *Page) frameContextError(err error) error {
+	if protocolErr, ok := errors.AsType[*cdp.Error](err); ok && protocolErr.Code == -32000 &&
+		protocolErr.Message == "Node with given id does not belong to the document" {
+		return fmt.Errorf("%w: %s: %w", ErrFrameContextChanged, p.FrameID, err)
+	}
+	return err
 }
 
 func (p *Page) unsetJSCtxID() {
 	p.jsCtxLock.Lock()
 	defer p.jsCtxLock.Unlock()
 
+	p.helpers.Lock()
+	delete(p.helpers.contexts, *p.jsCtxID)
+	p.helpers.Unlock()
 	*p.jsCtxID = ""
 }
 

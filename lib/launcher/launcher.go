@@ -4,13 +4,16 @@ package launcher
 import (
 	"context"
 	"crypto"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,12 +33,14 @@ type Launcher struct {
 	ctxCancel func()
 
 	logger io.Writer
+	output outputTail
 
 	parser             *URLParser
 	pid                int
 	exit               chan struct{}
 	processStop        func()
 	cleanupUserDataDir string
+	cleanupErr         error
 
 	profileRoot      *os.Root
 	managedProfile   *managedProfile
@@ -123,6 +128,7 @@ func New() *Launcher {
 		exit:             make(chan struct{}),
 		parser:           NewURLParser().Context(ctx),
 		logger:           io.Discard,
+		output:           outputTail{limit: maxBrowserOutput},
 		ownedUserDataDir: ownedUserDataDir,
 	}
 }
@@ -145,6 +151,7 @@ func NewUserMode() *Launcher {
 		exit:   make(chan struct{}),
 		parser: NewURLParser().Context(ctx),
 		logger: io.Discard,
+		output: outputTail{limit: maxBrowserOutput},
 	}
 }
 
@@ -176,6 +183,9 @@ func (l *Launcher) Context(ctx context.Context) *Launcher {
 // List of available flags: https://peter.sh/experiments/chromium-command-line-switches
 func (l *Launcher) Set(name flags.Flag, values ...string) *Launcher {
 	name.Check()
+	if name.NormalizeFlag() == flags.UserDataDir {
+		l.ownedUserDataDir = ""
+	}
 	l.Flags[name.NormalizeFlag()] = values
 	return l
 }
@@ -357,7 +367,7 @@ func (l *Launcher) StartURL(u string) *Launcher {
 	return l.Set("", u)
 }
 
-// FormatArgs returns the formatted arg list for cli.
+// FormatArgs returns the formatted CLI arguments without modifying launch options.
 func (l *Launcher) FormatArgs() []string {
 	execArgs := []string{}
 	for k, v := range l.Flags {
@@ -373,7 +383,7 @@ func (l *Launcher) FormatArgs() []string {
 		if k == flags.UserDataDir {
 			abs, err := filepath.Abs(v[0])
 			utils.E(err)
-			v[0] = abs
+			v = append([]string{abs}, v[1:]...)
 		}
 
 		str := "--" + string(k)
@@ -410,15 +420,41 @@ func (l *Launcher) MustLaunch() string {
 //
 // Please note launcher can only be used once.
 func (l *Launcher) Launch() (string, error) {
+	return l.launch(nil, true)
+}
+
+// LaunchNew starts a new local process, never attaching to an existing debugging
+// port. Both ctx and the launcher context can cancel startup. Managed launchers
+// are rejected. Like Launch, a launcher can be used only once.
+func (l *Launcher) LaunchNew(ctx context.Context) (string, error) {
+	if l.managed {
+		return "", ErrManagedLaunch
+	}
+	return l.launch(ctx, false)
+}
+
+func (l *Launcher) launch(ctx context.Context, reuse bool) (u string, err error) {
 	if l.hasLaunched() {
 		return "", ErrAlreadyLaunched
 	}
 
 	defer l.ctxCancel()
+	if ctx != nil {
+		startup, cancel := context.WithCancel(ctx)
+		if l.ctx.Err() != nil {
+			cancel()
+		}
+		stop := context.AfterFunc(l.ctx, cancel)
+		defer stop()
+		defer cancel()
+		l.ctx = startup
+		l.parser.Context(startup)
+	}
 	started := false
 	defer func() {
 		if !started {
-			l.removeUserDataDir()
+			l.cleanupErr = l.removeUserDataDir()
+			err = errors.Join(err, l.cleanupErr)
 			close(l.exit)
 		}
 	}()
@@ -433,21 +469,40 @@ func (l *Launcher) Launch() (string, error) {
 
 	port := l.Get(flags.RemoteDebuggingPort)
 	if port != "" && port != "0" {
-		u, err := ResolveURL(l.ctx, port)
-		if err == nil {
-			return u, nil
+		if reuse {
+			u, err := ResolveURL(l.ctx, port)
+			if err == nil {
+				return u, nil
+			}
+		} else {
+			listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", port))
+			if err != nil {
+				return "", fmt.Errorf("%w: %s: %w", ErrDebuggingPortInUse, port, err)
+			}
+			_ = listener.Close()
 		}
 	}
-	// Snapshot ownership before formatting mutates relative profile paths. Never
-	// remove a directory selected later by a caller changing launch options.
+	// Snapshot the owned path before starting the process. Never remove a
+	// directory selected later by a caller changing launch options.
 	if dir := l.Get(flags.UserDataDir); dir != "" && dir == l.ownedUserDataDir {
-		l.cleanupUserDataDir, err = filepath.Abs(dir)
+		profile, err := filepath.Abs(dir)
 		if err != nil {
 			return "", err
 		}
+		if err := os.MkdirAll(filepath.Dir(profile), 0o700); err != nil {
+			return "", err
+		}
+		// A pre-existing path belongs to somebody else, even if it happens to
+		// match the random default. Establish ownership only after creation.
+		if err := os.Mkdir(profile, 0o700); err != nil {
+			return "", err
+		}
+		l.cleanupUserDataDir = profile
 	}
 	if l.cleanupUserDataDir == "" {
-		l.setupUserPreferences()
+		if err := l.setupUserPreferences(); err != nil {
+			return "", err
+		}
 	}
 	args := l.FormatArgs()
 	cmd := exec.Command(bin, args...)
@@ -455,7 +510,7 @@ func (l *Launcher) Launch() (string, error) {
 	l.setupCmd(cmd)
 
 	l.pid, l.processStop, err = l.startProcess(cmd)
-	if err != nil {
+	if err != nil && cmd.Process == nil {
 		return "", err
 	}
 	started = true
@@ -463,21 +518,26 @@ func (l *Launcher) Launch() (string, error) {
 	go func() {
 		_ = cmd.Wait()
 		l.processStop()
-		l.removeUserDataDir()
+		l.cleanupErr = l.removeUserDataDir()
 		close(l.exit)
 	}()
 
-	u, err := l.getURL()
-	if err != nil {
-		l.Kill()
-		l.Cleanup()
-		return "", err
+	if err == nil {
+		u, err = l.getURL()
+		if err != nil && !reuse && l.ctx.Err() == nil && l.exited() {
+			// The owned API reports output through its explicitly bounded tail.
+			// Avoid embedding the parser's separate startup buffer as well.
+			err = ErrDevToolsUnavailable
+		}
+		if err == nil {
+			u, err = ResolveURL(l.ctx, u)
+		}
 	}
-
-	u, err = ResolveURL(l.ctx, u)
 	if err != nil {
 		l.Kill()
-		l.Cleanup()
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		err = errors.Join(err, l.CleanupContext(cleanup))
 	}
 	return u, err
 }
@@ -486,30 +546,28 @@ func (l *Launcher) hasLaunched() bool {
 	return !l.isLaunched.CompareAndSwap(false, true)
 }
 
-func (l *Launcher) setupUserPreferences() {
+func (l *Launcher) setupUserPreferences() error {
 	userDir := l.Get(flags.UserDataDir)
 	pref := l.Get(flags.Preferences)
-
 	if userDir == "" || pref == "" {
-		return
+		return nil
 	}
-
 	userDir, err := filepath.Abs(userDir)
-	utils.E(err)
-
+	if err != nil {
+		return err
+	}
 	profile := l.Get(flags.ProfileDir)
 	if profile == "" {
 		profile = "Default"
 	}
 	if l.profileRoot != nil {
-		utils.E(l.profileRoot.MkdirAll(profile, 0o700))
-		utils.E(l.profileRoot.WriteFile(filepath.Join(profile, "Preferences"), []byte(pref), 0o600))
-		return
+		if err := l.profileRoot.MkdirAll(profile, 0o700); err != nil {
+			return err
+		}
+		return l.profileRoot.WriteFile(filepath.Join(profile, "Preferences"), []byte(pref), 0o600)
 	}
-
 	path := filepath.Join(userDir, profile, "Preferences")
-
-	utils.E(utils.OutputFile(path, pref))
+	return utils.OutputFile(path, pref)
 }
 
 func (l *Launcher) setupCmd(cmd *exec.Cmd) {
@@ -520,8 +578,10 @@ func (l *Launcher) setupCmd(cmd *exec.Cmd) {
 	cmd.Dir = dir
 	cmd.Env = env
 
-	cmd.Stdout = io.MultiWriter(l.logger, l.parser)
-	cmd.Stderr = io.MultiWriter(l.logger, l.parser)
+	// One writer also serializes the configured logger across both streams.
+	output := io.MultiWriter(&l.output, l.logger, l.parser)
+	cmd.Stdout = output
+	cmd.Stderr = output
 	// A descendant retaining an output pipe must not keep process cleanup stuck.
 	cmd.WaitDelay = 5 * time.Second
 }
@@ -547,8 +607,13 @@ func (l *Launcher) getURL() (u string, err error) {
 	case <-l.ctx.Done():
 		err = l.ctx.Err()
 	case u = <-l.parser.URL:
+	case err = <-l.parser.errors:
 	case <-l.exit:
-		err = l.parser.Err()
+		select {
+		case err = <-l.parser.errors:
+		default:
+			err = l.parser.Err()
+		}
 	}
 	return
 }
@@ -588,8 +653,79 @@ func (l *Launcher) Cleanup() {
 	<-l.exit
 }
 
-func (l *Launcher) removeUserDataDir() {
-	if l.cleanupUserDataDir != "" {
-		_ = os.RemoveAll(l.cleanupUserDataDir)
+// CleanupContext waits for process exit and owned profile removal until ctx ends.
+// It does not start a waiter goroutine or stop a live process; call Kill first.
+// A timeout leaves ownership with the launcher, so cleanup can be checked again.
+func (l *Launcher) CleanupContext(ctx context.Context) error {
+	if !l.isLaunched.Load() {
+		return nil
 	}
+	select {
+	case <-l.exit:
+		return l.cleanupErr
+	default:
+	}
+	select {
+	case <-l.exit:
+		return l.cleanupErr
+	case <-ctx.Done():
+		return fmt.Errorf("wait for browser process %d and profile cleanup: %w", l.pid, ctx.Err())
+	}
+}
+
+// Done closes when the launch attempt and its owned process/profile cleanup end.
+// Before a launch attempt it remains open.
+func (l *Launcher) Done() <-chan struct{} { return l.exit }
+
+func (l *Launcher) removeUserDataDir() error {
+	if l.cleanupUserDataDir != "" {
+		if err := os.RemoveAll(l.cleanupUserDataDir); err != nil {
+			return fmt.Errorf("remove browser profile %q: %w", l.cleanupUserDataDir, err)
+		}
+	}
+	return nil
+}
+
+// OutputTail configures how many recent stdout/stderr bytes Output retains.
+// The default is 64 KiB. Zero disables capture; a negative limit panics.
+// Configure it before launch. Logger continues to receive the complete output.
+func (l *Launcher) OutputTail(limit int) *Launcher {
+	if limit < 0 {
+		panic("launcher: negative output limit")
+	}
+	l.output.limit = limit
+	return l
+}
+
+// Output returns a concurrency-safe snapshot of recent stdout/stderr, including
+// output written after the DevTools endpoint was announced.
+func (l *Launcher) Output() string {
+	l.output.mu.Lock()
+	defer l.output.mu.Unlock()
+	return string(l.output.data)
+}
+
+type outputTail struct {
+	mu    sync.Mutex
+	limit int
+	data  []byte
+}
+
+func (tail *outputTail) Write(data []byte) (int, error) {
+	tail.mu.Lock()
+	defer tail.mu.Unlock()
+	n := len(data)
+	if tail.limit == 0 {
+		return n, nil
+	}
+	if len(data) >= tail.limit {
+		tail.data = append(tail.data[:0], data[len(data)-tail.limit:]...)
+	} else {
+		if excess := len(tail.data) + len(data) - tail.limit; excess > 0 {
+			copy(tail.data, tail.data[excess:])
+			tail.data = tail.data[:len(tail.data)-excess]
+		}
+		tail.data = append(tail.data, data...)
+	}
+	return n, nil
 }

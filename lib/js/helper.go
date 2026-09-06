@@ -115,7 +115,7 @@ var ElementR = &Function{
     let reg
     const m = regex.match(/(\/?)(.+)\1([a-z]*)/i)
     // cSpell:ignore gmix
-    if (m[3] && !/^(?!.*?(.).*?\1)[gmixXsuUAJ]+$/.test(m[3]))
+    if (!m || (m[3] && !/^(?!.*?(.).*?\1)[gmixXsuUAJ]+$/.test(m[3])))
       reg = new RegExp(regex)
     else reg = new RegExp(m[2], m[3])
 
@@ -323,13 +323,25 @@ var WaitLoad = &Function{
     return new Promise((resolve, reject) => {
       if (isWin) {
         if (document.readyState === 'complete') return resolve()
-        window.addEventListener('load', resolve)
+        window.addEventListener('load', () => resolve(), { once: true })
       } else {
         if (this.complete === undefined || this.complete) {
           resolve()
         } else {
-          this.addEventListener('load', resolve)
-          this.addEventListener('error', reject)
+          const cleanup = () => {
+            this.removeEventListener('load', loaded)
+            this.removeEventListener('error', failed)
+          }
+          const loaded = () => {
+            cleanup()
+            resolve()
+          }
+          const failed = () => {
+            cleanup()
+            reject(new Error('Resource failed to load'))
+          }
+          this.addEventListener('load', loaded)
+          this.addEventListener('error', failed)
         }
       }
     })
@@ -626,7 +638,9 @@ var GetXPath = &Function{
       switch (node.nodeType) {
         case Node.ELEMENT_NODE:
           if (optimized && node.id) {
-            return new Step(` + "`" + `//*[@id='${node.id}']` + "`" + `, true)
+            // Use the structural path when neither XPath quote delimiter is safe.
+            if (!node.id.includes("'")) return new Step(` + "`" + `//*[@id='${node.id}']` + "`" + `, true)
+            if (!node.id.includes('"')) return new Step(` + "`" + `//*[@id="${node.id}"]` + "`" + `, true)
           }
           ownValue = node.localName
           break

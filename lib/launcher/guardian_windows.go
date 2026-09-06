@@ -7,7 +7,9 @@ import (
 
 func (l *Launcher) startProcess(cmd *exec.Cmd) (int, func(), error) {
 	if l.cleanupUserDataDir != "" {
-		l.setupUserPreferences()
+		if err := l.setupUserPreferences(); err != nil {
+			return 0, nil, err
+		}
 	}
 	if err := cmd.Start(); err != nil {
 		return 0, nil, err

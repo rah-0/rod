@@ -126,7 +126,7 @@ type FetchEnable struct {
 
 	// HandleAuthRequests (optional) If true, authRequired events will be issued and requests will be paused
 	// expecting a call to continueWithAuth.
-	HandleAuthRequests bool `json:"handleAuthRequests,omitempty"`
+	HandleAuthRequests *bool `json:"handleAuthRequests,omitempty"`
 }
 
 // ProtoReq name.
@@ -209,7 +209,7 @@ type FetchContinueRequest struct {
 	Headers []*FetchHeaderEntry `json:"headers,omitempty"`
 
 	// InterceptResponse (experimental) (optional) If set, overrides response interception behavior for this request.
-	InterceptResponse bool `json:"interceptResponse,omitempty"`
+	InterceptResponse *bool `json:"interceptResponse,omitempty"`
 }
 
 // ProtoReq name.

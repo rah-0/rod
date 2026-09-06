@@ -1,5 +1,7 @@
 # Overview
 
+See the [runnable example](../../examples/owned-launch/main.go).
+
 A lib that helps to find and launch a locally installed browser. You can also use it as a standalone lib without Rod.
 
 Rod doesn't download browser binaries. Install Chrome, Chromium, or Edge yourself, or provide an explicit executable path with `Launcher.Bin`.
@@ -7,21 +9,38 @@ Rod doesn't download browser binaries. Install Chrome, Chromium, or Edge yoursel
 See the [platform support matrix](../../doc/PLATFORM_SUPPORT.md) for exact tested
 environments, compilation-only evidence, and platform cleanup limitations.
 
-Call `Browser.Close` for a browser launched automatically by Rod. For an explicit
-launcher, register cleanup before starting it:
+Use `Browser.Launch` to connect and own a configured local launch:
 
 ```go
-l := launcher.New()
-defer func() {
-    l.Kill()
-    l.Cleanup()
-}()
-controlURL := l.MustLaunch()
-browser := rod.New().ControlURL(controlURL).MustConnect()
-defer func() {
-    browser.Timeout(5 * time.Second).MustClose()
-}()
+l := launcher.New().Bin("/usr/bin/chromium").Headless(true).OutputTail(64 * 1024)
+browser := rod.New()
+if err := browser.Launch(l); err != nil {
+    return err
+}
+defer browser.Close()
 ```
+
+`Browser.Launch` rejects an already-used launcher, a remote managed launcher,
+`ControlURL`, a configured `Client`, or an incognito browser. It always starts a
+new process: an occupied debugging port returns an error and is never adopted.
+Launcher options apply only to that launch. Startup and connection errors wrap
+their original causes and include the configured recent output tail.
+
+`Browser.CloseWithTimeout(5 * time.Second)` provides a total cleanup budget
+independent of navigation deadlines. It allows up to half that budget (at most
+five seconds) for graceful close, then terminates the owned process and waits
+for exit and temporary profile removal. `Browser.Close` uses a ten-second total
+budget. Cleanup errors, including timeouts and failed profile deletion, are
+returned. A timeout retains ownership so cleanup can be checked again. Custom
+CDP clients must honor request cancellation; interrupted built-in transport
+writes close the connection because a partially written frame is unusable.
+
+For standalone use, `Launcher.LaunchNew(ctx)` also rejects port reuse. The
+existing `Launcher.Launch` retains its debugging-port attachment behavior.
+Register `Kill` and `CleanupContext` before launching when managing ownership
+yourself. `CleanupContext(ctx)` waits directly on the process completion signal
+without creating a cleanup waiter; it returns when the budget expires, while
+the launcher's process reaper remains responsible for eventual process exit.
 
 On Unix, each local launch runs under a supervisor. A private pipe ties it to the
 launching application: application exit, panic, test timeout, or `SIGKILL` closes
@@ -39,13 +58,17 @@ side effects. A helper that cannot initialize causes launch to fail. No helper
 binary downloads or additional Go dependencies are needed. Starting Chrome
 yourself with `exec.Command` bypasses this supervision.
 
-Launcher-generated temporary profiles are removed automatically after process
-exit, including failed startup. `Launcher.Cleanup` waits for that removal and is
+Newly created launcher-generated temporary profiles are removed automatically
+after process exit, including failed startup. A pre-existing path at the generated
+location remains caller-owned. `Launcher.Cleanup` waits for that removal and is
 safe to repeat, call before launch, or call after attaching to an existing
 debugging port. It does not stop a live browser; use `Kill` first. A profile
-supplied through `UserDataDir` remains caller-owned. Startup output capture keeps
-only the most recent 64 KiB until the DevTools endpoint is found; `Logger` still
-receives the complete stream and must not block indefinitely.
+supplied through `UserDataDir` remains caller-owned.
+
+`Output` keeps the most recent 64 KiB of stdout/stderr, including output after
+the DevTools endpoint appears. Configure the limit before launch with
+`OutputTail(bytes)`; zero disables this capture. Reads and concurrent writes are
+safe. `Logger` still receives the complete stream and must not block indefinitely.
 
 Unix supervisors also give each browser a private scratch directory beneath its
 configured `TMPDIR` parent (or `/tmp`). Only the browser's environment points to
@@ -55,9 +78,8 @@ directory and existing files remain untouched.
 
 An automatically launched `Browser` also stops its process when the context
 used for `Connect` is canceled or its CDP connection ends. Later operation
-context clones do not change process ownership. `Browser.Close` allows five
-seconds for graceful shutdown independently of an expired operation context,
-then forces process cleanup. Closing an incognito context leaves its parent
+context clones do not change process ownership. `Browser.Close` starts cleanup independently of an expired operation context
+and uses the bounded graceful-close and process-cleanup budget above. Closing an incognito context leaves its parent
 browser running. Passing a `ControlURL` does not transfer launcher ownership.
 
 The remote manager owns each browser and its randomly named profile and cleans
@@ -70,7 +92,10 @@ systems; launch fails if the directory cannot be reopened safely.
 ## Remote manager security
 
 `rod-manager` requires a bearer token from `ROD_MANAGER_TOKEN` and listens on
-`127.0.0.1:7317` by default. Pass the same token explicitly to `NewManaged`.
+`127.0.0.1:7317` by default. Pass the same token explicitly to
+`NewManaged(ctx, serviceURL, token)`. Its context covers the initial HTTP request
+and response decoding, then subsequent connection establishment. Supply a
+deadline to bound initialization.
 The command removes the token from its process environment after reading it,
 and the manager strips that variable from every browser child environment. The
 library-level `NewManager` is also locked when given an empty token.
@@ -89,6 +114,11 @@ trusted local launchers. Managed clients also cannot choose the profile path or
 debugging port; cleanup is confined to the manager-created profile.
 
 ## Browser discovery
+
+`LookPath` searches installed browser candidates for the current platform,
+including `chrome` and `chromium` on FreeBSD. `FormatArgs` resolves relative
+profile paths in the returned command arguments without changing launcher
+configuration or ownership.
 
 `ResolveURL(ctx, endpoint)` normalizes a browser endpoint and requests
 `/json/version` with a 10-second timeout, including the response body. Its context

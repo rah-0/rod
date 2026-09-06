@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -213,22 +212,9 @@ func FuzzWebSocketFrame(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, frame []byte) {
-		// The transport deliberately supports large browser messages. Keep fuzz
-		// payload lengths bounded before entering its allocating frame reader.
+		// Advertised lengths must never cause allocation before payload arrives.
 		if len(frame) > 4096 {
 			return
-		}
-		if len(frame) >= 2 {
-			switch frame[1] & 0x7f {
-			case 126:
-				if len(frame) >= 4 && binary.BigEndian.Uint16(frame[2:4]) > 4096 {
-					return
-				}
-			case 127:
-				if len(frame) >= 10 && binary.BigEndian.Uint64(frame[2:10]) > 4096 {
-					return
-				}
-			}
 		}
 		ws := &WebSocket{r: bufio.NewReader(bytes.NewReader(frame))}
 		data, _ := ws.read()

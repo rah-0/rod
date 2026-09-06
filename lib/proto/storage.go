@@ -1192,7 +1192,7 @@ type StorageSetSharedStorageEntry struct {
 
 	// IgnoreIfPresent (optional) If `ignoreIfPresent` is included and true, then only sets the entry if
 	// `key` doesn't already exist.
-	IgnoreIfPresent bool `json:"ignoreIfPresent,omitempty"`
+	IgnoreIfPresent *bool `json:"ignoreIfPresent,omitempty"`
 }
 
 // ProtoReq name.

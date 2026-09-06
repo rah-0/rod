@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -167,22 +166,26 @@ func TestBrowserWaitEvent(t *testing.T) {
 func TestBrowserCrash(t *testing.T) {
 	g := setup(t)
 
-	browser := rod.New().Context(g.Context()).MustConnect()
-	page := browser.MustPage()
-	js := `() => new Promise(r => setTimeout(r, 10000))`
-
-	go g.Panic(func() {
-		page.MustEval(js)
-	})
-
-	utils.Sleep(0.2)
-
-	_ = proto.BrowserCrash{}.Call(browser)
-
-	utils.Sleep(0.3)
-
-	_, err := page.Eval(js)
-	g.True(errors.Is(err, io.EOF))
+	browser := rod.New().NoDefaultDevice().Context(g.Context()).MustConnect()
+	page := browser.MustPage().Timeout(10 * time.Second)
+	defer page.CancelTimeout()
+	started := page.EachEvent(rod.On(func(event *proto.RuntimeConsoleAPICalled, _ proto.TargetSessionID) bool {
+		return len(event.Args) == 1 && event.Args[0].Value.Str() == "pending-evaluation"
+	}))
+	pending := make(chan error, 1)
+	go func() {
+		_, err := page.Eval(`() => new Promise(() => console.log("pending-evaluation"))`)
+		pending <- err
+	}()
+	g.E(started()) // The evaluation is awaiting its promise when the browser crashes.
+	events := page.Event()
+	_ = proto.BrowserCrash{}.Call(browser.Context(page.GetContext()))
+	for range events {
+	}
+	g.NotNil(<-pending)
+	g.E(page.GetContext().Err()) // Session loss does not cancel the caller's context.
+	_, err := page.Eval(`() => 1`)
+	g.True(errors.Is(err, context.Canceled))
 }
 
 func TestBrowserCall(t *testing.T) {
@@ -276,12 +279,12 @@ func TestBinarySize(t *testing.T) {
 		g.SkipNow()
 	}
 
-	binary := filepath.Join(t.TempDir(), "translator")
+	binary := filepath.Join(t.TempDir(), "owned-launch")
 	cmd := exec.Command("go", "build",
 		"-trimpath",
 		"-ldflags", "-w -s",
 		"-o", binary,
-		"./lib/examples/translator")
+		"./examples/owned-launch")
 
 	cmd.Env = append(os.Environ(), "GOOS=linux")
 
@@ -373,8 +376,9 @@ func TestWaitDownloadDataURI(t *testing.T) {
 func TestWaitDownloadCancel(t *testing.T) {
 	g := setup(t)
 
-	wait := g.browser.Context(g.Timeout(0)).WaitDownload(os.TempDir())
-	g.Eq(wait(), (*proto.PageDownloadWillBegin)(nil))
+	wait, err := g.browser.Context(g.Timeout(0)).WaitDownload(os.TempDir())
+	g.Nil(wait)
+	g.Is(err, context.DeadlineExceeded)
 }
 
 func TestWaitDownloadFromNewPage(t *testing.T) {
@@ -409,6 +413,9 @@ func TestStreamReader(t *testing.T) {
 	g := setup(t)
 
 	r := rod.NewStreamReader(g.page, "")
+	n, err := r.Read(nil)
+	g.E(err)
+	g.Eq(n, 0)
 
 	g.mc.stub(1, proto.IORead{}, func(_ StubSend) (jsonvalue.Value, error) {
 		return jsonvalue.New(proto.IOReadResult{
@@ -420,7 +427,7 @@ func TestStreamReader(t *testing.T) {
 	g.Eq("test", string(b))
 
 	g.mc.stubErr(1, proto.IORead{})
-	_, err := r.Read(nil)
+	_, err = r.Read(b)
 	g.Err(err)
 
 	g.mc.stub(1, proto.IORead{}, func(_ StubSend) (jsonvalue.Value, error) {
@@ -429,7 +436,7 @@ func TestStreamReader(t *testing.T) {
 			Data:          "@",
 		}), nil
 	})
-	_, err = r.Read(nil)
+	_, err = r.Read(b)
 	g.Err(err)
 }
 

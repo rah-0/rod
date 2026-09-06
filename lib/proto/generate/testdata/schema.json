@@ -131,12 +131,22 @@
               "name": "options",
               "$ref": "Options",
               "optional": true
+            },
+            {
+              "name": "enabled",
+              "type": "boolean",
+              "optional": true
             }
           ],
           "returns": [
             {
               "name": "value",
               "type": "string"
+            },
+            {
+              "name": "enabled",
+              "type": "boolean",
+              "optional": true
             }
           ]
         }

@@ -3,8 +3,11 @@
 package rod
 
 import (
+	"context"
 	"errors"
 	"regexp"
+	"sync"
+	"time"
 
 	"github.com/rah-0/rod/lib/cdp"
 	"github.com/rah-0/rod/lib/js"
@@ -203,7 +206,7 @@ func (p *Page) ElementsX(xpath string) (Elements, error) {
 }
 
 // ElementsByJS returns the elements from the return value of the js.
-func (p *Page) ElementsByJS(opts *EvalOptions) (Elements, error) {
+func (p *Page) ElementsByJS(opts *EvalOptions) (elements Elements, err error) {
 	res, err := p.Evaluate(opts.ByObject())
 	if err != nil {
 		return nil, err
@@ -213,11 +216,15 @@ func (p *Page) ElementsByJS(opts *EvalOptions) (Elements, error) {
 		return nil, &ExpectElementsError{res}
 	}
 
-	defer func() { err = p.Release(res) }()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(p.ctx), 5*time.Second)
+		defer cancel()
+		err = errors.Join(err, p.Context(ctx).Release(res))
+	}()
 
 	list, err := proto.RuntimeGetProperties{
 		ObjectID:      res.ObjectID,
-		OwnProperties: true,
+		OwnProperties: new(true),
 	}.Call(p)
 	if err != nil {
 		return nil, err
@@ -249,19 +256,26 @@ func (p *Page) ElementsByJS(opts *EvalOptions) (Elements, error) {
 // The query can be plain text or css selector or xpath.
 // It will search nested iframes and shadow doms too.
 func (p *Page) Search(query string) (*SearchResult, error) {
+	restore, err := p.browser.Context(p.ctx).acquireDomain(p.SessionID, proto.DOMEnable{})
+	if err != nil {
+		return nil, err
+	}
 	sr := &SearchResult{
 		page:    p,
-		restore: p.EnableDomain(proto.DOMEnable{}),
+		restore: restore,
 	}
 
-	err := utils.Retry(p.ctx, p.sleeper(), func() (bool, error) {
+	err = utils.Retry(p.ctx, p.sleeper(), func() (bool, error) {
 		if sr.DOMPerformSearchResult != nil {
-			_ = proto.DOMDiscardSearchResults{SearchID: sr.SearchID}.Call(p)
+			if err := (proto.DOMDiscardSearchResults{SearchID: sr.SearchID}).Call(p); err != nil {
+				return true, err
+			}
+			sr.DOMPerformSearchResult = nil
 		}
 
 		res, err := proto.DOMPerformSearch{
 			Query:                     query,
-			IncludeUserAgentShadowDOM: true,
+			IncludeUserAgentShadowDOM: new(true),
 		}.Call(p)
 		if err != nil {
 			return true, err
@@ -310,7 +324,7 @@ func (p *Page) Search(query string) (*SearchResult, error) {
 		return true, nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(err, sr.Release())
 	}
 
 	return sr, nil
@@ -320,8 +334,10 @@ func (p *Page) Search(query string) (*SearchResult, error) {
 type SearchResult struct {
 	*proto.DOMPerformSearchResult
 
-	page    *Page
-	restore func()
+	page        *Page
+	restore     func(context.Context) error
+	releaseOnce sync.Once
+	releaseErr  error
 
 	// First element in the search result
 	First *Element
@@ -356,10 +372,18 @@ func (s *SearchResult) All() (Elements, error) {
 	return s.Get(0, s.ResultCount)
 }
 
-// Release the remote search result.
-func (s *SearchResult) Release() {
-	s.restore()
-	_ = proto.DOMDiscardSearchResults{SearchID: s.SearchID}.Call(s.page)
+// Release discards the remote search result and restores domain ownership.
+// It is idempotent and uses a bounded context independent of the search context.
+func (s *SearchResult) Release() error {
+	s.releaseOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(s.page.ctx), 5*time.Second)
+		defer cancel()
+		if s.DOMPerformSearchResult != nil {
+			s.releaseErr = proto.DOMDiscardSearchResults{SearchID: s.SearchID}.Call(s.page.Context(ctx))
+		}
+		s.releaseErr = errors.Join(s.releaseErr, s.restore(ctx))
+	})
+	return s.releaseErr
 }
 
 type raceBranch struct {
@@ -421,8 +445,7 @@ func (rc *RaceContext) Search(query string) *RaceContext {
 		if err != nil {
 			return nil, err
 		}
-		res.Release()
-		return res.First, nil
+		return res.First, res.Release()
 	})
 }
 

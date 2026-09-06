@@ -28,7 +28,7 @@ func BenchmarkManager(b *testing.B) {
 
 	for b.Loop() {
 		func() {
-			l := launcher.MustNewManaged(manager.URL(), managerToken)
+			l := launcher.MustNewManaged(b.Context(), manager.URL(), managerToken)
 			u, header := l.ClientHeader()
 			ws := new(cdp.WebSocket)
 			if err := ws.Connect(b.Context(), u, header); err != nil {

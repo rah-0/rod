@@ -128,11 +128,13 @@ var _ io.ReadCloser = &StreamReader{}
 
 // StreamReader for browser data stream.
 type StreamReader struct {
+	// Offset, when non-nil, is advanced by the number of bytes received from CDP.
 	Offset *int
 
 	c      proto.Client
 	handle proto.IOStreamHandle
-	buf    *bytes.Buffer
+	buf    bytes.Buffer
+	eof    bool
 }
 
 // NewStreamReader instance.
@@ -140,33 +142,43 @@ func NewStreamReader(c proto.Client, h proto.IOStreamHandle) *StreamReader {
 	return &StreamReader{
 		c:      c,
 		handle: h,
-		buf:    &bytes.Buffer{},
 	}
 }
 
 func (sr *StreamReader) Read(p []byte) (n int, err error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if sr.buf.Len() > 0 {
+		return sr.buf.Read(p)
+	}
+	if sr.eof {
+		return 0, io.EOF
+	}
 	res, err := proto.IORead{
 		Handle: sr.handle,
 		Offset: sr.Offset,
+		Size:   new(len(p)),
 	}.Call(sr.c)
 	if err != nil {
 		return 0, err
 	}
 
-	if !res.EOF {
-		var bin []byte
-		if res.Base64Encoded {
-			bin, err = base64.StdEncoding.DecodeString(res.Data)
-			if err != nil {
-				return 0, err
-			}
-		} else {
-			bin = []byte(res.Data)
+	bin := []byte(res.Data)
+	if res.Base64Encoded {
+		bin, err = base64.StdEncoding.DecodeString(res.Data)
+		if err != nil {
+			return 0, err
 		}
-
-		_, _ = sr.buf.Write(bin)
 	}
-
+	if sr.Offset != nil {
+		*sr.Offset += len(bin)
+	}
+	sr.eof = res.EOF
+	_, _ = sr.buf.Write(bin)
+	if sr.buf.Len() == 0 && !sr.eof {
+		return 0, nil
+	}
 	return sr.buf.Read(p)
 }
 

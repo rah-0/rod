@@ -55,6 +55,9 @@ type Client struct {
 	event     chan *Event // events from browser
 	done      chan struct{}
 	readErr   error // published by closing done
+	stopOnce  sync.Once
+	closeOnce sync.Once
+	closeErr  error
 
 	logger utils.Logger
 }
@@ -123,7 +126,13 @@ func (cdp *Client) Call(ctx context.Context, sessionID, method string, params an
 		cdp.pendingMu.Unlock()
 	}()
 
-	err = cdp.ws.Send(data)
+	if sender, ok := cdp.ws.(interface {
+		SendContext(context.Context, []byte) error
+	}); ok {
+		err = sender.SendContext(ctx, data)
+	} else {
+		err = cdp.ws.Send(data)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +154,34 @@ func (cdp *Client) Call(ctx context.Context, sessionID, method string, params an
 	}
 }
 
+// Close releases the underlying transport, interrupting pending requests and
+// blocked writes. Custom transports must implement io.Closer for this operation.
+func (cdp *Client) Close() error {
+	cdp.terminate(ErrClientClosed)
+	return cdp.closeTransport()
+}
+
+func (cdp *Client) terminate(err error) {
+	cdp.stopOnce.Do(func() {
+		cdp.readErr = err
+		close(cdp.done)
+	})
+}
+
+func (cdp *Client) closeTransport() error {
+	if cdp.ws == nil {
+		return nil
+	}
+	cdp.closeOnce.Do(func() {
+		if closer, ok := cdp.ws.(io.Closer); ok {
+			cdp.closeErr = closer.Close()
+		} else {
+			cdp.closeErr = ErrTransportNotClosable
+		}
+	})
+	return cdp.closeErr
+}
+
 // Event returns a channel that will emit browser devtools protocol events. Must be consumed or will block producer.
 func (cdp *Client) Event() <-chan *Event {
 	return cdp.event
@@ -154,15 +191,17 @@ func (cdp *Client) Event() <-chan *Event {
 func (cdp *Client) consumeMessages() {
 	var readErr error
 	defer func() {
-		cdp.readErr = readErr
-		close(cdp.done)
+		cdp.terminate(readErr)
 		close(cdp.event)
-		if closer, ok := cdp.ws.(io.Closer); ok {
-			_ = closer.Close()
-		}
+		_ = cdp.closeTransport()
 	}()
 
 	for {
+		select {
+		case <-cdp.done:
+			return
+		default:
+		}
 		data, err := cdp.ws.Read()
 		if err != nil {
 			readErr = err
@@ -184,7 +223,11 @@ func (cdp *Client) consumeMessages() {
 				return
 			}
 			cdp.logger.Println(&evt)
-			cdp.event <- &evt
+			select {
+			case cdp.event <- &evt:
+			case <-cdp.done:
+				return
+			}
 			continue
 		}
 

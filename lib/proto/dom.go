@@ -444,7 +444,7 @@ type DOMDescribeNode struct {
 
 	// Pierce (optional) Whether or not iframes and shadow roots should be traversed when returning the subtree
 	// (default is false).
-	Pierce bool `json:"pierce,omitempty"`
+	Pierce *bool `json:"pierce,omitempty"`
 }
 
 // ProtoReq name.
@@ -644,7 +644,7 @@ type DOMGetDocument struct {
 
 	// Pierce (optional) Whether or not iframes and shadow roots should be traversed when returning the subtree
 	// (default is false).
-	Pierce bool `json:"pierce,omitempty"`
+	Pierce *bool `json:"pierce,omitempty"`
 }
 
 // ProtoReq name.
@@ -674,7 +674,7 @@ type DOMGetFlattenedDocument struct {
 
 	// Pierce (optional) Whether or not iframes and shadow roots should be traversed when returning the subtree
 	// (default is false).
-	Pierce bool `json:"pierce,omitempty"`
+	Pierce *bool `json:"pierce,omitempty"`
 }
 
 // ProtoReq name.
@@ -704,7 +704,7 @@ type DOMGetNodesForSubtreeByStyle struct {
 
 	// Pierce (optional) Whether or not iframes and shadow roots in the same target should be traversed when returning the
 	// results (default is false).
-	Pierce bool `json:"pierce,omitempty"`
+	Pierce *bool `json:"pierce,omitempty"`
 }
 
 // ProtoReq name.
@@ -732,10 +732,10 @@ type DOMGetNodeForLocation struct {
 	Y int `json:"y"`
 
 	// IncludeUserAgentShadowDOM (optional) False to skip to the nearest non-UA shadow root ancestor (default: false).
-	IncludeUserAgentShadowDOM bool `json:"includeUserAgentShadowDOM,omitempty"`
+	IncludeUserAgentShadowDOM *bool `json:"includeUserAgentShadowDOM,omitempty"`
 
 	// IgnorePointerEventsNone (optional) Whether to ignore pointer-events: none on elements and hit test them.
-	IgnorePointerEventsNone bool `json:"ignorePointerEventsNone,omitempty"`
+	IgnorePointerEventsNone *bool `json:"ignorePointerEventsNone,omitempty"`
 }
 
 // ProtoReq name.
@@ -914,7 +914,7 @@ type DOMPerformSearch struct {
 	Query string `json:"query"`
 
 	// IncludeUserAgentShadowDOM (optional) True to search in user agent shadow DOM.
-	IncludeUserAgentShadowDOM bool `json:"includeUserAgentShadowDOM,omitempty"`
+	IncludeUserAgentShadowDOM *bool `json:"includeUserAgentShadowDOM,omitempty"`
 }
 
 // ProtoReq name.
@@ -1135,7 +1135,7 @@ type DOMRequestChildNodes struct {
 
 	// Pierce (optional) Whether or not iframes and shadow roots should be traversed when returning the sub-tree
 	// (default is false).
-	Pierce bool `json:"pierce,omitempty"`
+	Pierce *bool `json:"pierce,omitempty"`
 }
 
 // ProtoReq name.

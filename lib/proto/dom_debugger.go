@@ -81,7 +81,7 @@ type DOMDebuggerGetEventListeners struct {
 
 	// Pierce (optional) Whether or not iframes and shadow roots should be traversed when returning the subtree
 	// (default is false). Reports listeners for all contexts if pierce is enabled.
-	Pierce bool `json:"pierce,omitempty"`
+	Pierce *bool `json:"pierce,omitempty"`
 }
 
 // ProtoReq name.

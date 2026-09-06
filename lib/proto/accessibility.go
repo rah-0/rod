@@ -401,7 +401,7 @@ type AccessibilityGetPartialAXTree struct {
 	ObjectID RuntimeRemoteObjectID `json:"objectId,omitempty"`
 
 	// FetchRelatives (optional) Whether to fetch this node's ancestors, siblings and children. Defaults to true.
-	FetchRelatives bool `json:"fetchRelatives,omitempty"`
+	FetchRelatives *bool `json:"fetchRelatives,omitempty"`
 }
 
 // ProtoReq name.

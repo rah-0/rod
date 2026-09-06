@@ -401,16 +401,16 @@ type OverlayGetHighlightObjectForTest struct {
 	NodeID DOMNodeID `json:"nodeId"`
 
 	// IncludeDistance (optional) Whether to include distance info.
-	IncludeDistance bool `json:"includeDistance,omitempty"`
+	IncludeDistance *bool `json:"includeDistance,omitempty"`
 
 	// IncludeStyle (optional) Whether to include style info.
-	IncludeStyle bool `json:"includeStyle,omitempty"`
+	IncludeStyle *bool `json:"includeStyle,omitempty"`
 
 	// ColorFormat (optional) The color format to get config with (default: hex).
 	ColorFormat OverlayColorFormat `json:"colorFormat,omitempty"`
 
 	// ShowAccessibilityInfo (optional) Whether to show accessibility info (default: true).
-	ShowAccessibilityInfo bool `json:"showAccessibilityInfo,omitempty"`
+	ShowAccessibilityInfo *bool `json:"showAccessibilityInfo,omitempty"`
 }
 
 // ProtoReq name.

@@ -177,7 +177,7 @@ type HeapProfilerStartSampling struct {
 	// heap profiler to also include information about objects discarded by
 	// major GC, which will show which functions cause large temporary memory
 	// usage or long GC pauses.
-	IncludeObjectsCollectedByMajorGC bool `json:"includeObjectsCollectedByMajorGC,omitempty"`
+	IncludeObjectsCollectedByMajorGC *bool `json:"includeObjectsCollectedByMajorGC,omitempty"`
 
 	// IncludeObjectsCollectedByMinorGC (optional) By default, the sampling heap profiler reports only objects which are
 	// still alive when the profile is returned via getSamplingProfile or
@@ -186,7 +186,7 @@ type HeapProfilerStartSampling struct {
 	// heap profiler to also include information about objects discarded by
 	// minor GC, which is useful when tuning a latency-sensitive application
 	// for minimal GC activity.
-	IncludeObjectsCollectedByMinorGC bool `json:"includeObjectsCollectedByMinorGC,omitempty"`
+	IncludeObjectsCollectedByMinorGC *bool `json:"includeObjectsCollectedByMinorGC,omitempty"`
 }
 
 // ProtoReq name.
@@ -200,7 +200,7 @@ func (m HeapProfilerStartSampling) Call(c Client) error {
 // HeapProfilerStartTrackingHeapObjects ...
 type HeapProfilerStartTrackingHeapObjects struct {
 	// TrackAllocations (optional) ...
-	TrackAllocations bool `json:"trackAllocations,omitempty"`
+	TrackAllocations *bool `json:"trackAllocations,omitempty"`
 }
 
 // ProtoReq name.
@@ -235,18 +235,18 @@ type HeapProfilerStopSamplingResult struct {
 type HeapProfilerStopTrackingHeapObjects struct {
 	// ReportProgress (optional) If true 'reportHeapSnapshotProgress' events will be generated while snapshot is being taken
 	// when the tracking is stopped.
-	ReportProgress bool `json:"reportProgress,omitempty"`
+	ReportProgress *bool `json:"reportProgress,omitempty"`
 
 	// TreatGlobalObjectsAsRoots (optional) Deprecated in favor of `exposeInternals`.
 	//
 	// Deprecated: This protocol API is deprecated.
-	TreatGlobalObjectsAsRoots bool `json:"treatGlobalObjectsAsRoots,omitempty"`
+	TreatGlobalObjectsAsRoots *bool `json:"treatGlobalObjectsAsRoots,omitempty"`
 
 	// CaptureNumericValue (optional) If true, numerical values are included in the snapshot
-	CaptureNumericValue bool `json:"captureNumericValue,omitempty"`
+	CaptureNumericValue *bool `json:"captureNumericValue,omitempty"`
 
 	// ExposeInternals (experimental) (optional) If true, exposes internals of the snapshot.
-	ExposeInternals bool `json:"exposeInternals,omitempty"`
+	ExposeInternals *bool `json:"exposeInternals,omitempty"`
 }
 
 // ProtoReq name.
@@ -262,19 +262,19 @@ func (m HeapProfilerStopTrackingHeapObjects) Call(c Client) error {
 // HeapProfilerTakeHeapSnapshot ...
 type HeapProfilerTakeHeapSnapshot struct {
 	// ReportProgress (optional) If true 'reportHeapSnapshotProgress' events will be generated while snapshot is being taken.
-	ReportProgress bool `json:"reportProgress,omitempty"`
+	ReportProgress *bool `json:"reportProgress,omitempty"`
 
 	// TreatGlobalObjectsAsRoots (optional) If true, a raw snapshot without artificial roots will be generated.
 	// Deprecated in favor of `exposeInternals`.
 	//
 	// Deprecated: This protocol API is deprecated.
-	TreatGlobalObjectsAsRoots bool `json:"treatGlobalObjectsAsRoots,omitempty"`
+	TreatGlobalObjectsAsRoots *bool `json:"treatGlobalObjectsAsRoots,omitempty"`
 
 	// CaptureNumericValue (optional) If true, numerical values are included in the snapshot
-	CaptureNumericValue bool `json:"captureNumericValue,omitempty"`
+	CaptureNumericValue *bool `json:"captureNumericValue,omitempty"`
 
 	// ExposeInternals (experimental) (optional) If true, exposes internals of the snapshot.
-	ExposeInternals bool `json:"exposeInternals,omitempty"`
+	ExposeInternals *bool `json:"exposeInternals,omitempty"`
 }
 
 // ProtoReq name.

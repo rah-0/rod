@@ -194,10 +194,17 @@ func (d *definition) format() (code string) {
 
 		for _, prop := range d.props {
 			tag := jsonTag(prop.originName, prop.optional && prop.typeName != "jsonvalue.Value")
+			if d.name == "RuntimeCallArgument" && prop.name == "Value" {
+				tag = "`json:\"value,omitzero\"`"
+			}
 
 			t := prop.typeName
 			if prop.optional {
 				switch prop.typeName {
+				case "bool":
+					if d.command {
+						t = "*bool"
+					}
 				case "float64", "int":
 					if !strings.Contains(prop.comment(), "(default: 0)") {
 						t = "*" + t

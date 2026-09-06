@@ -52,7 +52,9 @@ wait := page.EachEvent(rod.On(func(event *proto.PageLoadEventFired, _ proto.Targ
     return true
 }))
 page.MustNavigate("https://example.com")
-wait()
+if err := wait(); err != nil {
+    panic(err)
+}
 ```
 
 Return `false` to keep receiving events. Pass multiple `rod.On` handlers to
@@ -61,15 +63,44 @@ across sessions; page handlers only receive their page's events. For one event,
 use `var event proto.PageLoadEventFired` and `wait := page.WaitEvent(&event)`.
 Cancel the page or browser context to end a continuing subscription.
 
+## Runnable examples
+
+The examples start their own browsers and local services. Run a command from the
+repository root, for example:
+
+```sh
+go run ./examples/forms
+go run ./examples/capture
+bash scripts/check.sh examples
+```
+
+| Example | Demonstrates |
+| --- | --- |
+| [Page diagnostics](examples/page-diagnostics/main.go) | Initial console messages, exceptions, and HTTP failures. |
+| [Owned launch](examples/owned-launch/main.go) | Configured process ownership and cleanup after a deadline. |
+| [JSON evaluation](examples/json-evaluation/main.go) | Typed DOM projection, discarded results, and serialization errors. |
+| [Typing](examples/typing/main.go) | Validated keys, Enter actions, and Unicode insertion. |
+| [HTTP fixture](examples/http-fixture/main.go) | Relative scripts and API responses with configuration before navigation. |
+| [Forms](examples/forms/main.go) | Visibility waits, file uploads, and form submission. |
+| [Capture](examples/capture/main.go) | Page and element screenshots, device emulation, and PDF output. |
+| [Network](examples/network/main.go) | Request headers and cookies configured before navigation. |
+| [Download](examples/download/main.go) | Download completion and verification of the saved bytes. |
+| [Proxy authentication](examples/proxy-auth/main.go) | An authenticated local proxy and verified forwarding. |
+| [Connect to a browser](examples/connect-browser/main.go) | Attach to a browser whose process belongs to its caller. |
+| [Managed launch](examples/launch-managed/main.go) | An authenticated manager and remotely requested browser lifecycle. |
+| [Custom WebSocket](examples/custom-websocket/main.go) | A third-party transport adapter with cancellation and cleanup. |
+| [E2E test project](examples/e2e-testing/calculator_test.go) | Native Go tests with a shared process and isolated browser contexts. |
+
+Every command has a test that runs its example code and checks browser results.
+The E2E project runs with `go test`, and `scripts/check.sh examples` includes it
+and the separate custom-WebSocket module. The browser suite includes all examples.
+
 ## Project backlog
 
 Upstream Rod issues and pull requests have been reviewed and triaged. The retained
 tasks are documented in the [issue backlog](doc/issues/README.md) and
 [pull-request assessments](doc/pulls/README.md), with priorities and acceptance
 criteria.
-
-The [feature proposals](doc/features/README.md) capture additions this fork's
-maintainer has personally identified and would like to implement.
 
 ## Development
 
@@ -99,7 +130,7 @@ does not apply them. Review protocol encoding before applying suggestions, and
 keep explicit `WaitGroup.Add`/`Done` calls around callbacks that may panic or call
 `runtime.Goexit`.
 
-Run the root and e2e test suites with an installed browser:
+Run the root suite and all example modules with an installed browser:
 
 ```sh
 bash scripts/check.sh browser
@@ -111,7 +142,7 @@ graceful shutdown before killing owned processes and removing profiles. Root and
 e2e browser cases stay sequential even with a higher `-parallel` setting. The
 cleanup benchmark also runs one browser lifecycle at a time.
 
-Live-site documentation examples run separately with `bash scripts/check.sh live`.
+Executable documentation examples run separately with `bash scripts/check.sh live`.
 Tests store screenshots, PDFs, and failed-test CDP logs in `t.ArtifactDir()`.
 To retain these files from root tests:
 

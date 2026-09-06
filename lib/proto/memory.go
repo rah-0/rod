@@ -143,7 +143,7 @@ type MemoryStartSampling struct {
 	SamplingInterval *int `json:"samplingInterval,omitempty"`
 
 	// SuppressRandomness (optional) Do not randomize intervals between samples.
-	SuppressRandomness bool `json:"suppressRandomness,omitempty"`
+	SuppressRandomness *bool `json:"suppressRandomness,omitempty"`
 }
 
 // ProtoReq name.

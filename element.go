@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rah-0/rod/lib/cdp"
@@ -95,7 +97,10 @@ func (el *Element) MoveMouseOut() error {
 		return err
 	}
 	box := shape.Box()
-	return el.page.Mouse.MoveTo(proto.NewPoint(box.X+box.Width, box.Y))
+	if box == nil {
+		return &InvisibleShapeError{el}
+	}
+	return el.page.Context(el.ctx).Mouse.MoveTo(proto.NewPoint(box.X+box.Width, box.Y))
 }
 
 // Click will press then release the button just like a human.
@@ -426,7 +431,7 @@ func (el *Element) SetFiles(paths []string) error {
 // is fired all NodeID on the page will be reassigned to another value)
 // we don't recommend using the NodeID, instead, use the [proto.DOMBackendNodeID] to identify the element.
 func (el *Element) Describe(depth int, pierce bool) (*proto.DOMNode, error) {
-	val, err := proto.DOMDescribeNode{ObjectID: el.id(), Depth: new(depth), Pierce: pierce}.Call(el)
+	val, err := proto.DOMDescribeNode{ObjectID: el.id(), Depth: new(depth), Pierce: new(pierce)}.Call(el)
 	if err != nil {
 		return nil, err
 	}
@@ -454,20 +459,36 @@ func (el *Element) ShadowRoot() (*Element, error) {
 	return el.page.Context(el.ctx).ElementFromObject(shadowNode.Object)
 }
 
-// Frame creates a page instance that represents the iframe.
+// Frame creates a page view for this iframe, attaching its renderer session when
+// necessary. The view uses the element's context. If navigation moves the frame
+// to another renderer, acquire a new view with Frame; the old view retains its
+// original session and reports an error once that session or document is gone.
 func (el *Element) Frame() (*Page, error) {
 	node, err := el.Describe(1, false)
 	if err != nil {
 		return nil, err
 	}
 
-	clone := *el.page
-	clone.FrameID = node.FrameID
-	clone.jsCtxID = new(proto.RuntimeRemoteObjectID)
-	clone.element = el
-	clone.sleeper = el.sleeper
-
-	return &clone, nil
+	if node.FrameID == "" {
+		return nil, fmt.Errorf("element %s is not a frame", node.NodeName)
+	}
+	var frame *Page
+	if node.ContentDocument == nil {
+		// A frame in another renderer has its own target and CDP session.
+		browser := *el.page.browser.Context(el.ctx)
+		frame, err = browser.NoDefaultDevice().PageFromTarget(proto.TargetTargetID(node.FrameID))
+		if err != nil {
+			return nil, fmt.Errorf("attach frame %s: %w", node.FrameID, err)
+		}
+	} else {
+		frame = el.page.Context(el.ctx)
+		frame.jsCtxLock = new(sync.Mutex)
+		frame.jsCtxID = new(proto.RuntimeRemoteObjectID)
+	}
+	frame.FrameID = node.FrameID
+	frame.element = el
+	frame.sleeper = el.sleeper
+	return frame, nil
 }
 
 // ContainsElement check if the target is equal or inside the element.
@@ -631,17 +652,17 @@ func (el *Element) WaitVisible() error {
 }
 
 // WaitEnabled until the element is not disabled.
-// Doc for readonly: https://developer.mozilla.org/en-US/docs/Web/HTML/Attributes/readonly
+// Doc for disabled: https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Attributes/disabled
 func (el *Element) WaitEnabled() error {
 	defer el.tryTrace(TraceTypeWait, "enabled")()
 	return el.Wait(Eval(`() => !this.disabled`))
 }
 
 // WaitWritable until the element is not readonly.
-// Doc for disabled: https://developer.mozilla.org/en-US/docs/Web/HTML/Attributes/disabled
+// Doc for readonly: https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Attributes/readonly
 func (el *Element) WaitWritable() error {
 	defer el.tryTrace(TraceTypeWait, "writable")()
-	return el.Wait(Eval(`() => !this.readonly`))
+	return el.Wait(Eval(`() => !this.readOnly`))
 }
 
 // WaitInvisible until the element invisible.
@@ -686,38 +707,41 @@ func (el *Element) BackgroundImage() ([]byte, error) {
 	return el.page.Context(el.ctx).GetResource(u)
 }
 
-// Screenshot of the area of the element.
+// Screenshot captures the element's transformed bounds. Bounds round outward to
+// device-independent pixel edges; bitmap resolution follows the browser scale.
 func (el *Element) Screenshot(format proto.PageCaptureScreenshotFormat, quality int) ([]byte, error) {
-	err := el.ScrollIntoView()
-	if err != nil {
+	if err := el.ScrollIntoView(); err != nil {
 		return nil, err
 	}
-
-	opts := &proto.PageCaptureScreenshot{
-		Quality: new(quality),
-		Format:  format,
-	}
-
-	bin, err := el.page.Context(el.ctx).Screenshot(false, opts)
-	if err != nil {
-		return nil, err
-	}
-
-	// so that it won't clip the css-transformed element
 	shape, err := el.Shape()
 	if err != nil {
 		return nil, err
 	}
-
 	box := shape.Box()
-
-	// TODO: proto.PageCaptureScreenshot has a Clip option, but it's buggy, so now we do in Go.
-	return utils.CropImage(bin, quality,
-		int(box.X),
-		int(box.Y),
-		int(box.Width),
-		int(box.Height),
-	)
+	if box == nil || box.Width <= 0 || box.Height <= 0 {
+		return nil, &InvisibleShapeError{el}
+	}
+	page := el.page.root.Context(el.ctx)
+	metrics, err := (proto.PageGetLayoutMetrics{}).Call(page)
+	if err != nil {
+		return nil, err
+	}
+	viewport := metrics.CSSVisualViewport
+	if viewport == nil {
+		return nil, errors.New("failed to get CSS visual viewport")
+	}
+	zoom := 1.0
+	if viewport.Zoom != nil {
+		zoom = *viewport.Zoom
+	}
+	// Quads are relative to the viewport. Native clipping uses document DIP
+	// coordinates and applies the current device scale when producing the bitmap.
+	x, y := (box.X+viewport.PageX)*zoom, (box.Y+viewport.PageY)*zoom
+	left, top := math.Floor(x), math.Floor(y)
+	return page.Screenshot(false, &proto.PageCaptureScreenshot{
+		Format: format, Quality: new(quality), FromSurface: new(true), CaptureBeyondViewport: new(true),
+		Clip: &proto.PageViewport{X: left, Y: top, Width: math.Ceil(x+box.Width*zoom) - left, Height: math.Ceil(y+box.Height*zoom) - top, Scale: 1},
+	})
 }
 
 // Release is a shortcut for [Page.Release] current element.
@@ -752,7 +776,10 @@ func (el *Element) Evaluate(opts *EvalOptions) (*proto.RuntimeRemoteObject, erro
 // Equal checks if the two elements are equal.
 func (el *Element) Equal(elm *Element) (bool, error) {
 	res, err := el.Eval(`elm => this === elm`, elm.Object)
-	return res.Value.Bool(), err
+	if err != nil {
+		return false, err
+	}
+	return res.Value.Bool(), nil
 }
 
 func (el *Element) id() proto.RuntimeRemoteObjectID {

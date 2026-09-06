@@ -160,7 +160,7 @@ type WebAuthnEnable struct {
 	// experience. Disabling the UI is recommended for automated testing.
 	// Supported at the embedder's discretion if UI is available.
 	// Defaults to false.
-	EnableUI bool `json:"enableUI,omitempty"`
+	EnableUI *bool `json:"enableUI,omitempty"`
 }
 
 // ProtoReq name.
@@ -210,15 +210,15 @@ type WebAuthnSetResponseOverrideBits struct {
 
 	// IsBogusSignature (optional) If isBogusSignature is set, overrides the signature in the authenticator response to be zero.
 	// Defaults to false.
-	IsBogusSignature bool `json:"isBogusSignature,omitempty"`
+	IsBogusSignature *bool `json:"isBogusSignature,omitempty"`
 
 	// IsBadUV (optional) If isBadUV is set, overrides the UV bit in the flags in the authenticator response to
 	// be zero. Defaults to false.
-	IsBadUV bool `json:"isBadUV,omitempty"`
+	IsBadUV *bool `json:"isBadUV,omitempty"`
 
 	// IsBadUP (optional) If isBadUP is set, overrides the UP bit in the flags in the authenticator response to
 	// be zero. Defaults to false.
-	IsBadUP bool `json:"isBadUP,omitempty"`
+	IsBadUP *bool `json:"isBadUP,omitempty"`
 }
 
 // ProtoReq name.
@@ -387,10 +387,10 @@ type WebAuthnSetCredentialProperties struct {
 	CredentialID []byte `json:"credentialId"`
 
 	// BackupEligibility (optional) ...
-	BackupEligibility bool `json:"backupEligibility,omitempty"`
+	BackupEligibility *bool `json:"backupEligibility,omitempty"`
 
 	// BackupState (optional) ...
-	BackupState bool `json:"backupState,omitempty"`
+	BackupState *bool `json:"backupState,omitempty"`
 }
 
 // ProtoReq name.

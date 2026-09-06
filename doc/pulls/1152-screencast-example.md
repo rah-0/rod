@@ -12,7 +12,7 @@ The historical recording PRs were closed when upstream renamed `master` to `main
 
 ## Scope
 
-- Add a self-contained example under `lib/examples` using the existing protocol calls and `Page.EachEvent`.
+- Add a self-contained example under `examples` using the existing protocol calls and `Page.EachEvent`.
 - Subscribe before starting capture, acknowledge received frames, and define bounded buffering or backpressure for a slow output writer.
 - Give the recording one owner. Cancellation, page closure, protocol failures, and output failures must stop capture, release the event listener, and finish or abort the output predictably. Cleanup must also work while the page is static and no further frames arrive.
 - Preserve elapsed time when constructing a video; screencast events do not imply a constant frame rate.

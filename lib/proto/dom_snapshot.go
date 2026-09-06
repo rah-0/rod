@@ -387,13 +387,13 @@ type DOMSnapshotGetSnapshot struct {
 	ComputedStyleWhitelist []string `json:"computedStyleWhitelist"`
 
 	// IncludeEventListeners (optional) Whether or not to retrieve details of DOM listeners (default false).
-	IncludeEventListeners bool `json:"includeEventListeners,omitempty"`
+	IncludeEventListeners *bool `json:"includeEventListeners,omitempty"`
 
 	// IncludePaintOrder (optional) Whether to determine and include the paint order index of LayoutTreeNodes (default false).
-	IncludePaintOrder bool `json:"includePaintOrder,omitempty"`
+	IncludePaintOrder *bool `json:"includePaintOrder,omitempty"`
 
 	// IncludeUserAgentShadowTree (optional) Whether to include UA shadow tree in the snapshot (default false).
-	IncludeUserAgentShadowTree bool `json:"includeUserAgentShadowTree,omitempty"`
+	IncludeUserAgentShadowTree *bool `json:"includeUserAgentShadowTree,omitempty"`
 }
 
 // ProtoReq name.
@@ -428,20 +428,20 @@ type DOMSnapshotCaptureSnapshot struct {
 	ComputedStyles []string `json:"computedStyles"`
 
 	// IncludePaintOrder (optional) Whether to include layout object paint orders into the snapshot.
-	IncludePaintOrder bool `json:"includePaintOrder,omitempty"`
+	IncludePaintOrder *bool `json:"includePaintOrder,omitempty"`
 
 	// IncludeDOMRects (optional) Whether to include DOM rectangles (offsetRects, clientRects, scrollRects) into the snapshot
-	IncludeDOMRects bool `json:"includeDOMRects,omitempty"`
+	IncludeDOMRects *bool `json:"includeDOMRects,omitempty"`
 
 	// IncludeBlendedBackgroundColors (experimental) (optional) Whether to include blended background colors in the snapshot (default: false).
 	// Blended background color is achieved by blending background colors of all elements
 	// that overlap with the current element.
-	IncludeBlendedBackgroundColors bool `json:"includeBlendedBackgroundColors,omitempty"`
+	IncludeBlendedBackgroundColors *bool `json:"includeBlendedBackgroundColors,omitempty"`
 
 	// IncludeTextColorOpacities (experimental) (optional) Whether to include text color opacity in the snapshot (default: false).
 	// An element might have the opacity property set that affects the text color of the element.
 	// The final text color opacity is computed based on the opacity of all overlapping elements.
-	IncludeTextColorOpacities bool `json:"includeTextColorOpacities,omitempty"`
+	IncludeTextColorOpacities *bool `json:"includeTextColorOpacities,omitempty"`
 }
 
 // ProtoReq name.

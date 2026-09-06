@@ -25,6 +25,11 @@ type state struct {
 	value any
 }
 
+// IsZero reports whether no value was supplied. An explicit JSON null is not zero.
+func (v Value) IsZero() bool {
+	return v.state == nil
+}
+
 // Query selects a value from the current path segment.
 type Query func(any) (value any, found bool)
 

@@ -122,7 +122,7 @@ func TestManaged(t *testing.T) {
 	}
 	s.Mux.Handle("/", rl)
 
-	l := MustNewManaged(s.URL(), managerTestToken)
+	l := MustNewManaged(t.Context(), s.URL(), managerTestToken)
 	if l.Has("disable-http2") {
 		t.Fatal("managed launcher retained the obsolete Docker HTTP/2 workaround")
 	}
@@ -150,7 +150,7 @@ func TestManaged(t *testing.T) {
 	}
 	g.Err(os.Stat(dir))
 
-	u, h := MustNewManaged(s.URL(), managerTestToken).Bin("go").ClientHeader()
+	u, h := MustNewManaged(t.Context(), s.URL(), managerTestToken).Bin("go").ClientHeader()
 	_, err := cdp.StartWithURL(ctx, u, h)
 	g.Eq(err.(*cdp.BadHandshakeError).Body, "[rod-manager] remote option is not allowed: rod-bin\n")
 }
@@ -413,11 +413,11 @@ func TestManagerAuthentication(t *testing.T) {
 	g.Eq(http.StatusUnauthorized, upgradeResult.Code)
 	g.False(launchHookCalled)
 
-	_, err = NewManaged(s.URL, "wrong-token")
+	_, err = NewManaged(t.Context(), s.URL, "wrong-token")
 	g.True(errors.Is(err, ErrManagerUnauthorized))
 	g.False(defaultsCalled)
 
-	l, err := NewManaged(s.URL, managerTestToken)
+	l, err := NewManaged(t.Context(), s.URL, managerTestToken)
 	g.E(err)
 	g.True(defaultsCalled)
 
@@ -427,11 +427,11 @@ func TestManagerAuthentication(t *testing.T) {
 
 	locked := httptest.NewServer(NewManager(""))
 	defer locked.Close()
-	_, err = NewManaged(locked.URL, managerTestToken)
+	_, err = NewManaged(t.Context(), locked.URL, managerTestToken)
 	g.True(errors.Is(err, ErrManagerUnauthorized))
-	_, err = NewManaged("http://192.0.2.1:7317", managerTestToken)
+	_, err = NewManaged(t.Context(), "http://192.0.2.1:7317", managerTestToken)
 	g.True(errors.Is(err, ErrManagerInsecureTransport))
-	_, err = NewManaged("ws://manager.example:7317", managerTestToken)
+	_, err = NewManaged(t.Context(), "ws://manager.example:7317", managerTestToken)
 	g.True(errors.Is(err, ErrManagerInsecureTransport))
 
 	redirectedAuthorization := ""
@@ -443,7 +443,7 @@ func TestManagerAuthentication(t *testing.T) {
 		http.Redirect(w, r, redirectTarget.URL, http.StatusFound)
 	}))
 	defer redirectSource.Close()
-	_, err = NewManaged(redirectSource.URL, managerTestToken)
+	_, err = NewManaged(t.Context(), redirectSource.URL, managerTestToken)
 	g.Has(err.Error(), "HTTP status 302")
 	g.Eq("", redirectedAuthorization)
 }
@@ -595,7 +595,7 @@ func TestLaunchClient(t *testing.T) {
 	rl := NewManager(managerTestToken)
 	s.Mux.Handle("/", rl)
 
-	l := MustNewManaged(s.URL(), managerTestToken)
+	l := MustNewManaged(t.Context(), s.URL(), managerTestToken)
 	c, err := l.Client()
 	if err != nil {
 		g.Err(err)

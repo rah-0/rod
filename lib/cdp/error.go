@@ -1,6 +1,7 @@
 package cdp
 
 import (
+	"errors"
 	"fmt"
 )
 
@@ -69,3 +70,27 @@ var ErrNotAttachedToActivePage = &Error{
 	Code:    -32000,
 	Message: "Not attached to an active page",
 }
+
+// ErrClientClosed indicates explicit closure of a CDP client.
+var ErrClientClosed = errors.New("CDP client closed")
+
+// ErrTransportNotClosable indicates that a custom transport cannot be interrupted.
+var ErrTransportNotClosable = errors.New("CDP transport does not support Close")
+
+// ErrWebSocketProtocol indicates invalid or unsupported WebSocket framing.
+var ErrWebSocketProtocol = errors.New("invalid WebSocket protocol")
+
+// ErrWebSocketClosed indicates a peer's WebSocket close frame.
+var ErrWebSocketClosed = errors.New("WebSocket closed by peer")
+
+// WebSocketCloseError contains the close status and UTF-8 reason from the peer.
+// Code 1005 means that the peer supplied no status code.
+type WebSocketCloseError struct {
+	Code   uint16
+	Reason string
+}
+
+func (e *WebSocketCloseError) Error() string {
+	return fmt.Sprintf("WebSocket closed: %d %s", e.Code, e.Reason)
+}
+func (e *WebSocketCloseError) Unwrap() error { return ErrWebSocketClosed }

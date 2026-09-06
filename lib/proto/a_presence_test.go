@@ -27,7 +27,6 @@ func TestJSONValuePresence(t *testing.T) {
 				proto.AccessibilityAXValue{Value: tc.value},
 				proto.RuntimeRemoteObject{Value: tc.value},
 				proto.RuntimeDeepSerializedValue{Value: tc.value},
-				proto.RuntimeCallArgument{Value: tc.value},
 			} {
 				data, err := json.Marshal(value)
 				if err != nil {
@@ -57,8 +56,13 @@ func TestProtocolOptionalPresence(t *testing.T) {
 		{"explicit zero", proto.EmulationSetDeviceMetricsOverride{Scale: new(float64(0))}, "scale", "0", true},
 		{"nil body", proto.FetchFulfillRequest{}, "body", "null", true},
 		{"empty body", proto.FetchFulfillRequest{Body: []byte{}}, "body", `""`, true},
-		{"unset argument", proto.RuntimeCallArgument{}, "value", "null", true},
-		{"object argument", proto.RuntimeCallArgument{ObjectID: "fixture-object"}, "value", "null", true},
+		{"unset argument", proto.RuntimeCallArgument{}, "value", "", false},
+		{"object argument", proto.RuntimeCallArgument{ObjectID: "fixture-object"}, "value", "", false},
+		{"explicit null argument", proto.RuntimeCallArgument{Value: jsonvalue.New(nil)}, "value", "null", true},
+		{"explicit false argument", proto.RuntimeCallArgument{Value: jsonvalue.New(false)}, "value", "false", true},
+		{"omitted bool", proto.PageCaptureScreenshot{}, "fromSurface", "", false},
+		{"explicit false", proto.PageCaptureScreenshot{FromSurface: new(false)}, "fromSurface", "false", true},
+		{"explicit true", proto.PageCaptureScreenshot{FromSurface: new(true)}, "fromSurface", "true", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data, err := json.Marshal(tc.value)

@@ -84,7 +84,6 @@ func TestSetBlockedURLs(t *testing.T) {
 	server.Route("/blocked.js", ".js", `window.scriptLoaded = true`)
 
 	page := g.newPage()
-	page.EnableDomain(proto.NetworkEnable{})
 	page.MustSetBlockedURLs()
 	page.MustSetBlockedURLs("*.js")
 	wait := page.EachEvent(rod.On(func(event *proto.NetworkLoadingFailed, _ proto.TargetSessionID) bool {
@@ -92,8 +91,11 @@ func TestSetBlockedURLs(t *testing.T) {
 		return true
 	}))
 	page.MustNavigate(server.URL()).MustWaitLoad()
-	wait()
+	g.E(wait())
 	g.False(page.MustEval(`() => window.scriptLoaded === true`).Bool())
+	page.MustSetBlockedURLs()
+	page.MustReload().MustWaitLoad()
+	g.True(page.MustEval(`() => window.scriptLoaded === true`).Bool())
 }
 
 func TestSetExtraHeaders(t *testing.T) {
@@ -199,7 +201,9 @@ func TestLoadState(t *testing.T) {
 func TestDisableDomain(t *testing.T) {
 	g := setup(t)
 
-	defer g.page.DisableDomain(&proto.PageEnable{})()
+	restore, err := g.page.DisableDomain(&proto.PageEnable{})
+	g.E(err)
+	defer func() { g.E(restore()) }()
 }
 
 func TestPageContext(t *testing.T) {
@@ -615,7 +619,9 @@ func TestPageEventSession(t *testing.T) {
 	s := g.Serve()
 	p := g.newPage(s.URL())
 
-	p.EnableDomain(proto.NetworkEnable{})
+	restore, err := p.EnableDomain(proto.NetworkEnable{})
+	g.E(err)
+	defer func() { g.E(restore()) }()
 	go g.page.Context(g.Context()).EachEvent(rod.On(func(_ *proto.NetworkRequestWillBeSent, _ proto.TargetSessionID) bool {
 		g.Log("should not goes to here")
 		g.Fail()
@@ -790,8 +796,8 @@ func TestScrollScreenshot(t *testing.T) {
 	res := p.MustEval(`() => ({w: document.documentElement.scrollWidth, h: document.documentElement.scrollHeight})`)
 	// ScrollScreenshot do not support horizontal scrolling yet,
 	// the width should be the same as the viewport.
-	// However, since different devices have different scroll bar widths, this value may be different on different devices. We will not make test assertions for the time being.
-	g.True(1280 >= img.Bounds().Dx() || 1000 <= img.Bounds().Dx())
+	// Allow for different scrollbar widths while bounding both sides.
+	g.True(1280 >= img.Bounds().Dx() && 1000 <= img.Bounds().Dx())
 	g.Eq(res.Get("h").Int(), img.Bounds().Dy())
 
 	// after the full page screenshot the window size should be the same as before

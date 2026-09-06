@@ -174,7 +174,10 @@ func (p *Page) tryTraceReq(includes, excludes []string) func(map[proto.NetworkRe
 		for k, v := range list {
 			clone[string(k)] = v
 		}
-		ch <- clone
+		select {
+		case ch <- clone:
+		case <-p.ctx.Done():
+		}
 	}
 
 	go func() {

@@ -70,7 +70,7 @@ func TestWebSocketHeader(t *testing.T) {
 	err := ws.Connect(g.Context(), s.URL("/a?q=ok"), http.Header{
 		"Host":              {"test.com"},
 		"Test":              {"header"},
-		"Sec-WebSocket-Key": {"key"},
+		"Sec-WebSocket-Key": {"MDEyMzQ1Njc4OWFiY2RlZg=="},
 	})
 	<-wait
 

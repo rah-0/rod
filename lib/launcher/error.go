@@ -17,3 +17,12 @@ var ErrManagerUnauthorized = errors.New("launcher manager authentication failed"
 var ErrManagerInsecureTransport = errors.New(
 	"launcher manager requires HTTPS or WSS for non-loopback connections",
 )
+
+// ErrManagedLaunch indicates that a local owned launch was given a remote launcher.
+var ErrManagedLaunch = errors.New("owned launch requires a local launcher")
+
+// ErrDebuggingPortInUse indicates that the configured local port cannot be bound.
+var ErrDebuggingPortInUse = errors.New("browser debugging port is unavailable")
+
+// ErrDevToolsUnavailable indicates a process that exited before announcing DevTools.
+var ErrDevToolsUnavailable = errors.New("browser exited before announcing its DevTools endpoint")

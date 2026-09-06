@@ -2,6 +2,9 @@
 package input
 
 import (
+	"strings"
+	"unicode/utf8"
+
 	"github.com/rah-0/rod/lib/proto"
 )
 
@@ -77,7 +80,8 @@ func (k Key) Shift() (Key, bool) {
 
 // Printable returns true if the key is printable.
 func (k Key) Printable() bool {
-	return len(k.Info().Key) == 1
+	key := k.Info().Key
+	return utf8.ValidString(key) && utf8.RuneCountInString(key) == 1
 }
 
 // Modifier returns the modifier value of the key.
@@ -116,8 +120,21 @@ func (k Key) Encode(t proto.InputDispatchKeyEventType, modifiers int) *proto.Inp
 	}
 
 	var cmd []string
-	if IsMac {
-		cmd = macCommands[info.Key]
+	if IsMac && (t == proto.InputDispatchKeyEventTypeKeyDown || t == proto.InputDispatchKeyEventTypeRawKeyDown) {
+		var combination []string
+		for _, modifier := range []struct {
+			mask int
+			name string
+		}{
+			{ModifierShift, "Shift"}, {ModifierControl, "Control"},
+			{ModifierAlt, "Alt"}, {ModifierMeta, "Meta"},
+		} {
+			if modifiers&modifier.mask != 0 {
+				combination = append(combination, modifier.name)
+			}
+		}
+		combination = append(combination, info.Code)
+		cmd = macCommands[strings.Join(combination, "+")]
 	}
 
 	e := &proto.InputDispatchKeyEvent{
@@ -128,7 +145,7 @@ func (k Key) Encode(t proto.InputDispatchKeyEventType, modifiers int) *proto.Inp
 		Text:                  txt,
 		UnmodifiedText:        txt,
 		Location:              l,
-		IsKeypad:              keypad,
+		IsKeypad:              new(keypad),
 		Modifiers:             modifiers,
 		Commands:              cmd,
 	}

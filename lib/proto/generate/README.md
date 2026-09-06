@@ -38,8 +38,11 @@ sha256sum /tmp/protocol.json
 Record the exact browser revision/version and schema digest; omit the ephemeral
 `webSocketDebuggerUrl`. Review changed APIs, optional field types, and wire behavior
 before accepting the new generated output. The default `encoding/json` contract
-is required: optional pointers stay pointers, and `jsonvalue.Value` fields remain
-present as `null` when unset. The Fetch body patch preserves the difference between
+is required: optional command booleans use `*bool`, so nil, false, and true remain
+distinct. Other optional pointers stay pointers. `RuntimeCallArgument.Value` uses
+`omitzero` to omit an unset value while preserving explicit `jsonvalue.New(nil)`
+as null; other `jsonvalue.Value` fields remain present as null when unset.
+The Fetch body patch preserves the difference between
 `nil` (`null`) and an empty byte slice (`""`).
 
 ```sh

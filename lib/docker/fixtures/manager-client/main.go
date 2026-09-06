@@ -45,7 +45,7 @@ func exerciseManager(ctx context.Context, authToken string) (product string, err
 		return "", fmt.Errorf("unauthenticated manager request returned %s", res.Status)
 	}
 
-	managed, err := launcher.NewManaged(managerURL, authToken)
+	managed, err := launcher.NewManaged(ctx, managerURL, authToken)
 	if err != nil {
 		return "", err
 	}

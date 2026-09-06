@@ -10,6 +10,49 @@ Each heading names that version and the previous version it changes. Describe
 the implementation for the named version. Keep historical entries intact; add
 later changes under their own version.
 
+## v0.120.0 — compared with v0.119.0
+
+### Go APIs
+
+| Affected API | Change | Migration |
+| --- | --- | --- |
+| Optional boolean fields on generated CDP commands | Use `*bool` to distinguish omission from explicit `false`. Required booleans and response/event booleans retain their types. | Replace command literals such as `FromSurface: false` with `FromSurface: new(false)`. Use `nil` for Chrome's default. Check for nil before dereferencing optional fields. |
+| `Browser.EnableDomain`, `Browser.DisableDomain`, `Page.EnableDomain`, `Page.DisableDomain`, `Page.SetExtraHeaders` | Return `(func() error, error)` so setup and restoration failures are observable. Restoration is bounded and idempotent. `DisableDomain` restores the original enable configuration. | Check the setup error before using the restore function, then check `restore()` when finished. `MustSetExtraHeaders` retains `func()` and panics on either error. |
+| `Browser.EachEvent`, `Page.EachEvent`, `Browser.WaitEvent`, `Page.WaitEvent`, `Page.WaitNavigation`, `Page.WaitRequestIdle` | Return `func() error`; setup, cancellation, connection loss, and restoration failures are observable. | Check `err := wait()`. Change stored callback types to `func() error`. The corresponding `Must` helpers retain `func()` and panic on errors. |
+| `Page.HandleDialog` | Its wait function returns `(*proto.PageJavascriptDialogOpening, error)` rather than an event alone. | Check the wait error before reading the event or handling the dialog. `MustHandleDialog` keeps its existing shape and panics on wait errors. |
+| `Browser.WaitDownload` | Returns `(func() (*proto.BrowserDownloadWillBegin, error), error)`. The result uses the Browser event type, pins the first matching GUID, and reports canceled downloads. Each browser context permits one active wait. | Check both setup and wait errors. Handle `ErrDownloadCanceled` and `ErrDownloadInProgress`; complete or cancel the previous wait before starting another in the same context. `MustWaitDownload` still returns file bytes. |
+| `SearchResult.Release` | Returns an error and performs bounded, idempotent cleanup even after the search context expires. | Check `result.Release()`; release successful search results when finished. Failed searches clean up automatically. |
+| `HijackRouter.Run` | Returns an error for failed setup, event waiting, or cleanup. Errors serving individual requests still use `Hijack.OnError`. | Collect the result from the goroutine running the router and handle it alongside `Stop`; configure `OnError` for request failures. |
+| `launcher.NewManaged`, `launcher.MustNewManaged` | Require the caller context before the service URL and token. Initialization honors that context through discovery and body reads. | Use `NewManaged(ctx, serviceURL, token)` or `MustNewManaged(ctx, serviceURL, token)` with a suitable deadline. |
+| `input.Numpad0` through `input.Numpad9`, `input.NumpadDecimal` | Numeric key IDs change to match the corrected keypad virtual-key codes. | Use the named constants rather than storing their integer values. Replace previously serialized IDs with the corresponding named key. |
+
+### Runtime behavior
+
+| Affected behavior | Change | Migration |
+| --- | --- | --- |
+| `Browser.PageFromTarget` and page contexts | Calls return separate views of a shared attachment using the current caller context. `Page.GetContext` and cloned `Keyboard`, `Mouse`, and `Touch` operations use that context while sharing attachment and input state. Session termination independently cancels operations and event streams. | Compare target/session IDs rather than Page pointer identity. Use `Page.Event` or operation errors to observe session closure. An expired view does not invalidate later views. |
+| `Browser.Pages` on an incognito browser | Returns only pages belonging to that browser context. The root browser still lists pages across contexts. | Use the root browser for cross-context enumeration. |
+| `Page.Close` | Returns cancellation or connection-loss errors if target destruction is unconfirmed. A rejected beforeunload prompt still returns `PageCloseCanceledError`. | Check the close error before assuming the target was destroyed. |
+| `Element.Frame` | Cross-process frames use their own renderer session. A frame view belongs to its current document and renderer; obsolete views return a session error or `ErrFrameContextChanged`. | Obtain another view with `Element.Frame` after a renderer transition. Use `errors.Is(err, rod.ErrFrameContextChanged)` to recognize a stale document context. |
+| `RuntimeCallArgument.Value` | An unset `jsonvalue.Value` is omitted, preserving JavaScript `undefined` and object/unserializable arguments. Explicit `jsonvalue.New(nil)` remains JSON null. | Use `jsonvalue.New(nil)` when passing an explicit null. Leave `Value` unset when supplying `ObjectID` or `UnserializableValue`. |
+| `Element.Screenshot` | Captures the transformed element bounds using native clipping and the browser's scale. Bounds round outward to device-independent pixel edges. | Expect scaled bitmap dimensions and correct fractional edges; update image expectations that depended on the former CSS-coordinate crop. |
+| `HijackRequest` getters and `SetBody` | Getters reflect the outgoing HTTP request and latest replacement body. `Headers` returns a snapshot. Captured/replacement bodies set replay metadata for redirects; available binary post-data entries are preserved. | Treat `Body()` as raw bytes held in a Go string; use `[]byte(request.Body())` for binary consumers. Save original values before modifying them, and use `Req().Header` to change headers. `SetBody` replaces `GetBody` and `ContentLength`; install custom replay behavior afterward. |
+| `HijackResponse.SetHeader` | Replaces every existing value of a header case-insensitively. `LoadResponse` preserves repeated headers. | Use `AddHeader` when adding another value, including multiple `Set-Cookie` headers. |
+| `HijackRouter.Add`, `proto.PatternToReg` | URL patterns use CDP glob syntax with literal regexp punctuation. Resource-type filters also apply to local dispatch. A fulfilled request stops the handler chain; unmatched or fully skipped requests continue. | Use `*` and `?` for wildcards and backslash for escaping. Do not pass regular expressions. Set `Hijack.Skip` to advance to another matching handler. Add or remove routes before stopping the router; stopped routers reject updates. |
+| `cdp.WebSocket` | Uses valid random handshake keys and frame masks, preserves outgoing buffers, handles control/fragmented text frames, and rejects malformed framing or conflicting header overrides. | Custom peers must implement WebSocket framing correctly. Supply a valid base64-encoded 16-byte nonce when overriding `Sec-WebSocket-Key`; leave it unset to generate one. |
+| `cdp.Client.Close` | Explicit closure terminates pending calls with `ErrClientClosed`, unless a prior terminal error was already recorded, and closes a custom transport at most once. The event channel closes when its reader exits. | Treat Close as terminal; create another client for a new connection. A transport without `io.Closer` returns `ErrTransportNotClosable`. Its `Close` must interrupt blocked reads and writes. |
+| `cdp.Client.Call` transport writes | Uses an optional `SendContext(context.Context, []byte) error` transport method. Canceling an active built-in WebSocket write closes the connection because a partial frame cannot be resumed safely. | Reconnect after an interrupted write. Custom transports should implement `SendContext` to honor request cancellation; transports exposing only `Send` must bound that operation themselves. |
+| Owned `Browser.Close` | Its ten-second default budget covers graceful shutdown and forced cleanup together. `CloseWithTimeout` selects another total budget. | Handle deadline errors when cleanup cannot finish within the budget; retry cleanup with an adequate budget if needed. |
+| `Page.Reload`, `Browser.HandleAuth`, `Page.HandleFileDialog` | Propagate setup, wait, and restoration failures. File-chooser interception restores its prior state on completion or cancellation, including canceled unused waits. | Check returned errors instead of assuming an absent event means success. Give unused file-chooser waits a cancelable context. Authentication waits restore the prior Fetch configuration when invoked and completed. |
+| `Page.WaitDOMStable`, `Page.WaitStable` | Reject nonpositive stability durations with an error; `WaitRequestIdle` rejects negative durations. | Pass a positive stability interval and use a context deadline for the maximum wait. |
+
+### Examples
+
+Runnable examples live in the root [examples directory](../examples).
+`lib/examples` and its obsolete external-service demonstrations are removed.
+Update commands and nested-module paths to `examples/...`; the retained examples
+use local fixtures and include tests.
+
 ## v0.119.0 — compared with v0.118.0
 
 ### Browser lifetime

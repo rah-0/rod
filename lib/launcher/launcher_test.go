@@ -49,13 +49,13 @@ func TestLaunch(t *testing.T) {
 	}
 
 	{
-		_, err := launcher.NewManaged("", "test-manager-token")
+		_, err := launcher.NewManaged(t.Context(), "", "test-manager-token")
 		g.Err(err)
 
-		_, err = launcher.NewManaged("1://", "test-manager-token")
+		_, err = launcher.NewManaged(t.Context(), "1://", "test-manager-token")
 		g.Err(err)
 
-		_, err = launcher.NewManaged("ws://not-exists", "test-manager-token")
+		_, err = launcher.NewManaged(t.Context(), "ws://not-exists", "test-manager-token")
 		g.Err(err)
 	}
 

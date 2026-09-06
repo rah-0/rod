@@ -2,11 +2,18 @@ package rod
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/rah-0/rod/lib/proto"
 	"github.com/rah-0/rod/lib/utils"
 )
+
+// ErrBrowserDisconnected means the browser event stream closed before a wait completed.
+var ErrBrowserDisconnected = errors.New("browser connection closed")
+
+// errWaitCompleted ends an event subscription after an internal idle timer succeeds.
+var errWaitCompleted = errors.New("wait completed")
 
 // TryError error.
 type TryError struct {
@@ -85,7 +92,13 @@ type EvalError struct {
 }
 
 func (e *EvalError) Error() string {
+	if e.RuntimeExceptionDetails == nil {
+		return "eval js error"
+	}
 	exp := e.Exception
+	if exp == nil {
+		return "eval js error: " + e.Text
+	}
 	return fmt.Sprintf("eval js error: %s %s", exp.Description, exp.Value)
 }
 

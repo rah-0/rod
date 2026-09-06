@@ -191,10 +191,12 @@ func Example_context_and_EachEvent() {
 	}()
 
 	// It's a blocking method, it will wait until the context is cancelled
-	page.EachEvent(rod.On(func(_ *proto.PageLifecycleEvent, _ proto.TargetSessionID) bool { return false }))()
+	err := page.EachEvent(rod.On(func(_ *proto.PageLifecycleEvent, _ proto.TargetSessionID) bool { return false }))()
 
-	if page.GetContext().Err() == context.Canceled {
+	if errors.Is(err, context.Canceled) {
 		fmt.Println("cancelled")
+	} else {
+		utils.E(err)
 	}
 }
 
@@ -251,17 +253,40 @@ func Example_error_handling() {
 // Example_search shows how to use Search to get element inside nested iframes or shadow DOMs.
 // It works the same as https://developers.google.com/web/tools/chrome-devtools/dom#search
 func Example_search() {
-	browser := rod.New().MustConnect()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		switch r.URL.Path {
+		case "/outer":
+			_, _ = fmt.Fprint(w, `<iframe src="/inner"></iframe>`)
+		case "/inner":
+			_, _ = fmt.Fprint(w, `<div id="host"></div><script>
+const shadow = document.querySelector("#host").attachShadow({mode: "open"})
+const button = document.createElement("button")
+button.id = "activate"
+button.textContent = "Activate"
+button.onclick = () => { top.document.title = "Activated" }
+shadow.append(button)
+</script>`)
+		default:
+			_, _ = fmt.Fprint(w, `<iframe src="/outer"></iframe>`)
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	browser := rod.New().Context(ctx).NoDefaultDevice().MustConnect()
 	defer browser.MustClose()
 
-	page := browser.MustPage("https://developer.mozilla.org/en-US/docs/Web/HTML/Element/iframe")
+	page := browser.MustPage(server.URL).MustWaitLoad()
 
-	// Click the zoom-in button of the OpenStreetMap
-	page.MustSearch(".leaflet-control-zoom-in").MustClick()
+	// Search crosses both iframe boundaries and finds the shadow DOM button.
+	page.MustSearch("#activate").MustClick()
+	page.MustWait(`() => document.title === "Activated"`)
 
-	fmt.Println("done")
+	fmt.Println(page.MustInfo().Title)
 
-	// Output: done
+	// Output: Activated
 }
 
 func Example_page_screenshot() {
@@ -284,7 +309,7 @@ func Example_page_screenshot() {
 			Height: 200,
 			Scale:  1,
 		},
-		FromSurface: true,
+		FromSurface: new(true),
 	})
 	_ = utils.OutputFile("my.jpg", img)
 }
@@ -352,17 +377,31 @@ func Example_race_selectors() {
 // Rod uses mouse cursor to simulate clicks, so if a button is moving because of animation, the click may not work as expected.
 // We usually use WaitStable to make sure the target isn't changing anymore.
 func Example_wait_for_animation() {
-	browser := rod.New().MustConnect()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	browser := rod.New().Context(ctx).NoDefaultDevice().MustConnect()
 	defer browser.MustClose()
 
-	page := browser.MustPage("https://getbootstrap.com/docs/4.0/components/modal/")
+	page := browser.MustPage().MustSetDocumentContent(`<!doctype html>
+<button id="open">Open dialog</button>
+<section id="dialog" hidden style="position: absolute; top: 80px; left: 0">
+  <button onclick="this.parentElement.hidden = true">Close</button>
+</section>
+<script>
+document.querySelector("#open").onclick = () => {
+  const dialog = document.querySelector("#dialog")
+  dialog.hidden = false
+  dialog.animate([{transform: "translateX(0)"}, {transform: "translateX(120px)"}],
+                 {duration: 400, fill: "forwards"})
+}
+</script>`)
 
-	page.MustWaitLoad().MustElement("[data-target='#exampleModalLive']").MustClick()
+	page.MustElement("#open").MustClick()
 
-	saveBtn := page.MustElementR("#exampleModalLive button", "Close")
+	closeButton := page.MustElementR("#dialog button", "Close")
 
 	// Here, WaitStable will wait until the button's position and size become stable.
-	saveBtn.MustWaitStable().MustClick().MustWaitInvisible()
+	closeButton.MustWaitStable().MustClick().MustWaitInvisible()
 
 	fmt.Println("done")
 
@@ -371,59 +410,94 @@ func Example_wait_for_animation() {
 
 // When you want to wait for an ajax request to complete, this example will be useful.
 func Example_wait_for_request() {
-	browser := rod.New().MustConnect()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/suggestions" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `["Common Lisp", "Scheme"]`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprint(w, `<!doctype html>
+<input id="search"><ul id="suggestions"></ul>
+<script>
+document.querySelector("#search").oninput = async event => {
+  const response = await fetch("/suggestions?q=" + encodeURIComponent(event.target.value))
+  const suggestions = await response.json()
+  document.querySelector("#suggestions").replaceChildren(...suggestions.map(text => {
+    const item = document.createElement("li")
+    item.textContent = text
+    return item
+  }))
+}
+</script>`)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	browser := rod.New().Context(ctx).NoDefaultDevice().MustConnect()
 	defer browser.MustClose()
 
-	page := browser.MustPage("https://www.wikipedia.org/").MustWaitLoad()
+	page := browser.MustPage(server.URL).MustWaitLoad()
 
 	// Start to analyze request events
 	wait := page.MustWaitRequestIdle()
 
 	// This will trigger the search ajax request
-	page.MustElement("#searchInput").MustClick().MustInput("lisp")
+	page.MustElement("#search").MustInput("lisp")
 
 	// Wait until there's no active requests
 	wait()
 
-	// We want to make sure that after waiting, there are some autocomplete
-	// suggestions available.
-	fmt.Println(len(page.MustElements(".suggestion-link")) > 0)
+	// The response supplies both autocomplete suggestions.
+	fmt.Println(page.MustElements("#suggestions li").First().MustText())
+	fmt.Println(len(page.MustElements("#suggestions li")))
 
-	// Output: true
+	// Output:
+	// Common Lisp
+	// 2
 }
 
 // Shows how to change the retry/polling options that is used to query elements.
 // This is useful when you want to customize the element query retry logic.
 func Example_customize_retry_strategy() {
-	browser := rod.New().MustConnect()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	browser := rod.New().Context(ctx).NoDefaultDevice().MustConnect()
 	defer browser.MustClose()
 
-	page := browser.MustPage("https://github.com")
+	page := browser.MustPage().MustSetDocumentContent(`<input name="query">`)
 
-	// sleep for 0.5 seconds before every retry
+	// Each query gets its own retry count and a delay that respects cancellation.
 	sleeper := func() utils.Sleeper {
-		return func(context.Context) error {
-			time.Sleep(time.Second / 2)
-			return nil
-		}
+		return utils.EachSleepers(
+			utils.CountSleeper(3),
+			utils.BackoffSleeper(10*time.Millisecond, 100*time.Millisecond, nil),
+		)
 	}
-	el, _ := page.Sleeper(sleeper).Element("input")
+	el, err := page.Sleeper(sleeper).Element("input")
+	utils.E(err)
 	fmt.Println(el.MustProperty("name"))
 
-	// If sleeper is nil page.ElementE will query without retrying.
-	// If nothing found it will return an error.
-	el, err := page.Sleeper(rod.NotFoundSleeper).Element("input")
+	_, err = page.Sleeper(sleeper).Element("#missing")
+	if limit, ok := errors.AsType[*utils.MaxSleepCountError](err); ok {
+		fmt.Println("retry limit:", limit.Max)
+	} else {
+		utils.E(err)
+	}
+
+	// NotFoundSleeper returns an ElementNotFoundError without retrying.
+	_, err = page.Sleeper(rod.NotFoundSleeper).Element("#missing")
 	if errors.Is(err, &rod.ElementNotFoundError{}) {
 		fmt.Println("element not found")
 	} else if err != nil {
 		panic(err)
 	}
 
-	fmt.Println(el.MustProperty("name"))
-
 	// Output:
-	// type
-	// type
+	// query
+	// retry limit: 3
+	// element not found
 }
 
 // Shows how we can further customize the browser with the launcher library.
@@ -483,25 +557,33 @@ func Example_direct_cdp() {
 
 // Shows how to listen for events.
 func Example_handle_events() {
-	browser := rod.New().MustConnect()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprint(w, `<!doctype html><title>Event example</title>`)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	browser := rod.New().Context(ctx).NoDefaultDevice().MustConnect()
 	defer browser.MustClose()
 
 	page := browser.MustPage()
 
-	done := make(chan struct{})
-
-	// Listen for all events of console output.
-	go page.EachEvent(rod.On(func(e *proto.RuntimeConsoleAPICalled, _ proto.TargetSessionID) bool {
+	// Listen until the first console log, then collect the listener's error.
+	waitConsole := page.EachEvent(rod.On(func(e *proto.RuntimeConsoleAPICalled, _ proto.TargetSessionID) bool {
 		if e.Type == proto.RuntimeConsoleAPICalledTypeLog {
 			fmt.Println(page.MustObjectsToJSON(e.Args))
-			close(done)
+			return true
 		}
 		return false
-	}))()
+	}))
+	done := make(chan error, 1)
+	go func() { done <- waitConsole() }()
 
 	wait := page.WaitEvent(&proto.PageLoadEventFired{})
-	page.MustNavigate("https://mdn.dev")
-	wait()
+	page.MustNavigate(server.URL)
+	utils.E(wait())
 
 	// EachEvent allows us to achieve the same functionality as above.
 	if false {
@@ -510,25 +592,32 @@ func Example_handle_events() {
 		wait := page.EachEvent(rod.On(func(_ *proto.PageLoadEventFired, _ proto.TargetSessionID) (stop bool) {
 			return true
 		}))
-		page.MustNavigate("https://mdn.dev")
-		wait()
+		page.MustNavigate(server.URL)
+		utils.E(wait())
 	}
 
 	// Or the for-loop style to handle events to do the same thing above.
 	if false {
-		page.MustNavigate("https://mdn.dev")
+		// Raw event subscriptions need their protocol domain enabled explicitly.
+		utils.E(proto.PageEnable{}.Call(page))
+		eventPage, cancel := page.WithCancel()
+		defer cancel()
+		events := eventPage.Event()
+		page.MustNavigate(server.URL)
 
-		for msg := range page.Event() {
+		for msg := range events {
 			e := proto.PageLoadEventFired{}
 			if msg.Load(&e) {
 				break
 			}
 		}
+		cancel()
+		utils.E(proto.PageDisable{}.Call(page))
 	}
 
 	page.MustEval(`() => console.log("hello", "world")`)
 
-	<-done
+	utils.E(<-done)
 
 	// Output:
 	// [hello world]
@@ -569,7 +658,6 @@ func Example_hijack_requests() {
 	defer browser.MustClose()
 
 	router := browser.HijackRequests()
-	defer router.MustStop()
 
 	router.MustAdd("*.js", func(ctx *rod.Hijack) {
 		// Here we update the request's header. Rod gives functionality to
@@ -581,14 +669,20 @@ func Example_hijack_requests() {
 		// Not calling this will require you to mock the entire response.
 		// This can be done with the SetXxx (Status, Header, Body) functions on the
 		// ctx.Response struct.
-		_ = ctx.LoadResponse(http.DefaultClient, true)
+		ctx.MustLoadResponse()
 
 		// Here we append some code to every js file.
 		// The code will update the document title to "hi"
 		ctx.Response.SetBody(ctx.Response.Body() + "\n document.title = 'hi' ")
 	})
 
-	go router.Run()
+	done := make(chan error, 1)
+	go func() { done <- router.Run() }()
+	defer func() {
+		stopErr := router.Stop()
+		runErr := <-done
+		utils.E(errors.Join(stopErr, runErr))
+	}()
 
 	browser.MustPage(server.URL).MustWait(`() => document.title === 'hi'`)
 
@@ -635,7 +729,15 @@ func Example_states() {
 
 // We can use [rod.PagePool] to concurrently control and reuse pages.
 func ExamplePage_pool() {
-	browser := rod.New().MustConnect()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprint(w, `<!doctype html><title>Pooled page</title>`)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	browser := rod.New().Context(ctx).NoDefaultDevice().MustConnect()
 	defer browser.MustClose()
 
 	// We create a pool that will hold at most 3 pages which means the max concurrency is 3
@@ -654,7 +756,7 @@ func ExamplePage_pool() {
 		// so the instance can be reused by other goroutines.
 		defer pool.Put(page)
 
-		page.MustNavigate("http://mdn.dev").MustWaitLoad()
+		page.MustNavigate(server.URL).MustWaitLoad()
 		fmt.Println(page.MustInfo().Title)
 	}
 
@@ -673,10 +775,10 @@ func ExamplePage_pool() {
 	pool.Cleanup(func(p *rod.Page) { p.MustClose() })
 
 	// Output:
-	// MDN Web Docs
-	// MDN Web Docs
-	// MDN Web Docs
-	// MDN Web Docs
+	// Pooled page
+	// Pooled page
+	// Pooled page
+	// Pooled page
 }
 
 // We can use [rod.BrowserPool] to concurrently control and reuse browsers.

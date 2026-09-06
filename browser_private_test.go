@@ -158,9 +158,10 @@ func TestAttachedBrowserCloseContext(t *testing.T) {
 // These context tests represent a process that has already exited. Real process
 // ownership and profile removal are checked by TestImplicitBrowserProcessCleanup.
 func stoppedBrowserProcess() *localBrowserProcess {
-	process := &localBrowserProcess{done: make(chan struct{})}
+	done := make(chan struct{})
+	process := &localBrowserProcess{done: done}
 	process.stopOnce.Do(func() {})
-	close(process.done)
+	close(done)
 	return process
 }
 

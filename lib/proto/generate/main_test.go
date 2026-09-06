@@ -40,7 +40,7 @@ func TestRenderFixture(t *testing.T) {
 		}
 	}
 	checks := map[string][]string{
-		"fixture.go":          {"Value jsonvalue.Value `json:\"value\"`", "Count *int `json:\"count,omitempty\"`", "Ratio *float64 `json:\"ratio,omitempty\"`", "Options *FixtureOptions `json:\"options,omitempty\"`", "Deprecated: This protocol API is deprecated."},
+		"fixture.go":          {"Value jsonvalue.Value `json:\"value\"`", "Enabled *bool `json:\"enabled,omitempty\"`", "Enabled bool `json:\"enabled,omitempty\"`", "Count *int `json:\"count,omitempty\"`", "Ratio *float64 `json:\"ratio,omitempty\"`", "Options *FixtureOptions `json:\"options,omitempty\"`", "Deprecated: This protocol API is deprecated."},
 		"fetch.go":            {"Body []byte `json:\"body\"`"},
 		"input.go":            {"DeltaX float64 `json:\"deltaX\"`", "DeltaY float64 `json:\"deltaY\"`"},
 		"network.go":          {"Expires TimeSinceEpoch `json:\"expires\"`"},

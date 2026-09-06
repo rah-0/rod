@@ -37,7 +37,8 @@ type Page struct {
 
 	// FrameID is a unique ID for a browsing context.
 	// Usually, different FrameID means different javascript execution context.
-	// Such as an iframe and the page it belongs to will have the same TargetID but different FrameIDs.
+	// Frames in one renderer share a TargetID; frames in another renderer have
+	// their own target and session.
 	FrameID proto.PageFrameID
 
 	// SessionID is a unique ID for a page attachment to a controller.
@@ -48,6 +49,8 @@ type Page struct {
 	e eFunc
 
 	ctx context.Context
+	// sessionCtx ends when the attached target or its connection closes.
+	sessionCtx context.Context
 
 	// Used to abort all ongoing actions when a page closes.
 	sessionCancel func()
@@ -66,10 +69,9 @@ type Page struct {
 
 	element *Element // iframe only
 
-	jsCtxLock   *sync.Mutex
-	jsCtxID     *proto.RuntimeRemoteObjectID // use pointer so that page clones can share the change
-	helpersLock *sync.Mutex
-	helpers     map[proto.RuntimeRemoteObjectID]map[string]proto.RuntimeRemoteObjectID
+	jsCtxLock *sync.Mutex
+	jsCtxID   *proto.RuntimeRemoteObjectID // use pointer so that page clones can share the change
+	helpers   *jsHelperCache
 }
 
 // String interface.
@@ -98,7 +100,9 @@ func (p *Page) Browser() *Browser {
 
 // Info of the page, such as the URL or title of the page.
 func (p *Page) Info() (*proto.TargetTargetInfo, error) {
-	return p.browser.pageInfo(p.TargetID)
+	ctx, cancel := contextWithSession(p.ctx, p.sessionCtx)
+	defer cancel()
+	return p.browser.Context(ctx).pageInfo(p.TargetID)
 }
 
 // HTML of the page.
@@ -136,15 +140,23 @@ func (p *Page) SetCookies(cookies []*proto.NetworkCookieParam) error {
 	return proto.NetworkSetCookies{Cookies: cookies}.Call(p)
 }
 
-// SetExtraHeaders whether to always send extra HTTP headers with the requests from this page.
-func (p *Page) SetExtraHeaders(dict []string) (func(), error) {
+// SetExtraHeaders sends extra HTTP headers with requests from this page.
+// The returned function releases its Network domain lease and reports cleanup errors.
+func (p *Page) SetExtraHeaders(dict []string) (func() error, error) {
 	headers := proto.NetworkHeaders{}
 
 	for i := 0; i < len(dict); i += 2 {
 		headers[dict[i]] = jsonvalue.New(dict[i+1])
 	}
 
-	return p.EnableDomain(&proto.NetworkEnable{}), proto.NetworkSetExtraHTTPHeaders{Headers: headers}.Call(p)
+	restore, err := p.EnableDomain(&proto.NetworkEnable{})
+	if err != nil {
+		return nil, err
+	}
+	if err := (proto.NetworkSetExtraHTTPHeaders{Headers: headers}).Call(p); err != nil {
+		return nil, errors.Join(err, restore())
+	}
+	return restore, nil
 }
 
 // SetUserAgent (browser brand, accept-language, etc) of the page.
@@ -161,8 +173,11 @@ func (p *Page) SetUserAgent(req *proto.NetworkSetUserAgentOverride) error {
 // Wildcards ('*') are allowed, such as ["*/api/logout/*","delete"].
 // NOTE: if you set empty pattern "", it will block all requests.
 func (p *Page) SetBlockedURLs(urls []string) error {
-	if len(urls) == 0 {
-		return nil
+	if urls == nil {
+		urls = []string{}
+	}
+	if err := (proto.NetworkEnable{}).Call(p); err != nil {
+		return err
 	}
 	return proto.NetworkSetBlockedURLs{Urls: urls}.Call(p)
 }
@@ -177,7 +192,11 @@ func (p *Page) Navigate(url string) error {
 	// try to stop loading
 	_ = p.StopLoading()
 
-	res, err := proto.PageNavigate{URL: url}.Call(p)
+	request := proto.PageNavigate{URL: url}
+	if p.IsIframe() && p.SessionID == p.element.page.SessionID {
+		request.FrameID = p.FrameID
+	}
+	res, err := request.Call(p)
 	if err != nil {
 		return err
 	}
@@ -185,7 +204,7 @@ func (p *Page) Navigate(url string) error {
 		return &NavigationError{res.ErrorText}
 	}
 
-	p.root.unsetJSCtxID()
+	p.unsetJSCtxID()
 
 	return nil
 }
@@ -230,7 +249,9 @@ func (p *Page) Reload() error {
 		return err
 	}
 
-	wait()
+	if err := wait(); err != nil {
+		return err
+	}
 
 	p.unsetJSCtxID()
 
@@ -239,7 +260,9 @@ func (p *Page) Reload() error {
 
 // Activate (focuses) the page.
 func (p *Page) Activate() (*Page, error) {
-	err := proto.TargetActivateTarget{TargetID: p.TargetID}.Call(p.browser)
+	ctx, cancel := contextWithSession(p.ctx, p.sessionCtx)
+	defer cancel()
+	err := proto.TargetActivateTarget{TargetID: p.TargetID}.Call(p.browser.Context(ctx))
 	return p, err
 }
 
@@ -315,20 +338,27 @@ func (p *Page) StopLoading() error {
 
 // Close tries to close page, running its beforeunload hooks, if has any.
 func (p *Page) Close() error {
-	p.browser.targetsLock.Lock()
-	defer p.browser.targetsLock.Unlock()
-
-	success := true
-	ctx, cancel := context.WithCancel(p.ctx)
+	ctx, cancel := contextWithSession(p.ctx, p.browser.connectionCtx)
 	defer cancel()
 	messages := p.browser.Context(ctx).Event()
 
 	for {
-		err := proto.PageClose{}.Call(p)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// Destruction can end the session before Chrome acknowledges Page.close.
+		// This command must survive that session ending to read its acknowledgement.
+		req := proto.PageClose{}
+		_, err := p.browser.client.Call(ctx, string(p.SessionID), req.ProtoReq(), req)
 		if errors.Is(err, cdp.ErrNotAttachedToActivePage) {
-			// TODO: I don't know why chromium doesn't allow us to close a page while it's navigating.
-			// Looks like a bug in chromium.
-			utils.Sleep(0.1)
+			// Chrome can temporarily reject closure during navigation.
+			timer := time.NewTimer(100 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
 			continue
 		} else if err != nil {
 			return err
@@ -337,29 +367,20 @@ func (p *Page) Close() error {
 	}
 
 	for msg := range messages {
-		stop := false
-
 		destroyed := proto.TargetTargetDestroyed{}
 		closed := proto.PageJavascriptDialogClosed{}
-		if msg.Load(&destroyed) {
-			stop = destroyed.TargetID == p.TargetID
-		} else if msg.SessionID == p.SessionID && msg.Load(&closed) {
-			success = closed.Result
-			stop = !success
+		if msg.Load(&destroyed) && destroyed.TargetID == p.TargetID {
+			p.terminateSession()
+			return nil
 		}
-
-		if stop {
-			break
+		if msg.SessionID == p.SessionID && msg.Load(&closed) && !closed.Result {
+			return &PageCloseCanceledError{}
 		}
 	}
-
-	if success {
-		p.cleanupStates()
-	} else {
-		return &PageCloseCanceledError{}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-
-	return nil
+	return ErrBrowserDisconnected
 }
 
 // TriggerFavicon supports when browser in headless mode
@@ -390,39 +411,60 @@ func (p *Page) TriggerFavicon() error {
 //	wait()
 //	handle(true, "")
 func (p *Page) HandleDialog() (
-	wait func() *proto.PageJavascriptDialogOpening,
+	wait func() (*proto.PageJavascriptDialogOpening, error),
 	handle func(*proto.PageHandleJavaScriptDialog) error,
 ) {
-	restore := p.EnableDomain(&proto.PageEnable{})
-
 	var e proto.PageJavascriptDialogOpening
 	w := p.WaitEvent(&e)
 
-	return func() *proto.PageJavascriptDialogOpening {
-			w()
-			return &e
+	return func() (*proto.PageJavascriptDialogOpening, error) {
+			if err := w(); err != nil {
+				return nil, err
+			}
+			return &e, nil
 		}, func(h *proto.PageHandleJavaScriptDialog) error {
-			defer restore()
 			return h.Call(p)
 		}
 }
 
-// HandleFileDialog return a functions that waits for the next file chooser dialog pops up and returns the element
-// for the event.
+// HandleFileDialog returns a function that waits for the next file chooser and
+// sets its files. Completion or cancellation restores the previous interception
+// setting, including when the returned function is never called.
 func (p *Page) HandleFileDialog() (func([]string) error, error) {
-	err := proto.PageSetInterceptFileChooserDialog{Enabled: true}.Call(p)
-	if err != nil {
-		return nil, err
+	ctx, cancel := contextWithSession(p.ctx, p.sessionCtx)
+	view := p.Context(ctx)
+	previous := proto.PageSetInterceptFileChooserDialog{}
+	p.LoadState(&previous)
+	var once sync.Once
+	var cleanupErr error
+	cleanup := func() {
+		once.Do(func() {
+			defer cancel()
+			if !previous.Enabled {
+				cleanupCtx, stop := context.WithTimeout(context.WithoutCancel(p.ctx), 5*time.Second)
+				defer stop()
+				cleanupErr = previous.Call(p.Context(cleanupCtx))
+			}
+		})
 	}
+	if !previous.Enabled {
+		if err := (proto.PageSetInterceptFileChooserDialog{Enabled: true}).Call(view); err != nil {
+			cleanup()
+			return nil, errors.Join(err, cleanupErr)
+		}
+	}
+	stopCleanup := context.AfterFunc(ctx, cleanup)
 
 	var e proto.PageFileChooserOpened
-	w := p.WaitEvent(&e)
+	w := view.WaitEvent(&e)
 
-	return func(paths []string) error {
-		w()
-
-		err := proto.PageSetInterceptFileChooserDialog{Enabled: false}.Call(p)
-		if err != nil {
+	return func(paths []string) (err error) {
+		defer func() {
+			stopCleanup()
+			cleanup()
+			err = errors.Join(err, cleanupErr)
+		}()
+		if err := w(); err != nil {
 			return err
 		}
 
@@ -549,9 +591,9 @@ func (p *Page) ScrollScreenshot(opt *ScrollScreenshotOptions) ([]byte, error) {
 			Format:                opt.Format,
 			Quality:               opt.Quality,
 			Clip:                  clip,
-			FromSurface:           false,
-			CaptureBeyondViewport: false,
-			OptimizeForSpeed:      false,
+			FromSurface:           new(true), // View capture ignores the requested clip.
+			CaptureBeyondViewport: new(false),
+			OptimizeForSpeed:      new(false),
 		}
 		shot, err := req.Call(p)
 		if err != nil {
@@ -598,14 +640,16 @@ func (p *Page) ScrollScreenshot(opt *ScrollScreenshotOptions) ([]byte, error) {
 // `Strings` Shared string table that all string properties refer to with indexes.
 // Normally use `Strings` is enough.
 func (p *Page) CaptureDOMSnapshot() (domSnapshot *proto.DOMSnapshotCaptureSnapshotResult, err error) {
-	_ = proto.DOMSnapshotEnable{}.Call(p)
+	if err := (proto.DOMSnapshotEnable{}).Call(p); err != nil {
+		return nil, err
+	}
 
 	snapshot, err := proto.DOMSnapshotCaptureSnapshot{
 		ComputedStyles:                 []string{},
-		IncludePaintOrder:              true,
-		IncludeDOMRects:                true,
-		IncludeBlendedBackgroundColors: true,
-		IncludeTextColorOpacities:      true,
+		IncludePaintOrder:              new(true),
+		IncludeDOMRects:                new(true),
+		IncludeBlendedBackgroundColors: new(true),
+		IncludeTextColorOpacities:      new(true),
 	}.Call(p)
 	if err != nil {
 		return nil, err
@@ -660,7 +704,9 @@ func (p *Page) WaitOpen() func() (*Page, error) {
 
 	return func() (*Page, error) {
 		defer p.tryTrace(TraceTypeWait, "wait open")()
-		wait()
+		if err := wait(); err != nil {
+			return nil, err
+		}
 		return b.PageFromTarget(targetID)
 	}
 }
@@ -672,29 +718,63 @@ func (p *Page) WaitOpen() func() (*Page, error) {
 //	    _ = proto.PageHandleJavaScriptDialog{Accept: false}.Call(page)
 //	    return false
 //	}))()
-func (p *Page) EachEvent(handlers ...EventHandler) func() {
-	return p.browser.Context(p.ctx).eachEvent(p.SessionID, handlers...)
+func (p *Page) EachEvent(handlers ...EventHandler) func() error {
+	ctx, cancel := contextWithSession(p.ctx, p.sessionCtx)
+	wait := p.browser.Context(ctx).eachEvent(p.SessionID, handlers...)
+	return func() error {
+		defer cancel()
+		return wait()
+	}
 }
 
 // WaitEvent loads the next matching event into out. E is a concrete protocol event type.
-func (p *Page) WaitEvent[E proto.Event](out *E) func() {
+func (p *Page) WaitEvent[E proto.Event](out *E) func() error {
 	defer p.tryTrace(TraceTypeWait, "event", (*out).ProtoEvent())()
-	return p.browser.Context(p.ctx).waitEvent(p.SessionID, out)
+	return p.EachEvent(On(func(event *E, _ proto.TargetSessionID) bool {
+		*out = *event
+		return true
+	}))
 }
 
 // WaitNavigation wait for a page lifecycle event when navigating.
 // Usually you will wait for [proto.PageLifecycleEventNameNetworkAlmostIdle].
-func (p *Page) WaitNavigation(name proto.PageLifecycleEventName) func() {
-	_ = proto.PageSetLifecycleEventsEnabled{Enabled: true}.Call(p)
+func (p *Page) WaitNavigation(name proto.PageLifecycleEventName) func() error {
+	ctx, cancel := contextWithSession(p.ctx, p.sessionCtx)
+	p = p.Context(ctx)
+	release, setupErr := p.browser.Context(ctx).acquireDomain(p.SessionID, &proto.PageSetLifecycleEventsEnabled{Enabled: true})
+	// Enabling lifecycle events replays milestones from the current document.
+	// Subscribe afterward so a later navigation cannot consume those old events.
+	wait := func() error { return setupErr }
+	if setupErr == nil {
+		wait = p.EachEvent(On(func(e *proto.PageLifecycleEvent, _ proto.TargetSessionID) bool {
+			return e.Name == name && e.FrameID == p.FrameID
+		}))
+	}
+	var cleanupOnce sync.Once
+	var cleanupErr error
+	cleanup := func() {
+		cleanupOnce.Do(func() {
+			if release != nil {
+				ctx, stop := context.WithTimeout(context.WithoutCancel(p.ctx), 5*time.Second)
+				defer stop()
+				cleanupErr = release(ctx)
+			}
+		})
+	}
+	stopCleanup := context.AfterFunc(ctx, cleanup)
+	if setupErr != nil {
+		cancel()
+	}
 
-	wait := p.EachEvent(On(func(e *proto.PageLifecycleEvent, _ proto.TargetSessionID) bool {
-		return e.Name == name
-	}))
-
-	return func() {
+	return func() (err error) {
 		defer p.tryTrace(TraceTypeWait, "navigation", name)()
-		wait()
-		_ = proto.PageSetLifecycleEventsEnabled{Enabled: false}.Call(p)
+		defer func() {
+			cancel()
+			stopCleanup()
+			cleanup()
+			err = errors.Join(err, cleanupErr)
+		}()
+		return wait()
 	}
 }
 
@@ -706,8 +786,11 @@ func (p *Page) WaitRequestIdle(
 	d time.Duration,
 	includes, excludes []string,
 	excludeTypes []proto.NetworkResourceType,
-) func() {
+) func() error {
 	defer p.tryTrace(TraceTypeWait, "request-idle")()
+	if d < 0 {
+		return func() error { return fmt.Errorf("idle duration must not be negative: %s", d) }
+	}
 
 	if excludeTypes == nil {
 		excludeTypes = []proto.NetworkResourceType{
@@ -723,7 +806,9 @@ func (p *Page) WaitRequestIdle(
 		includes = []string{""}
 	}
 
-	p, cancel := p.WithCancel()
+	ctx, stop := contextWithSession(p.ctx, p.sessionCtx)
+	ctx, cancel := context.WithCancelCause(ctx)
+	p = p.Context(ctx)
 	match := genRegMatcher(includes, excludes)
 	waitList := map[proto.NetworkRequestID]string{}
 	idleCounter := utils.NewIdleCounter(d)
@@ -761,12 +846,19 @@ func (p *Page) WaitRequestIdle(
 		return false
 	}))
 
-	return func() {
+	return func() error {
+		defer stop()
+		defer cancel(context.Canceled)
+		done := make(chan struct{})
 		go func() {
+			defer close(done)
 			idleCounter.Wait(p.ctx)
-			cancel()
+			cancel(errWaitCompleted)
 		}()
-		wait()
+		err := wait()
+		cancel(context.Canceled)
+		<-done
+		return err
 	}
 }
 
@@ -775,6 +867,12 @@ func (p *Page) WaitRequestIdle(
 // If you want to set a timeout you can use the [Page.Timeout] function.
 func (p *Page) WaitDOMStable(d time.Duration, diff float64) error {
 	defer p.tryTrace(TraceTypeWait, "dom-stable")()
+	if d <= 0 {
+		return fmt.Errorf("stable duration must be positive: %s", d)
+	}
+	ctx, cancel := contextWithSession(p.ctx, p.sessionCtx)
+	defer cancel()
+	p = p.Context(ctx)
 
 	domSnapshot, err := p.CaptureDOMSnapshot()
 	if err != nil {
@@ -798,7 +896,10 @@ func (p *Page) WaitDOMStable(d time.Duration, diff float64) error {
 
 		common := longestCommonSubsequenceLength(p.ctx, domSnapshot.Strings, currentDomSnapshot.Strings)
 
-		df := 1 - float64(common)/float64(len(currentDomSnapshot.Strings))
+		df := float64(0)
+		if len(currentDomSnapshot.Strings) != 0 {
+			df = 1 - float64(common)/float64(len(currentDomSnapshot.Strings))
+		}
 		if df <= diff {
 			break
 		}
@@ -811,19 +912,22 @@ func (p *Page) WaitDOMStable(d time.Duration, diff float64) error {
 // WaitStable waits until the page is stable for d duration.
 func (p *Page) WaitStable(d time.Duration) error {
 	defer p.tryTrace(TraceTypeWait, "stable")()
-
+	p, cancel := p.WithCancel()
+	defer cancel()
 	var err error
-
-	setErr := sync.Once{}
+	var firstError sync.Once
+	setErr := func(e error) {
+		if e != nil {
+			firstError.Do(func() { err = e; cancel() })
+		}
+	}
 
 	utils.All(func() {
-		e := p.WaitLoad()
-		setErr.Do(func() { err = e })
+		setErr(p.WaitLoad())
 	}, func() {
-		p.WaitRequestIdle(d, nil, nil, nil)()
+		setErr(p.WaitRequestIdle(d, nil, nil, nil)())
 	}, func() {
-		e := p.WaitDOMStable(d, 0)
-		setErr.Do(func() { err = e })
+		setErr(p.WaitDOMStable(d, 0))
 	})()
 
 	return err
@@ -839,15 +943,25 @@ func (p *Page) WaitIdle(timeout time.Duration) (err error) {
 // Doc: https://developer.mozilla.org/en-US/docs/Web/API/window/requestAnimationFrame
 func (p *Page) WaitRepaint() error {
 	// we use root here because iframe doesn't trigger requestAnimationFrame
-	_, err := p.root.Eval(`() => new Promise(r => requestAnimationFrame(r))`)
+	ctx, cancel := contextWithSession(p.ctx, p.sessionCtx)
+	defer cancel()
+	_, err := p.root.Context(ctx).Eval(`() => new Promise(r => requestAnimationFrame(r))`)
 	return err
 }
 
 // WaitLoad waits for the `window.onload` event, it returns immediately if the event is already fired.
 func (p *Page) WaitLoad() error {
 	defer p.tryTrace(TraceTypeWait, "load")()
-	_, err := p.Evaluate(evalHelper(js.WaitLoad).ByPromise())
-	return err
+	ctx, cancel := contextWithSession(p.ctx, p.sessionCtx)
+	defer cancel()
+	p = p.Context(ctx)
+	return utils.Retry(ctx, utils.BackoffSleeper(10*time.Millisecond, 100*time.Millisecond, nil), func() (bool, error) {
+		_, err := p.Evaluate(evalHelper(js.WaitLoad).ByPromise())
+		if errors.Is(err, cdp.ErrCtxDestroyed) {
+			return false, nil
+		}
+		return true, err
+	})
 }
 
 // AddScriptTag to page. If url is empty, content will be used.
@@ -908,7 +1022,7 @@ func (p *Page) ObjectToJSON(obj *proto.RuntimeRemoteObject) (jsonvalue.Value, er
 	res, err := proto.RuntimeCallFunctionOn{
 		ObjectID:            obj.ObjectID,
 		FunctionDeclaration: `function() { return this }`,
-		ReturnByValue:       true,
+		ReturnByValue:       new(true),
 	}.Call(p)
 	if err != nil {
 		return jsonvalue.New(nil), err
@@ -930,6 +1044,7 @@ func (p *Page) ElementFromObject(obj *proto.RuntimeRemoteObject) (*Element, erro
 	}
 
 	if id != pid {
+		p.helpers.addContext(id)
 		clone := *p
 		clone.jsCtxID = &id
 		p = &clone
@@ -997,26 +1112,30 @@ func (p *Page) Release(obj *proto.RuntimeRemoteObject) error {
 
 // Call implements the [proto.Client].
 func (p *Page) Call(ctx context.Context, sessionID, methodName string, params any) (res []byte, err error) {
+	ctx, cancel := contextWithSession(ctx, p.sessionCtx)
+	defer cancel()
 	return p.browser.Call(ctx, sessionID, methodName, params)
 }
 
 // Event of the page.
 func (p *Page) Event() <-chan *Message {
+	ctx, cancel := contextWithSession(p.ctx, p.sessionCtx)
 	dst := make(chan *Message)
-	s := p.event.Subscribe(p.ctx)
+	s := p.event.Subscribe(ctx)
 
 	go func() {
 		defer close(dst)
+		defer cancel()
 		for {
 			select {
-			case <-p.ctx.Done():
+			case <-ctx.Done():
 				return
 			case msg, ok := <-s:
 				if !ok {
 					return
 				}
 				select {
-				case <-p.ctx.Done():
+				case <-ctx.Done():
 					return
 				case dst <- msg:
 				}
@@ -1028,17 +1147,21 @@ func (p *Page) Event() <-chan *Message {
 }
 
 func (p *Page) initEvents() {
-	p.event = observable.New[*Message](p.ctx)
-	event := p.browser.Context(p.ctx).Event()
+	ctx := p.sessionCtx
+	if ctx == nil {
+		ctx = p.ctx
+	}
+	p.event = observable.New[*Message](ctx)
+	event := p.browser.Context(ctx).Event()
 
 	go func() {
+		defer p.terminateSession()
 		for msg := range event {
 			detached := proto.TargetDetachedFromTarget{}
 			destroyed := proto.TargetTargetDestroyed{}
 
 			if (msg.Load(&detached) && detached.SessionID == p.SessionID) ||
 				(msg.Load(&destroyed) && destroyed.TargetID == p.TargetID) {
-				p.sessionCancel()
 				return
 			}
 

@@ -157,8 +157,10 @@ func (l *Launcher) startProcess(cmd *exec.Cmd) (int, func(), error) {
 	stop := func() { once.Do(func() { _ = livenessWrite.Close() }) }
 	fail := func(err error) (int, func(), error) {
 		stop()
-		_ = guardian.Wait()
-		return 0, nil, err
+		// Launch's normal process reaper owns Wait even on partial startup.
+		// Waiting here would bypass its bounded rollback budget.
+		*cmd = *guardian
+		return 0, stop, err
 	}
 	// The helper announces readiness before it can receive a command. If an
 	// application's package initializer blocks during re-exec, no browser can

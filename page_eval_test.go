@@ -117,10 +117,7 @@ func TestPageExpose(t *testing.T) {
 	g.Eq("ok", res.Str())
 
 	stop()
-
-	g.Panic(func() {
-		stop()
-	})
+	stop()
 	g.Panic(func() {
 		page.MustReload().MustWaitLoad().MustEval(`() => exposedFunc()`)
 	})

@@ -211,13 +211,13 @@ type InputDispatchKeyEvent struct {
 	NativeVirtualKeyCode int `json:"nativeVirtualKeyCode,omitempty"`
 
 	// AutoRepeat (optional) Whether the event was generated from auto repeat (default: false).
-	AutoRepeat bool `json:"autoRepeat,omitempty"`
+	AutoRepeat *bool `json:"autoRepeat,omitempty"`
 
 	// IsKeypad (optional) Whether the event was generated from the keypad (default: false).
-	IsKeypad bool `json:"isKeypad,omitempty"`
+	IsKeypad *bool `json:"isKeypad,omitempty"`
 
 	// IsSystemKey (optional) Whether the event was a system key event (default: false).
-	IsSystemKey bool `json:"isSystemKey,omitempty"`
+	IsSystemKey *bool `json:"isSystemKey,omitempty"`
 
 	// Location (optional) Whether the event was from the left or right side of the keyboard. 1=Left, 2=Right (default:
 	// 0).
@@ -560,7 +560,7 @@ type InputSynthesizeScrollGesture struct {
 	YOverscroll *float64 `json:"yOverscroll,omitempty"`
 
 	// PreventFling (optional) Prevent fling (default: true).
-	PreventFling bool `json:"preventFling,omitempty"`
+	PreventFling *bool `json:"preventFling,omitempty"`
 
 	// Speed (optional) Swipe speed in pixels per second (default: 800).
 	Speed *int `json:"speed,omitempty"`

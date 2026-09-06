@@ -1936,7 +1936,7 @@ type NetworkEmulateNetworkConditions struct {
 	PacketQueueLength *int `json:"packetQueueLength,omitempty"`
 
 	// PacketReordering (experimental) (optional) WebRTC packetReordering feature.
-	PacketReordering bool `json:"packetReordering,omitempty"`
+	PacketReordering *bool `json:"packetReordering,omitempty"`
 }
 
 // ProtoReq name.
@@ -2158,10 +2158,10 @@ type NetworkSearchInResponseBody struct {
 	Query string `json:"query"`
 
 	// CaseSensitive (optional) If true, search is case sensitive.
-	CaseSensitive bool `json:"caseSensitive,omitempty"`
+	CaseSensitive *bool `json:"caseSensitive,omitempty"`
 
 	// IsRegex (optional) If true, treats string parameter as regex.
-	IsRegex bool `json:"isRegex,omitempty"`
+	IsRegex *bool `json:"isRegex,omitempty"`
 }
 
 // ProtoReq name.
@@ -2240,10 +2240,10 @@ type NetworkSetCookie struct {
 	Path string `json:"path,omitempty"`
 
 	// Secure (optional) True if cookie is secure.
-	Secure bool `json:"secure,omitempty"`
+	Secure *bool `json:"secure,omitempty"`
 
 	// HTTPOnly (optional) True if cookie is http-only.
-	HTTPOnly bool `json:"httpOnly,omitempty"`
+	HTTPOnly *bool `json:"httpOnly,omitempty"`
 
 	// SameSite (optional) Cookie SameSite type.
 	SameSite NetworkCookieSameSite `json:"sameSite,omitempty"`
@@ -2255,7 +2255,7 @@ type NetworkSetCookie struct {
 	Priority NetworkCookiePriority `json:"priority,omitempty"`
 
 	// SameParty (experimental) (optional) True if cookie is SameParty.
-	SameParty bool `json:"sameParty,omitempty"`
+	SameParty *bool `json:"sameParty,omitempty"`
 
 	// SourceScheme (experimental) (optional) Cookie source scheme type.
 	SourceScheme NetworkCookieSourceScheme `json:"sourceScheme,omitempty"`

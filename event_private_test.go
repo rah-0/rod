@@ -62,7 +62,15 @@ func TestTypedPageEventSessionAndDomainRestore(t *testing.T) {
 				browser, client := newEventTestBrowser(t)
 				const session proto.TargetSessionID = "page-session"
 				if enabled {
-					browser.EnableDomain(session, &proto.NetworkEnable{})
+					restore, err := browser.EnableDomain(session, &proto.NetworkEnable{})
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer func() {
+						if err := restore(); err != nil {
+							t.Fatal(err)
+						}
+					}()
 				}
 				before := len(client.snapshot())
 				page := &Page{browser: browser, ctx: browser.ctx, SessionID: session}
@@ -259,4 +267,50 @@ func newEventTestBrowser(t *testing.T) (*Browser, *eventTestClient) {
 
 func eventTestMessage(method string, session proto.TargetSessionID, data string) *Message {
 	return &Message{Method: method, SessionID: session, data: json.RawMessage(data)}
+}
+
+func TestTypedUnusedWaitCancellation(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		name := "last-owner"
+		if shared {
+			name = "shared-owner"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				browser, client := newEventTestBrowser(t)
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				unused := browser.Context(ctx).EachEvent(On(func(_ *proto.FetchRequestPaused, _ proto.TargetSessionID) bool {
+					t.Error("canceled unused wait invoked its callback")
+					return true
+				}))
+				var other func() error
+				if shared {
+					other = browser.EachEvent(On(func(_ *proto.FetchAuthRequired, _ proto.TargetSessionID) bool { return true }))
+				}
+				cancel()
+				synctest.Wait()
+				var state proto.FetchEnable
+				if enabled := browser.LoadState("", &state); enabled != shared {
+					t.Fatalf("enabled after unused wait cancellation = %t, want %t", enabled, shared)
+				}
+				if shared {
+					browser.event.Publish(eventTestMessage("Fetch.authRequired", "", `{}`))
+					other()
+					if browser.LoadState("", &state) {
+						t.Fatal("completed last listener retained Fetch")
+					}
+				}
+				before := len(client.snapshot())
+				unused()
+				synctest.Wait()
+				if len(client.snapshot()) != before {
+					t.Fatal("late wait invocation restored domains twice")
+				}
+				if browser.event.Len() != 0 {
+					t.Fatal("canceled unused wait retained subscription")
+				}
+			})
+		})
+	}
 }

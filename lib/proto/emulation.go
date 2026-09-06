@@ -331,7 +331,7 @@ func (m EmulationSetFocusEmulationEnabled) Call(c Client) error {
 type EmulationSetAutoDarkModeOverride struct {
 	// Enabled (optional) Whether to enable or disable automatic dark mode.
 	// If not specified, any existing override will be cleared.
-	Enabled bool `json:"enabled,omitempty"`
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // ProtoReq name.
@@ -409,7 +409,7 @@ type EmulationSetDeviceMetricsOverride struct {
 	PositionY *int `json:"positionY,omitempty"`
 
 	// DontSetVisibleSize (experimental) (optional) Do not set visible view size, rely upon explicit setVisibleSize call.
-	DontSetVisibleSize bool `json:"dontSetVisibleSize,omitempty"`
+	DontSetVisibleSize *bool `json:"dontSetVisibleSize,omitempty"`
 
 	// ScreenOrientation (optional) Screen orientation override.
 	ScreenOrientation *EmulationScreenOrientation `json:"screenOrientation,omitempty"`

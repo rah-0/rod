@@ -10,6 +10,10 @@ import (
 
 // LookPath searches for the browser executable from often used paths on current operating system.
 func LookPath() (found string, has bool) {
+	return lookPath(runtime.GOOS)
+}
+
+func lookPath(goos string) (found string, has bool) {
 	list := map[string][]string{
 		"darwin": {
 			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -36,6 +40,7 @@ func LookPath() (found string, has bool) {
 			"/snap/bin/chromium",
 			"/data/data/com.termux/files/usr/bin/chromium-browser",
 		},
+		"freebsd": {"chrome", "chromium"},
 		"openbsd": {
 			"chrome",
 			"chromium",
@@ -45,7 +50,7 @@ func LookPath() (found string, has bool) {
 			`Chromium\Application\chrome.exe`,
 			`Microsoft\Edge\Application\msedge.exe`,
 		)...),
-	}[runtime.GOOS]
+	}[goos]
 
 	for _, path := range list {
 		var err error

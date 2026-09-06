@@ -305,20 +305,20 @@ type DebuggerEvaluateOnCallFrame struct {
 
 	// IncludeCommandLineAPI (optional) Specifies whether command line API should be available to the evaluated expression, defaults
 	// to false.
-	IncludeCommandLineAPI bool `json:"includeCommandLineAPI,omitempty"`
+	IncludeCommandLineAPI *bool `json:"includeCommandLineAPI,omitempty"`
 
 	// Silent (optional) In silent mode exceptions thrown during evaluation are not reported and do not pause
 	// execution. Overrides `setPauseOnException` state.
-	Silent bool `json:"silent,omitempty"`
+	Silent *bool `json:"silent,omitempty"`
 
 	// ReturnByValue (optional) Whether the result is expected to be a JSON object that should be sent by value.
-	ReturnByValue bool `json:"returnByValue,omitempty"`
+	ReturnByValue *bool `json:"returnByValue,omitempty"`
 
 	// GeneratePreview (experimental) (optional) Whether preview should be generated for the result.
-	GeneratePreview bool `json:"generatePreview,omitempty"`
+	GeneratePreview *bool `json:"generatePreview,omitempty"`
 
 	// ThrowOnSideEffect (optional) Whether to throw an exception if side effect cannot be ruled out during evaluation.
-	ThrowOnSideEffect bool `json:"throwOnSideEffect,omitempty"`
+	ThrowOnSideEffect *bool `json:"throwOnSideEffect,omitempty"`
 
 	// Timeout (experimental) (optional) Terminate execution after timing out (number of milliseconds).
 	Timeout RuntimeTimeDelta `json:"timeout,omitempty"`
@@ -353,7 +353,7 @@ type DebuggerGetPossibleBreakpoints struct {
 	End *DebuggerLocation `json:"end,omitempty"`
 
 	// RestrictToFunction (optional) Only consider locations which are in the same (non-nested) function as start.
-	RestrictToFunction bool `json:"restrictToFunction,omitempty"`
+	RestrictToFunction *bool `json:"restrictToFunction,omitempty"`
 }
 
 // ProtoReq name.
@@ -604,7 +604,7 @@ type DebuggerResume struct {
 	// JavaScript (i.e. via evaluation) until execution of the paused code
 	// is actually resumed, at which point termination is triggered.
 	// If execution is currently not paused, this parameter has no effect.
-	TerminateOnResume bool `json:"terminateOnResume,omitempty"`
+	TerminateOnResume *bool `json:"terminateOnResume,omitempty"`
 }
 
 // ProtoReq name.
@@ -624,10 +624,10 @@ type DebuggerSearchInContent struct {
 	Query string `json:"query"`
 
 	// CaseSensitive (optional) If true, search is case sensitive.
-	CaseSensitive bool `json:"caseSensitive,omitempty"`
+	CaseSensitive *bool `json:"caseSensitive,omitempty"`
 
 	// IsRegex (optional) If true, treats string parameter as regex.
-	IsRegex bool `json:"isRegex,omitempty"`
+	IsRegex *bool `json:"isRegex,omitempty"`
 }
 
 // ProtoReq name.
@@ -907,11 +907,11 @@ type DebuggerSetScriptSource struct {
 
 	// DryRun (optional) If true the change will not actually be applied. Dry run may be used to get result
 	// description without actually modifying the code.
-	DryRun bool `json:"dryRun,omitempty"`
+	DryRun *bool `json:"dryRun,omitempty"`
 
 	// AllowTopFrameEditing (experimental) (optional) If true, then `scriptSource` is allowed to change the function on top of the stack
 	// as long as the top-most stack frame is the only activation of that function.
-	AllowTopFrameEditing bool `json:"allowTopFrameEditing,omitempty"`
+	AllowTopFrameEditing *bool `json:"allowTopFrameEditing,omitempty"`
 }
 
 // ProtoReq name.
@@ -1017,7 +1017,7 @@ func (m DebuggerSetVariableValue) Call(c Client) error {
 type DebuggerStepInto struct {
 	// BreakOnAsyncCall (experimental) (optional) Debugger will pause on the execution of the first async task which was scheduled
 	// before next pause.
-	BreakOnAsyncCall bool `json:"breakOnAsyncCall,omitempty"`
+	BreakOnAsyncCall *bool `json:"breakOnAsyncCall,omitempty"`
 
 	// SkipList (experimental) (optional) The skipList specifies location ranges that should be skipped on step into.
 	SkipList []*DebuggerLocationRange `json:"skipList,omitempty"`

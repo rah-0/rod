@@ -95,10 +95,10 @@ func SplicePngVertical(files []ImgWithBox, format proto.PageCaptureScreenshotFor
 
 		images = append(images, img)
 		if file.Box != nil {
-			width = file.Box.Dx()
+			width = max(width, file.Box.Dx())
 			height += file.Box.Dy()
 		} else {
-			width = img.Bounds().Dx()
+			width = max(width, img.Bounds().Dx())
 			height += img.Bounds().Dy()
 		}
 	}
@@ -118,7 +118,7 @@ func SplicePngVertical(files []ImgWithBox, format proto.PageCaptureScreenshotFor
 		for y := start.Y; y < end.Y; y++ {
 			for x := start.X; x < end.X; x++ {
 				color := img.At(x, y)
-				spliceImg.Set(x, y-start.Y+destY, color)
+				spliceImg.Set(x-start.X, y-start.Y+destY, color)
 			}
 		}
 

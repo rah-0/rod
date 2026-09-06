@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -31,8 +32,8 @@ const (
 )
 
 // MustNewManaged is similar to NewManaged.
-func MustNewManaged(serviceURL, authToken string) *Launcher {
-	l, err := NewManaged(serviceURL, authToken)
+func MustNewManaged(ctx context.Context, serviceURL, authToken string) *Launcher {
+	l, err := NewManaged(ctx, serviceURL, authToken)
 	utils.E(err)
 	return l
 }
@@ -44,7 +45,9 @@ func MustNewManaged(serviceURL, authToken string) *Launcher {
 // The manager kills the remote browser after the WebSocket is closed.
 // The authToken is sent as a bearer credential on both the initial HTTP request and the WebSocket handshake.
 // Plain HTTP and WebSocket URLs are accepted only for loopback hosts; use HTTPS or WSS remotely.
-func NewManaged(serviceURL, authToken string) (*Launcher, error) {
+// ctx covers the initial HTTP request and response decoding, and remains the
+// launcher context for Client. Supply a deadline when initialization must be bounded.
+func NewManaged(ctx context.Context, serviceURL, authToken string) (*Launcher, error) {
 	if serviceURL == "" {
 		serviceURL = "ws://127.0.0.1:7317"
 	}
@@ -57,7 +60,7 @@ func NewManaged(serviceURL, authToken string) (*Launcher, error) {
 		return nil, ErrManagerInsecureTransport
 	}
 
-	l := New()
+	l := New().Context(ctx)
 	l.managed = true
 	l.managerToken = authToken
 	l.serviceURL = toWS(*u).String()
@@ -135,7 +138,7 @@ var _ http.Handler = &Manager{}
 // The work flow looks like:
 //
 //	|                 Machine X                  |                      Machine Y                      |
-//	| NewManaged("wss://manager", authToken) -|-> TLS endpoint -> launcher.NewManager(authToken) |
+//	| NewManaged(ctx, "wss://manager", authToken) -|-> TLS endpoint -> launcher.NewManager(authToken) |
 //
 //	1. X send a http request to Y, Y respond default Launcher settings based the OS of Y.
 //	2. X start a websocket connect to Y with the Launcher settings

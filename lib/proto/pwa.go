@@ -214,7 +214,7 @@ type PWAChangeAppUserSettings struct {
 	//
 	// TODO(crbug.com/339453269): Setting this value on ChromeOS is not
 	// supported yet.
-	LinkCapturing bool `json:"linkCapturing,omitempty"`
+	LinkCapturing *bool `json:"linkCapturing,omitempty"`
 
 	// DisplayMode (optional) ...
 	DisplayMode PWADisplayMode `json:"displayMode,omitempty"`

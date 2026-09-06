@@ -166,13 +166,13 @@ func (m ProfilerStart) Call(c Client) error {
 // counters.
 type ProfilerStartPreciseCoverage struct {
 	// CallCount (optional) Collect accurate call counts beyond simple 'covered' or 'not covered'.
-	CallCount bool `json:"callCount,omitempty"`
+	CallCount *bool `json:"callCount,omitempty"`
 
 	// Detailed (optional) Collect block-based coverage.
-	Detailed bool `json:"detailed,omitempty"`
+	Detailed *bool `json:"detailed,omitempty"`
 
 	// AllowTriggeredUpdates (optional) Allow the backend to send updates on its own initiative
-	AllowTriggeredUpdates bool `json:"allowTriggeredUpdates,omitempty"`
+	AllowTriggeredUpdates *bool `json:"allowTriggeredUpdates,omitempty"`
 }
 
 // ProtoReq name.

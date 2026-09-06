@@ -25,17 +25,19 @@ type URLParser struct {
 	URL    chan string
 	Buffer string // buffer for the browser stdout
 
-	lock *sync.Mutex
-	ctx  context.Context
-	done bool
+	lock   *sync.Mutex
+	ctx    context.Context
+	done   bool
+	errors chan error
 }
 
 // NewURLParser instance.
 func NewURLParser() *URLParser {
 	return &URLParser{
-		URL:  make(chan string, 1),
-		lock: &sync.Mutex{},
-		ctx:  context.Background(),
+		URL:    make(chan string, 1),
+		errors: make(chan error, 1),
+		lock:   &sync.Mutex{},
+		ctx:    context.Background(),
 	}
 }
 
@@ -67,7 +69,12 @@ func (r *URLParser) Write(p []byte) (n int, err error) {
 		str := regWS.FindString(r.Buffer)
 		if str != "" {
 			u, err := url.Parse(strings.TrimSpace(str))
-			utils.E(err)
+			if err != nil {
+				r.errors <- fmt.Errorf("parse browser DevTools endpoint: %w", err)
+				r.done = true
+				r.Buffer = ""
+				return len(p), nil
+			}
 
 			select {
 			case <-r.ctx.Done():

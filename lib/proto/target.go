@@ -122,7 +122,7 @@ type TargetAttachToTarget struct {
 	// Flatten (optional) Enables "flat" access to the session via specifying sessionId attribute in the commands.
 	// We plan to make this the default, deprecate non-flattened mode,
 	// and eventually retire it. See crbug.com/991325.
-	Flatten bool `json:"flatten,omitempty"`
+	Flatten *bool `json:"flatten,omitempty"`
 }
 
 // ProtoReq name.
@@ -209,7 +209,7 @@ func (m TargetExposeDevToolsProtocol) Call(c Client) error {
 // one.
 type TargetCreateBrowserContext struct {
 	// DisposeOnDetach (experimental) (optional) If specified, disposes this context when debugging session disconnects.
-	DisposeOnDetach bool `json:"disposeOnDetach,omitempty"`
+	DisposeOnDetach *bool `json:"disposeOnDetach,omitempty"`
 
 	// ProxyServer (experimental) (optional) Proxy server, similar to the one passed to --proxy-server
 	ProxyServer string `json:"proxyServer,omitempty"`
@@ -271,17 +271,17 @@ type TargetCreateTarget struct {
 
 	// EnableBeginFrameControl (experimental) (optional) Whether BeginFrames for this target will be controlled via DevTools (headless chrome only,
 	// not supported on MacOS yet, false by default).
-	EnableBeginFrameControl bool `json:"enableBeginFrameControl,omitempty"`
+	EnableBeginFrameControl *bool `json:"enableBeginFrameControl,omitempty"`
 
 	// NewWindow (optional) Whether to create a new Window or Tab (chrome-only, false by default).
-	NewWindow bool `json:"newWindow,omitempty"`
+	NewWindow *bool `json:"newWindow,omitempty"`
 
 	// Background (optional) Whether to create the target in background or foreground (chrome-only,
 	// false by default).
-	Background bool `json:"background,omitempty"`
+	Background *bool `json:"background,omitempty"`
 
 	// ForTab (experimental) (optional) Whether to create the target of type "tab".
-	ForTab bool `json:"forTab,omitempty"`
+	ForTab *bool `json:"forTab,omitempty"`
 }
 
 // ProtoReq name.
@@ -419,7 +419,7 @@ type TargetSetAutoAttach struct {
 	// Flatten (experimental) (optional) Enables "flat" access to the session via specifying sessionId attribute in the commands.
 	// We plan to make this the default, deprecate non-flattened mode,
 	// and eventually retire it. See crbug.com/991325.
-	Flatten bool `json:"flatten,omitempty"`
+	Flatten *bool `json:"flatten,omitempty"`
 
 	// Filter (experimental) (optional) Only targets matching filter will be attached.
 	Filter TargetTargetFilter `json:"filter,omitempty"`

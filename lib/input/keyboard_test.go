@@ -91,6 +91,7 @@ func TestKeyEncode(t *testing.T) {
 		Code:                  "KeyA",
 		Key:                   "a",
 		WindowsVirtualKeyCode: 65,
+		IsKeypad:              new(false),
 		Location:              new(0),
 	})
 
@@ -101,6 +102,7 @@ func TestKeyEncode(t *testing.T) {
 		Code:                  "KeyA",
 		Key:                   "a",
 		WindowsVirtualKeyCode: 65,
+		IsKeypad:              new(false),
 		Location:              new(0),
 	})
 
@@ -109,6 +111,7 @@ func TestKeyEncode(t *testing.T) {
 		Code:                  "AltLeft",
 		Key:                   "Alt",
 		WindowsVirtualKeyCode: 18,
+		IsKeypad:              new(false),
 		Location:              new(1),
 	})
 
@@ -118,8 +121,8 @@ func TestKeyEncode(t *testing.T) {
 		Key:                   "1",
 		Text:                  "1",
 		UnmodifiedText:        "1",
-		WindowsVirtualKeyCode: 35,
-		IsKeypad:              true,
+		WindowsVirtualKeyCode: 97,
+		IsKeypad:              new(true),
 	})
 }
 
@@ -137,9 +140,7 @@ func TestMac(t *testing.T) {
 		Code:                  "ArrowDown",
 		Key:                   "ArrowDown",
 		WindowsVirtualKeyCode: 40,
-		AutoRepeat:            false,
-		IsKeypad:              false,
-		IsSystemKey:           false,
+		IsKeypad:              new(false),
 		Location:              &zero,
 		Commands: []string{
 			"moveDown",

@@ -53,7 +53,7 @@ type HeadlessExperimentalBeginFrame struct {
 	// NoDisplayUpdates (optional) Whether updates should not be committed and drawn onto the display. False by default. If
 	// true, only side effects of the BeginFrame will be run, such as layout and animations, but
 	// any visual updates may not be visible on the display or in screenshots.
-	NoDisplayUpdates bool `json:"noDisplayUpdates,omitempty"`
+	NoDisplayUpdates *bool `json:"noDisplayUpdates,omitempty"`
 
 	// Screenshot (optional) If set, a screenshot of the frame will be captured and returned in the response. Otherwise,
 	// no screenshot will be captured. Note that capturing a screenshot can fail, for example,

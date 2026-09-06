@@ -1,8 +1,11 @@
 package rod
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/rah-0/rod/lib/input"
 	"github.com/rah-0/rod/lib/proto"
@@ -11,16 +14,17 @@ import (
 
 // Keyboard represents the keyboard on a page, it's always related the main frame.
 type Keyboard struct {
-	sync.Mutex
-
+	*keyboardState
 	page *Page
+}
 
-	// pressed keys must be released before it can be pressed again
+type keyboardState struct {
+	sync.Mutex
 	pressed map[input.Key]struct{}
 }
 
 func (p *Page) newKeyboard() *Page {
-	p.Keyboard = &Keyboard{page: p, pressed: map[input.Key]struct{}{}}
+	p.Keyboard = &Keyboard{page: p, keyboardState: &keyboardState{pressed: map[input.Key]struct{}{}}}
 	return p
 }
 
@@ -48,9 +52,11 @@ func (k *Keyboard) Press(key input.Key) error {
 	k.Lock()
 	defer k.Unlock()
 
+	if err := key.Encode(proto.InputDispatchKeyEventTypeKeyDown, k.modifiers()|key.Modifier()).Call(k.page); err != nil {
+		return err
+	}
 	k.pressed[key] = struct{}{}
-
-	return key.Encode(proto.InputDispatchKeyEventTypeKeyDown, k.modifiers()).Call(k.page)
+	return nil
 }
 
 // Release the key.
@@ -64,9 +70,17 @@ func (k *Keyboard) Release(key input.Key) error {
 		return nil
 	}
 
+	modifiers := 0
+	for pressed := range k.pressed {
+		if pressed != key {
+			modifiers |= pressed.Modifier()
+		}
+	}
+	if err := key.Encode(proto.InputDispatchKeyEventTypeKeyUp, modifiers).Call(k.page); err != nil {
+		return err
+	}
 	delete(k.pressed, key)
-
-	return key.Encode(proto.InputDispatchKeyEventTypeKeyUp, k.modifiers()).Call(k.page)
+	return nil
 }
 
 // Type releases the key after the press.
@@ -113,7 +127,8 @@ func (p *Page) KeyActions() *KeyActions {
 	return &KeyActions{keyboard: p.Keyboard}
 }
 
-// Press keys is guaranteed to have a release at the end of actions.
+// Press keys schedules their release at the end of actions. If an action fails,
+// Do also attempts to release keys introduced by this sequence within five seconds.
 func (ka *KeyActions) Press(keys ...input.Key) *KeyActions {
 	for _, key := range keys {
 		ka.Actions = append(ka.Actions, KeyAction{KeyActionPress, key})
@@ -139,6 +154,27 @@ func (ka *KeyActions) Type(keys ...input.Key) *KeyActions {
 
 // Do the actions.
 func (ka *KeyActions) Do() (err error) {
+	ka.keyboard.Lock()
+	original := make(map[input.Key]bool, len(ka.keyboard.pressed))
+	for key := range ka.keyboard.pressed {
+		original[key] = true
+	}
+	ka.keyboard.Unlock()
+	defer func() {
+		if err == nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ka.keyboard.page.ctx), 5*time.Second)
+		defer cancel()
+		keyboard := ka.keyboard.page.Context(ctx).Keyboard
+		// Release only keys introduced by this sequence, preserving held modifiers
+		// that belonged to the caller before it started.
+		for _, action := range ka.Actions {
+			if !original[action.Key] {
+				err = errors.Join(err, keyboard.Release(action.Key))
+			}
+		}
+	}()
 	for _, a := range ka.balance() {
 		switch a.Type {
 		case KeyActionPress:
@@ -191,10 +227,12 @@ func (p *Page) InsertText(text string) error {
 
 // Mouse represents the mouse on a page, it's always related the main frame.
 type Mouse struct {
-	sync.Mutex
-
+	*mouseState
 	page *Page
+}
 
+type mouseState struct {
+	sync.Mutex
 	id string // mouse svg dom element id
 
 	pos proto.Point
@@ -204,7 +242,7 @@ type Mouse struct {
 }
 
 func (p *Page) newMouse() *Page {
-	p.Mouse = &Mouse{page: p, id: utils.RandString(8)}
+	p.Mouse = &Mouse{page: p, mouseState: &mouseState{id: utils.RandString(8)}}
 	return p
 }
 
@@ -402,8 +440,12 @@ func (p *Page) newTouch() *Page {
 // Start a touch action.
 func (t *Touch) Start(points ...*proto.InputTouchPoint) error {
 	// TODO: https://crbug.com/613219
-	_ = t.page.WaitRepaint()
-	_ = t.page.WaitRepaint()
+	if err := t.page.WaitRepaint(); err != nil {
+		return err
+	}
+	if err := t.page.WaitRepaint(); err != nil {
+		return err
+	}
 
 	return proto.InputDispatchTouchEvent{
 		Type:        proto.InputDispatchTouchEventTypeTouchStart,
@@ -453,4 +495,18 @@ func (t *Touch) Tap(x, y float64) error {
 	}
 
 	return t.End()
+}
+
+// Each view routes requests through its own context while retaining the physical
+// device state shared by every view of this page.
+func (p *Page) rebindInput() {
+	if p.Keyboard != nil {
+		p.Keyboard = &Keyboard{page: p, keyboardState: p.Keyboard.keyboardState}
+	}
+	if p.Mouse != nil {
+		p.Mouse = &Mouse{page: p, mouseState: p.Mouse.mouseState}
+	}
+	if p.Touch != nil {
+		p.Touch = &Touch{page: p}
+	}
 }
