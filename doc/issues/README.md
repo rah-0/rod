@@ -1,13 +1,14 @@
 # Issue backlog
 
-Selected tasks from [upstream Rod issues](https://github.com/go-rod/rod/issues), grouped by implementation priority. Each task includes source reports, evidence, scope, and acceptance criteria.
+Selected tasks from [upstream Rod issues](https://github.com/go-rod/rod/issues) and defects confirmed in this repository, grouped by implementation priority. Each task includes source reports or reproduction evidence, scope, and acceptance criteria.
 
-There are **7 pending tasks**: 3 P2 and 4 P3.
+There are **8 pending tasks**: 4 P2 and 4 P3.
 
 ## P2 — Medium priority
 
 Correctness, compatibility, and focused API improvements.
 
+- [Cancel WaitOpen when the opener page session ends](wait-open-session-cancellation.md)
 - [Allow file inputs to receive files from memory](0504-upload-files-from-memory.md)
 - [Reconcile NewUserMode with Chrome's default-profile debugging restriction](1189-document-chrome-user-profile-restriction.md)
 - [Preserve experimental tab metadata in TargetInfo](1239-target-tab-metadata.md)
