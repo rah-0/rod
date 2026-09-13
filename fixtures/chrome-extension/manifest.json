@@ -1,13 +1,12 @@
 {
-  "manifest_version": 2,
-
-  "name": "test",
-  "description": "Test extension",
+  "manifest_version": 3,
+  "name": "Local title fixture",
+  "description": "Changes the title of local HTTP test pages.",
   "version": "1.0",
   "content_scripts": [
     {
       "js": ["main.js"],
-      "matches": ["<all_urls>"]
+      "matches": ["http://127.0.0.1/*"]
     }
   ]
 }

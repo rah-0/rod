@@ -88,6 +88,7 @@ bash scripts/check.sh examples
 | [Proxy authentication](examples/proxy-auth/main.go) | An authenticated local proxy and verified forwarding. |
 | [Connect to a browser](examples/connect-browser/main.go) | Attach to a browser whose process belongs to its caller. |
 | [Managed launch](examples/launch-managed/main.go) | An authenticated manager and remotely requested browser lifecycle. |
+| [Load an extension](examples/load-extension/main.go) | A Manifest V3 extension changing a local page in headless Chrome. |
 | [Custom WebSocket](examples/custom-websocket/main.go) | A third-party transport adapter with cancellation and cleanup. |
 | [E2E test project](examples/e2e-testing/calculator_test.go) | Native Go tests with a shared process and isolated browser contexts. |
 
@@ -106,16 +107,19 @@ criteria.
 
 The core module has no third-party Go dependencies. Protocol serialization uses
 standard `encoding/json`; direct `encoding/json/v2` imports are prohibited.
-Regeneration uses checked-in protocol and device snapshots and a local Node.js
-executable. It runs offline and reproduces the pinned protocol schema:
+Protocol regeneration reads the installed Chrome, Chromium, or Edge browser.
+Device generation uses the checked-in device profiles; JavaScript generation
+uses a local Node.js executable:
 
 ```sh
 go generate ./...
 ```
 
-See [protocol generation](lib/proto/README.md) and
-[device generation](lib/devices/README.md) for snapshot provenance and update
-procedures. Generators validate their output before replacing owned files.
+Generated Go files remain checked in, so ordinary builds do not launch a browser.
+See [protocol generation](lib/proto/generate/README.md) for browser selection,
+provenance, freshness checks, and explicit offline input, and
+[device generation](lib/devices/README.md) for profile updates. Generators validate
+their output before replacing owned files.
 
 Check formatting, vet, compilation of all four modules with and without the
 workspace, and race tests that need no browser or container:
@@ -135,6 +139,13 @@ Run the root suite and all example modules with an installed browser:
 ```sh
 bash scripts/check.sh browser
 ```
+
+This also compares the installed browser's protocol with the generated bindings,
+prints the browser version, and fails when regeneration is needed. Runtime tests
+still run when the freshness check fails. Keep the browser installation updated
+to expose protocol changes and compatibility regressions in newer releases.
+Environments that require disabling sandboxing for protocol capture can use
+`ROD_PROTOCOL_NO_SANDBOX=1 bash scripts/check.sh browser`.
 
 The test runner runs packages and test cases sequentially (`-p=1 -parallel=1`).
 The root suite reuses one browser, retires it after a failed test, and bounds

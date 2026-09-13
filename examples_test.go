@@ -7,7 +7,6 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -818,35 +817,6 @@ func ExampleBrowser_pool() {
 
 	// Wait for all the goroutines to finish
 	wg.Wait()
-}
-
-func Example_load_extension() {
-	extPath, _ := filepath.Abs("fixtures/chrome-extension")
-
-	l := launcher.New().
-		// Must use abs path for an extension
-		Set("load-extension", extPath).
-		// Headless mode doesn't support extension yet.
-		// Reason: https://bugs.chromium.org/p/chromium/issues/detail?id=706008#c5
-		// On Linux, a trusted local launcher can use Launcher.XVFB for a virtual display.
-		Headless(false)
-	defer func() {
-		l.Kill()
-		l.Cleanup()
-	}()
-	u := l.MustLaunch()
-
-	browser := rod.New().ControlURL(u).MustConnect()
-	defer browser.MustClose()
-
-	page := browser.MustPage("http://mdn.dev")
-
-	page.MustWait(`() => document.title === 'test-extension'`)
-
-	fmt.Println("ok")
-
-	// Skip
-	// Output: ok
 }
 
 func Example_log_cdp_traffic() {

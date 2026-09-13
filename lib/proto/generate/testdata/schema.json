@@ -61,6 +61,21 @@
     },
     {
       "domain": "Network",
+      "commands": [
+        {
+          "name": "setBlockedURLs",
+          "parameters": [
+            {
+              "name": "urls",
+              "type": "array",
+              "optional": true,
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        }
+      ],
       "types": [
         {
           "id": "TimeSinceEpoch",
@@ -160,7 +175,7 @@
               "$ref": "Options"
             }
           ],
-          "description": "Reports a fixture change.\n  This description includes an indented block.\n    Its nested indentation is preserved."
+          "description": "Reports a fixture change.\n  This description includes an indented block.\n    Its nested indentation is preserved.\n\nThis maps to:\n1. First operation\n   First operation details.\n\n2. Second operation\n   Second operation details."
         }
       ]
     }

@@ -1,7 +1,22 @@
-<html>
-  <script>
-    const w = new Worker('worker.js')
-    w.postMessage('ok')
-    w.onmessage = (e) => console.log(e.data)
-  </script>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Worker echo</title>
+  </head>
+  <body>
+    <output id="result">Waiting for worker</output>
+    <script>
+      const w = new Worker('worker.js')
+      w.onmessage = (e) => {
+        document.querySelector('#result').textContent = e.data
+        w.terminate()
+      }
+      w.onerror = (e) => {
+        document.querySelector('#result').textContent = `Worker error: ${e.message}`
+        w.terminate()
+      }
+      w.postMessage('worker echo: ready')
+    </script>
+  </body>
 </html>

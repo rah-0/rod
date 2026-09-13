@@ -81,6 +81,49 @@ func TestProtocolOptionalPresence(t *testing.T) {
 	}
 }
 
+type blockedURLsWireTestCase struct {
+	name    string
+	request proto.NetworkSetBlockedURLs
+	want    string
+}
+
+func TestNetworkSetBlockedURLsPresence(t *testing.T) {
+	for _, tc := range []blockedURLsWireTestCase{
+		{
+			name:    "nil URLs",
+			request: proto.NetworkSetBlockedURLs{},
+			want:    `{}`,
+		},
+		{
+			name:    "empty URLs clear blocking",
+			request: proto.NetworkSetBlockedURLs{Urls: []string{}},
+			want:    `{"urls":[]}`,
+		},
+		{
+			name:    "nonempty URLs",
+			request: proto.NetworkSetBlockedURLs{Urls: []string{"*.js"}},
+			want:    `{"urls":["*.js"]}`,
+		},
+		{
+			name: "URL patterns omit URLs",
+			request: proto.NetworkSetBlockedURLs{
+				URLPatterns: []*proto.NetworkBlockPattern{{URLPattern: "*://*:*/*.css", Block: true}},
+			},
+			want: `{"urlPatterns":[{"urlPattern":"*://*:*/*.css","block":true}]}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != tc.want {
+				t.Fatalf("request = %s, want %s", data, tc.want)
+			}
+		})
+	}
+}
+
 func TestCommandResponseRouting(t *testing.T) {
 	c := &Client{ret: &proto.BrowserGetVersionResult{ProtocolVersion: "1.3", Product: "fixture"}}
 	result, err := (proto.BrowserGetVersion{}).Call(c)

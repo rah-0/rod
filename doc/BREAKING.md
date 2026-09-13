@@ -10,6 +10,35 @@ Each heading names that version and the previous version it changes. Describe
 the implementation for the named version. Keep historical entries intact; add
 later changes under their own version.
 
+## v0.121.0 — compared with v0.120.0
+
+The generated protocol API follows Chrome `152.0.7977.64`, replacing the
+Chrome `128.0.6568.0` schema. [The protocol migration inventory](PROTOCOL_CHANGES.md)
+lists every removed type and enum constant, changed field type or JSON tag,
+and newly required field on an existing type, with migration guidance.
+Use keyed protocol struct literals and update callers of removed APIs.
+
+Protocol generation now reads the installed browser by default. Keep an
+installed Chrome or Chromium executable available when regenerating; use
+`-schema` to reproduce an explicit offline schema. Ordinary builds use the
+committed Go declarations. Review and accept the schema and generated API
+changes together. Run `go run ./lib/proto/generate -check` for a read-only
+installed-browser drift check. `scripts/check.sh browser` runs that check and
+the runtime tests, preserving failures from either. See
+[protocol generation](../lib/proto/generate/README.md) for the complete workflow.
+
+### Fixture workflows
+
+`fixtures/gen-fonts` is removed. Edit the static multilingual sample in
+[`fixtures/fonts.html`](../fixtures/fonts.html) directly; regenerating it no
+longer requires Google Translate. `TestFonts` creates its PDF using the installed
+browser on ordinary hosts as well as containers.
+
+The skipped `Example_load_extension` is replaced by the tested
+[`examples/load-extension`](../examples/load-extension/main.go) command. Run it
+from the repository root with `go run ./examples/load-extension`. The fixture
+uses Manifest V3 and a local HTTP page, loaded through `Extensions.loadUnpacked`.
+
 ## v0.120.0 — compared with v0.119.0
 
 ### Go APIs

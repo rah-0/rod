@@ -29,7 +29,7 @@ func TestCookieConversionPreservesScope(t *testing.T) {
 	cookie := &proto.NetworkCookie{
 		Name: "session", Value: "example", Domain: ".service.test", Path: "/account",
 		Secure: true, HTTPOnly: true, SameSite: proto.NetworkCookieSameSiteNone,
-		SameParty: true, SourceScheme: proto.NetworkCookieSourceSchemeSecure, SourcePort: 8443,
+		SourceScheme: proto.NetworkCookieSourceSchemeSecure, SourcePort: 8443,
 		PartitionKey: &proto.NetworkCookiePartitionKey{
 			TopLevelSite: "https://example.test", HasCrossSiteAncestor: true,
 		},
@@ -37,7 +37,7 @@ func TestCookieConversionPreservesScope(t *testing.T) {
 	converted := proto.CookiesToParams([]*proto.NetworkCookie{cookie})[0]
 	if !reflect.DeepEqual(converted.PartitionKey, cookie.PartitionKey) ||
 		converted.SourceScheme != cookie.SourceScheme || converted.SourcePort == nil ||
-		*converted.SourcePort != cookie.SourcePort || !converted.SameParty || !converted.HTTPOnly ||
+		*converted.SourcePort != cookie.SourcePort || !converted.HTTPOnly ||
 		converted.Domain != cookie.Domain || converted.Path != cookie.Path {
 		t.Fatalf("cookie scope changed: %+v", converted)
 	}

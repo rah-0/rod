@@ -1,1 +1,1 @@
-window.document.title = 'test-extension'
+document.title = 'test-extension'

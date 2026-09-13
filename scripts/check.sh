@@ -120,10 +120,18 @@ examples)
     done
     ;;
 browser)
+    # Report protocol drift without skipping runtime compatibility checks.
+    protocol_flags=(-check)
+    if [[ ${ROD_PROTOCOL_NO_SANDBOX:-0} == 1 ]]; then
+        protocol_flags+=(-no-sandbox)
+    fi
+    protocol_status=0
+    go run -mod=readonly ./lib/proto/generate "${protocol_flags[@]}" || protocol_status=$?
     go test "${test_flags[@]}" -run '^Test' ./...
     for module in examples/custom-websocket examples/e2e-testing; do
         (cd "$module" && go test "${test_flags[@]}" ./...)
     done
+    if (( protocol_status != 0 )); then exit "$protocol_status"; fi
     ;;
 live)
     go test "${test_flags[@]}" -run '^Example' .

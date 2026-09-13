@@ -1,13 +1,11 @@
 {
-  "source": "Chromium /json/protocol",
-  "chromium_revision": 1321438,
-  "upstream_generation_commit": "5098fbe03be30abb8cb044b27985633d67775027",
-  "sha256": "3c7f00438bbe5203d820a4e215f1fff12a0ce85766f97e6901c52fa17b638bd7",
+  "source": "installed browser /json/protocol",
+  "sha256": "2baa96e91c764182a6ee5ff4048d744082a34ef786aa0e3ac9c7bfe2ce9bc625",
   "browser": {
-    "Browser": "Chrome/128.0.6568.0",
+    "Browser": "Chrome/152.0.7977.64",
     "Protocol-Version": "1.3",
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/128.0.0.0 Safari/537.36",
-    "V8-Version": "12.8.168",
-    "WebKit-Version": "537.36 (@0000000000000000000000000000000000000000)"
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36",
+    "V8-Version": "15.2.124.18",
+    "WebKit-Version": "537.36 (@506c834ecceaa943c5f41e6cfe7f68acb5c45346)"
   }
 }

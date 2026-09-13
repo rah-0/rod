@@ -887,10 +887,6 @@ func TestPageConsoleLog(t *testing.T) {
 func TestFonts(t *testing.T) {
 	g := setup(t)
 
-	if !utils.InContainer { // No need to test font rendering on regular OS
-		g.SkipNow()
-	}
-
 	p := g.page.MustNavigate(g.srcFile("fixtures/fonts.html")).MustWaitLoad()
 
 	p.MustPDF(filepath.Join(t.ArtifactDir(), "fonts.pdf"))

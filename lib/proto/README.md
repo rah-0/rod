@@ -6,5 +6,5 @@ This lib is standalone and stateless, you can use it independently. Such as use 
 
 Here's an [usage example](https://github.com/rah-0/rod/blob/9e847f3bab313a1d233c0c868fe5125e2e70de70/examples_test.go#L370-L393).
 
-See [protocol generation](generate/README.md) for the offline snapshot, provenance,
-update procedure, and generator validation.
+See [protocol generation](generate/README.md) for generation from the installed
+browser, freshness checks, provenance, and explicit offline input.

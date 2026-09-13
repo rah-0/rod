@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"go/format"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -43,7 +44,7 @@ func TestRenderFixture(t *testing.T) {
 		"fixture.go":          {"Value jsonvalue.Value `json:\"value\"`", "Enabled *bool `json:\"enabled,omitempty\"`", "Enabled bool `json:\"enabled,omitempty\"`", "Count *int `json:\"count,omitempty\"`", "Ratio *float64 `json:\"ratio,omitempty\"`", "Options *FixtureOptions `json:\"options,omitempty\"`", "Deprecated: This protocol API is deprecated."},
 		"fetch.go":            {"Body []byte `json:\"body\"`"},
 		"input.go":            {"DeltaX float64 `json:\"deltaX\"`", "DeltaY float64 `json:\"deltaY\"`"},
-		"network.go":          {"Expires TimeSinceEpoch `json:\"expires\"`"},
+		"network.go":          {"Expires TimeSinceEpoch `json:\"expires\"`", "Urls []string `json:\"urls,omitzero\"`"},
 		"target.go":           {"TargetTargetInfoTypeBackgroundPage"},
 		"page.go":             {"PageLifecycleEventNameDOMContentLoaded"},
 		"definitions.go":      {"reflect.TypeFor[FixtureGetValue]()"},
@@ -78,7 +79,7 @@ func TestGenerationFailurePreservesOutputs(t *testing.T) {
 			if err := os.WriteFile(path, []byte(schema), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if err := generate(path, dir); err == nil {
+			if err := generate(t.Context(), GeneratorOptions{SchemaPath: path, OutputDir: dir}, io.Discard); err == nil {
 				t.Fatal("invalid schema accepted")
 			}
 			for _, name := range []string{"previous.go", "handwritten.go"} {
@@ -144,9 +145,7 @@ func TestSnapshotProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var provenance struct {
-		SHA256 string `json:"sha256"`
-	}
+	var provenance SchemaProvenance
 	if err := json.Unmarshal(raw, &provenance); err != nil {
 		t.Fatal(err)
 	}

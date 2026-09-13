@@ -184,7 +184,6 @@ func CookiesToParams(cookies []*NetworkCookie) []*NetworkCookieParam {
 			SameSite:     c.SameSite,
 			Expires:      c.Expires,
 			Priority:     c.Priority,
-			SameParty:    c.SameParty,
 			SourceScheme: c.SourceScheme,
 			SourcePort:   sourcePort,
 			PartitionKey: c.PartitionKey,
