@@ -315,6 +315,15 @@ var WaitIdle = &Function{
 	Dependencies: []*Function{},
 }
 
+// WaitInteractive ...
+var WaitInteractive = &Function{
+	Name: "waitInteractive",
+	Definition: `function() {
+    return document.readyState === 'interactive' || document.readyState === 'complete'
+  }`,
+	Dependencies: []*Function{},
+}
+
 // WaitLoad ...
 var WaitLoad = &Function{
 	Name: "waitLoad",
@@ -345,6 +354,34 @@ var WaitLoad = &Function{
         }
       }
     })
+  }`,
+	Dependencies: []*Function{},
+}
+
+// SetFilesFromMemory ...
+var SetFilesFromMemory = &Function{
+	Name: "setFilesFromMemory",
+	Definition: `function(files) {
+    const win = this.ownerDocument.defaultView
+    if (!(this instanceof win.HTMLInputElement) || this.type !== 'file') {
+      throw new Error('element is not an input[type=file]')
+    }
+    files = files || []
+    if (!this.multiple && files.length > 1) {
+      throw new Error('multiple files require an input with multiple enabled')
+    }
+
+    const transfer = new win.DataTransfer()
+    for (const file of files) {
+      // Go's JSON encoding transfers []byte as base64; nil represents an empty file.
+      const binary = win.atob(file.data || '')
+      const bytes = new win.Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+      transfer.items.add(new win.File([bytes], file.name, { type: file.mimeType }))
+    }
+    this.files = transfer.files
+    this.dispatchEvent(new win.Event('input', { bubbles: true, composed: true }))
+    this.dispatchEvent(new win.Event('change', { bubbles: true }))
   }`,
 	Dependencies: []*Function{},
 }

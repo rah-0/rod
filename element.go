@@ -408,7 +408,19 @@ func (el *Element) Disabled() (bool, error) {
 	return prop.Bool(), nil
 }
 
-// SetFiles of the current file input element.
+// FilePayload is a file supplied from memory to [Element.SetFilesFromMemory].
+type FilePayload struct {
+	// Name is the filename supplied to the browser's File constructor.
+	Name string `json:"name"`
+	// MIMEType is the file's media type, normalized by the browser's File constructor.
+	MIMEType string `json:"mimeType"`
+	// Data is the file's content. Nil and empty slices both create an empty file.
+	Data []byte `json:"data"`
+}
+
+// SetFiles sets the current file input's files using paths on the browser's host.
+// Relative paths are made absolute on the client; no file content is transferred.
+// Use [Element.SetFilesFromMemory] to supply bytes to a local or remote browser.
 func (el *Element) SetFiles(paths []string) error {
 	absPaths := utils.AbsolutePaths(paths)
 
@@ -420,6 +432,20 @@ func (el *Element) SetFiles(paths []string) error {
 		ObjectID: el.id(),
 	}.Call(el)
 
+	return err
+}
+
+// SetFilesFromMemory replaces the current file input's files with the supplied
+// names, MIME types, and bytes, transferred through the existing CDP connection.
+// A nil or empty list clears the selection. More than one file requires a multiple
+// input; non-file inputs or invalid file counts return [EvalError] without changing files.
+// After assignment, it dispatches bubbling input and change events. These events
+// are synthetic (isTrusted is false); no native file chooser is opened.
+func (el *Element) SetFilesFromMemory(files []FilePayload) error {
+	defer el.tryTrace(TraceTypeInput, fmt.Sprintf("set %d files from memory", len(files)))()
+	el.page.browser.trySlowMotion()
+
+	_, err := el.Evaluate(evalHelper(js.SetFilesFromMemory, files))
 	return err
 }
 

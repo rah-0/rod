@@ -11,7 +11,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/rah-0/rod"
@@ -36,16 +35,6 @@ func run(ctx context.Context, output io.Writer) (err error) {
 		return err
 	}
 	defer func() { err = errors.Join(err, browser.Close()) }()
-
-	directory, err := os.MkdirTemp("", "rod-form-upload-")
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, os.RemoveAll(directory)) }()
-	file := filepath.Join(directory, "note.txt")
-	if err := os.WriteFile(file, []byte(uploadContent), 0o600); err != nil {
-		return err
-	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
@@ -134,7 +123,9 @@ window.alert = () => { window.suppressedAlerts++ };`)
 	if err != nil {
 		return err
 	}
-	if err := attachment.SetFiles([]string{file}); err != nil {
+	if err := attachment.SetFilesFromMemory([]rod.FilePayload{{
+		Name: "note.txt", MIMEType: "text/plain", Data: []byte(uploadContent),
+	}}); err != nil {
 		return err
 	}
 	submit, err := form.Element("#submit")

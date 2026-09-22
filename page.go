@@ -693,11 +693,13 @@ func (p *Page) GetResource(url string) ([]byte, error) {
 }
 
 // WaitOpen waits for the next new page opened by the current one.
+// The wait ends if the opener's session ends. The returned page uses the caller's
+// operation context independently of the opener's session and the wait's cleanup.
 func (p *Page) WaitOpen() func() (*Page, error) {
 	var targetID proto.TargetTargetID
 
 	b := p.browser.Context(p.ctx)
-	wait := b.EachEvent(On(func(e *proto.TargetTargetCreated, _ proto.TargetSessionID) bool {
+	wait := b.eachEventWithSession("", p.sessionCtx, On(func(e *proto.TargetTargetCreated, _ proto.TargetSessionID) bool {
 		targetID = e.TargetInfo.TargetID
 		return e.TargetInfo.OpenerID == p.TargetID
 	}))
@@ -947,6 +949,30 @@ func (p *Page) WaitRepaint() error {
 	defer cancel()
 	_, err := p.root.Context(ctx).Eval(`() => new Promise(r => requestAnimationFrame(r))`)
 	return err
+}
+
+// WaitInteractive waits until the document is parsed (readyState is interactive
+// or complete). It does not wait for images, asynchronous application work, or DOM
+// stability. If navigation replaces the document, it waits for the new document.
+// Use [Page.WaitLoad] for full load or [Page.WaitDOMStable] for DOM stability.
+func (p *Page) WaitInteractive() error {
+	// Trace overlays wait for full load, which would delay this parsing wait.
+	if p.browser.trace {
+		p.browser.logger.Println(TraceTypeWait, "interactive", p)
+	}
+	ctx, cancel := contextWithSession(p.ctx, p.sessionCtx)
+	defer cancel()
+	p = p.Context(ctx)
+	return utils.Retry(ctx, p.sleeper(), func() (bool, error) {
+		res, err := p.Evaluate(evalHelper(js.WaitInteractive))
+		if errors.Is(err, cdp.ErrCtxDestroyed) {
+			return false, nil
+		}
+		if err != nil {
+			return true, err
+		}
+		return res.Value.Bool(), nil
+	})
 }
 
 // WaitLoad waits for the `window.onload` event, it returns immediately if the event is already fired.

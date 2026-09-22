@@ -1,0 +1,13 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Screencast example</title>
+<body style="margin: 0; background: white; font: 20px sans-serif">
+  <p style="margin: 24px">A moving square, with a pause before and after.</p>
+  <div id="square" style="position: absolute; left: 40px; top: 140px; width: 60px; height: 60px; background: red"></div>
+  <script>
+    document.querySelector('#square').animate(
+      [{transform: 'translateX(0)'}, {transform: 'translateX(420px)'}],
+      {delay: 700, duration: 900, fill: 'forwards'}
+    );
+  </script>
+</body>

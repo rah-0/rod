@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Query selection</title>
+<ul id="items">
+  <li id="alpha">Alpha</li>
+  <li>Beta</li>
+</ul>
+<section id="panel"><button id="start">Start</button></section>
+<iframe title="Query frame" srcdoc="<p id='frame-content'>Frame content</p>"></iframe>
+<div id="shadow-host"></div>
+<script>
+  const shadow = document.querySelector('#shadow-host').attachShadow({ mode: 'open' })
+  shadow.innerHTML = '<p>Shadow content</p>'
+
+  document.querySelector('#start').addEventListener('click', () => {
+    setTimeout(() => {
+      const result = document.createElement('p')
+      result.id = 'success'
+      result.textContent = 'Ready'
+      document.body.append(result)
+    }, 100)
+  })
+</script>

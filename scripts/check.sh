@@ -45,16 +45,9 @@ pure)
     GOWORK=off go test "${test_flags[@]}" "${pure_packages[@]}"
     # These mixed packages also contain browser tests. Select deterministic
     # protocol, local HTTP, and helper-process fixtures explicitly.
-    cdp_tests=(
-        'WebSocket(HandshakeLifecycle|EstablishmentContext|TLSCancellation|Err|Header)'
-        'WebSocket(SendContext|CanceledSendPreservesTransport|ControlReplyTimeout)'
-        'WebSocketProtocol(Handshake|Frames|Close|MalformedFrames)'
-        'Client(MarshalError|MalformedMessage|ResponseBeforeEOF|PendingResponseRouting)'
-        'Client(CloseUnreadEvent|WebSocketPeerClose)'
-        'SlowSend|CancelCallLeak|ConcurrentCall|Format|ContextDestroyedErrors'
-    )
     launcher_tests=(
         'ResolveURL.*|TestOpen'
+        'UserModeOptions|LaunchErr'
         'Cleanup(WithoutProcess|ReusedBrowser|ContextBudget)'
         'OutputTail|OwnedProfileCollision|URLParserBoundedOutput'
         'ManagedInitializationCancellation|FormatArgsPreservesProfileOwnership|FreeBSDDiscovery'
@@ -64,6 +57,8 @@ pure)
     )
     rod_tests=(
         'LongestCommonSubsequence|SaveFileDefaultPaths|ShapesEqual|Typed.*'
+        'BrowserResetControlURL|TestTry|BrowserConnect(Failure|Conflict)'
+        'PagesOthers|ElementsOthers|EvalOptionsString'
         'OwnedBrowserClose(ExpiredContext|Timeout)|AttachedBrowserCloseContext|MonitorCancellation'
         'ConfiguredBrowser(LaunchFailures|LaunchConflicts|CleanupBudget|OutputLimit|DiscoveryFailureClosesTransport)'
         'Diagnostics(Lifecycle|SetupFailure|IncompleteStop|SharedDomains|CorrelationAndRevocation)'
@@ -74,7 +69,10 @@ pure)
         'Page(SessionViewsAndEviction|AttachLockCancellation|CloseRequiresClosureEvidence|WaitNavigationIgnoresChildFrames)'
         'PageCloseAcknowledgementAfterSessionTermination'
         'PageSessionEndClosesUnreadEvent'
+        'PageWaitOpen(Termination|Success|UnusedCancellation)'
         'KeyboardStateCommitsAfterSuccess|KeyActionsFailureReleasesOwnedKeys'
+        'Drag(CommandSequence|Validation|SessionLease|AutomaticCancellation|CancelInterruptsCommand)'
+        'Drag(CancelWithBlockedKeyboard|CanceledStart|CleanupBudget|ProtocolFailureRollback)'
         'Download(ContextAndGUID|UnusedCancellationRestoresBehavior|SetupFailureRollsBack)'
         'Download(BrowserCancellation|DistinctContexts|DisposedContextIsNotDefault)'
         'Download(SharedEventsRestoration|FailedSetupPreservesSharedEvents)'
@@ -86,10 +84,12 @@ pure)
         'Hijack(RepeatedHeaders|ReplayableBodies|RouteMutation|RouteDispatch|LifecycleErrors)'
         'HandleAuthErrorsAndRestore'
     )
-    go test "${test_flags[@]}" -run "$(test_pattern "${cdp_tests[@]}")" ./lib/cdp
+    go test "${test_flags[@]}" -run '^Test' ./lib/cdp
     go test "${test_flags[@]}" -run "$(test_pattern "${launcher_tests[@]}")" ./lib/launcher
     go test "${test_flags[@]}" -run "$(test_pattern "${rod_tests[@]}")" .
     go test "${test_flags[@]}" -run '^Test(HTMLHandler|InvalidConfiguration|SetupRollback)$' ./lib/fixture
+    go test "${test_flags[@]}" -run '^TestWriteTabsReadOnly$' ./examples/tab-metadata
+    go test "${test_flags[@]}" -run '^Test(FrameArchive.*|ListenerError)$' ./examples/screencast
     ;;
 fix)
     # Review advisory suggestions for callback panic behavior and protocol encoding.
@@ -127,7 +127,12 @@ browser)
     fi
     protocol_status=0
     go run -mod=readonly ./lib/proto/generate "${protocol_flags[@]}" || protocol_status=$?
-    go test "${test_flags[@]}" -run '^Test' ./...
+    go test "${test_flags[@]}" -run '^Test' . ./internal/... ./lib/... ./examples/...
+    # Integration tests live in separate packages; instrument the code they test.
+    for package in . lib/cdp lib/launcher; do
+        source_package=$(go list -mod=readonly "./$package")
+        go test "${test_flags[@]}" -coverpkg="$source_package" -run '^Test' "./tests/$package"
+    done
     for module in examples/custom-websocket examples/e2e-testing; do
         (cd "$module" && go test "${test_flags[@]}" ./...)
     done

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rah-0/rod/lib/input"
@@ -21,6 +22,8 @@ type Keyboard struct {
 type keyboardState struct {
 	sync.Mutex
 	pressed map[input.Key]struct{}
+	// Read the last confirmed state without waiting for an in-flight key command.
+	modifierBits atomic.Int32
 }
 
 func (p *Page) newKeyboard() *Page {
@@ -29,9 +32,7 @@ func (p *Page) newKeyboard() *Page {
 }
 
 func (k *Keyboard) getModifiers() int {
-	k.Lock()
-	defer k.Unlock()
-	return k.modifiers()
+	return int(k.modifierBits.Load())
 }
 
 func (k *Keyboard) modifiers() int {
@@ -56,6 +57,7 @@ func (k *Keyboard) Press(key input.Key) error {
 		return err
 	}
 	k.pressed[key] = struct{}{}
+	k.modifierBits.Store(int32(k.modifiers()))
 	return nil
 }
 
@@ -80,6 +82,7 @@ func (k *Keyboard) Release(key input.Key) error {
 		return err
 	}
 	delete(k.pressed, key)
+	k.modifierBits.Store(int32(modifiers))
 	return nil
 }
 

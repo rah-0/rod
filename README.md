@@ -65,14 +65,7 @@ Cancel the page or browser context to end a continuing subscription.
 
 ## Runnable examples
 
-The examples start their own browsers and local services. Run a command from the
-repository root, for example:
-
-```sh
-go run ./examples/forms
-go run ./examples/capture
-bash scripts/check.sh examples
-```
+Runnable examples and their usage documentation live in [examples/](examples/).
 
 | Example | Demonstrates |
 | --- | --- |
@@ -81,27 +74,22 @@ bash scripts/check.sh examples
 | [JSON evaluation](examples/json-evaluation/main.go) | Typed DOM projection, discarded results, and serialization errors. |
 | [Typing](examples/typing/main.go) | Validated keys, Enter actions, and Unicode insertion. |
 | [HTTP fixture](examples/http-fixture/main.go) | Relative scripts and API responses with configuration before navigation. |
-| [Forms](examples/forms/main.go) | Visibility waits, file uploads, and form submission. |
+| [Query selection](examples/query-selection/README.md) | CSS, XPath, JavaScript, frame and shadow-root queries, and bounded waits. |
+| [Forms](examples/forms/README.md) | Visibility waits, file uploads from memory, and form submission. |
+| [Native drag and drop](examples/drag/README.md) | Explicit drag data, native drop events, and verified payload delivery. |
 | [Capture](examples/capture/main.go) | Page and element screenshots, device emulation, and PDF output. |
+| [Screencast](examples/screencast/README.md) | Record timestamped frames and pauses, with optional MP4 conversion. |
 | [Network](examples/network/main.go) | Request headers and cookies configured before navigation. |
+| [Browser response](examples/browser-response/README.md) | Capture an authenticated POST response without replaying the request. |
 | [Download](examples/download/main.go) | Download completion and verification of the saved bytes. |
 | [Proxy authentication](examples/proxy-auth/main.go) | An authenticated local proxy and verified forwarding. |
 | [Connect to a browser](examples/connect-browser/main.go) | Attach to a browser whose process belongs to its caller. |
+| [Persistent profile](examples/persistent-profile/README.md) | A caller-owned automation profile with separate login state and preserved data. |
 | [Managed launch](examples/launch-managed/main.go) | An authenticated manager and remotely requested browser lifecycle. |
 | [Load an extension](examples/load-extension/main.go) | A Manifest V3 extension changing a local page in headless Chrome. |
+| [Tab metadata](examples/tab-metadata/README.md) | Read tab selection, order, pinning, and grouping without activating tabs. |
 | [Custom WebSocket](examples/custom-websocket/main.go) | A third-party transport adapter with cancellation and cleanup. |
 | [E2E test project](examples/e2e-testing/calculator_test.go) | Native Go tests with a shared process and isolated browser contexts. |
-
-Every command has a test that runs its example code and checks browser results.
-The E2E project runs with `go test`, and `scripts/check.sh examples` includes it
-and the separate custom-WebSocket module. The browser suite includes all examples.
-
-## Project backlog
-
-Upstream Rod issues and pull requests have been reviewed and triaged. The retained
-tasks are documented in the [issue backlog](doc/issues/README.md) and
-[pull-request assessments](doc/pulls/README.md), with priorities and acceptance
-criteria.
 
 ## Development
 
@@ -134,7 +122,8 @@ does not apply them. Review protocol encoding before applying suggestions, and
 keep explicit `WaitGroup.Add`/`Done` calls around callbacks that may panic or call
 `runtime.Goexit`.
 
-Run the root suite and all example modules with an installed browser:
+Run unit tests, browser integration tests, and all example modules with an
+installed browser:
 
 ```sh
 bash scripts/check.sh browser
@@ -148,19 +137,23 @@ Environments that require disabling sandboxing for protocol capture can use
 `ROD_PROTOCOL_NO_SANDBOX=1 bash scripts/check.sh browser`.
 
 The test runner runs packages and test cases sequentially (`-p=1 -parallel=1`).
-The root suite reuses one browser, retires it after a failed test, and bounds
-graceful shutdown before killing owned processes and removing profiles. Root and
-e2e browser cases stay sequential even with a higher `-parallel` setting. The
-cleanup benchmark also runs one browser lifecycle at a time.
+Public API browser integration tests mirror the source layout in [tests/](tests/README.md).
+Unit tests, command tests, generated tests, and Go documentation examples stay
+beside their packages. The suite in `tests/` reuses one browser, retires it after
+a failed test, and bounds graceful shutdown before killing owned processes and
+removing profiles. Integration and e2e browser cases stay sequential even with a
+higher `-parallel` setting. The cleanup benchmark also runs one browser lifecycle
+at a time.
 
 Executable documentation examples run separately with `bash scripts/check.sh live`.
 Tests store screenshots, PDFs, and failed-test CDP logs in `t.ArtifactDir()`.
-To retain these files from root tests:
+To retain these files from the Rod integration tests:
 
 ```sh
 mkdir -p /tmp/rod-artifacts
 GODEBUG=tracebackancestors=100 go test -count=1 -race -cover -covermode=atomic \
-  -run '^Test' -artifacts -outputdir /tmp/rod-artifacts .
+  -coverpkg=github.com/rah-0/rod -run '^Test' \
+  -artifacts -outputdir /tmp/rod-artifacts ./tests
 ```
 
 Successful-test CDP logs are removed. Without `-artifacts`, Go removes artifact

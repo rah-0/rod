@@ -10,6 +10,24 @@ Each heading names that version and the previous version it changes. Describe
 the implementation for the named version. Keep historical entries intact; add
 later changes under their own version.
 
+## v0.122.0 — compared with v0.121.0
+
+### Runtime behavior
+
+| Affected behavior | Change | Migration |
+| --- | --- | --- |
+| `Page.WaitOpen`, `Page.MustWaitOpen` | A pending popup wait ends when the opener's target is destroyed or its session is detached. `WaitOpen` returns `context.Canceled`; the Must helper panics on that error. | Handle opener termination when waiting for a popup. A successfully returned popup keeps the caller's operation context and remains usable after the opener closes. |
+
+### Test workflows
+
+Public API browser integration tests live in `tests/`, `tests/lib/cdp`, and
+`tests/lib/launcher`. Running `go test .` or testing only the source library
+directories no longer runs those integration tests. Use
+`bash scripts/check.sh browser` for the complete browser suite. Direct runs from
+the new test directories need `-coverpkg` to measure the corresponding source
+package; see [test commands](../tests/README.md). Public APIs are unchanged by
+this relocation.
+
 ## v0.121.0 — compared with v0.120.0
 
 The generated protocol API follows Chrome `152.0.7977.64`, replacing the

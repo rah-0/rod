@@ -430,6 +430,29 @@ func (p *Page) MustWaitOpen() (wait func() (newPage *Page)) {
 	}
 }
 
+// MustDrag is similar to [Page.Drag].
+func (p *Page) MustDrag(position proto.Point, data *proto.InputDragData) *Drag {
+	drag, err := p.Drag(position, data)
+	p.e(err)
+	return drag
+}
+
+// MustMoveTo is similar to [Drag.MoveTo].
+func (d *Drag) MustMoveTo(position proto.Point) *Drag {
+	d.page.e(d.MoveTo(position))
+	return d
+}
+
+// MustDrop is similar to [Drag.Drop].
+func (d *Drag) MustDrop() {
+	d.page.e(d.Drop())
+}
+
+// MustCancel is similar to [Drag.Cancel].
+func (d *Drag) MustCancel() {
+	d.page.e(d.Cancel())
+}
+
 // MustWaitNavigation is similar to [Page.WaitNavigation].
 func (p *Page) MustWaitNavigation() func() {
 	wait := p.WaitNavigation(proto.PageLifecycleEventNameNetworkAlmostIdle)
@@ -457,6 +480,12 @@ func (p *Page) MustWaitDOMStable() *Page {
 // MustWaitStable is similar to [Page.WaitStable].
 func (p *Page) MustWaitStable() *Page {
 	p.e(p.WaitStable(time.Second))
+	return p
+}
+
+// MustWaitInteractive is similar to [Page.WaitInteractive].
+func (p *Page) MustWaitInteractive() *Page {
+	p.e(p.WaitInteractive())
 	return p
 }
 
@@ -905,6 +934,12 @@ func (el *Element) MustContainsElement(target *Element) bool {
 // MustSetFiles is similar to [Element.SetFiles].
 func (el *Element) MustSetFiles(paths ...string) *Element {
 	el.e(el.SetFiles(paths))
+	return el
+}
+
+// MustSetFilesFromMemory is similar to [Element.SetFilesFromMemory].
+func (el *Element) MustSetFilesFromMemory(files ...FilePayload) *Element {
+	el.e(el.SetFilesFromMemory(files))
 	return el
 }
 

@@ -8,3 +8,7 @@ Here's an [usage example](https://github.com/rah-0/rod/blob/9e847f3bab313a1d233c
 
 See [protocol generation](generate/README.md) for generation from the installed
 browser, freshness checks, provenance, and explicit offline input.
+
+The [tab metadata example](../../examples/tab-metadata/README.md) queries tab
+targets through `TargetGetTargets.Filter` and preserves optional and unknown
+`TargetTargetInfo.EmbedderData` fields without activating tabs.

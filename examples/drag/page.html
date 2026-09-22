@@ -1,0 +1,19 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Native HTML drag and drop</title>
+<style>
+  #source, #target { width: 220px; height: 80px; margin: 20px; padding: 12px; }
+  #source { background: lightblue; }
+  #target { background: lightgreen; }
+</style>
+<div id="source" draggable="true">Drag source</div>
+<div id="target">Drop here</div>
+<script>
+  const target = document.querySelector('#target')
+  // Preventing the default drag-over behavior allows the target to accept a drop.
+  target.addEventListener('dragover', event => event.preventDefault())
+  target.addEventListener('drop', event => {
+    event.preventDefault()
+    target.textContent = event.dataTransfer.getData('text/plain')
+  })
+</script>

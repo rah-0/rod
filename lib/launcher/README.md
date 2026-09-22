@@ -89,6 +89,32 @@ inside the original directory even if a parent symlink is replaced. Reopening
 that descriptor requires `/proc/self/fd` on Linux or `/dev/fd` on other Unix
 systems; launch fails if the directory cannot be reopened safely.
 
+## Persistent automation profiles
+
+Chrome 136 and later ignore remote-debugging switches for the default Chrome
+data directory. Closing an existing Chrome process does not remove this
+restriction. Use an explicit non-default directory for automation, as described
+in [Chrome's remote-debugging guidance](https://developer.chrome.com/blog/remote-debugging-port):
+
+```go
+l := launcher.New().UserDataDir("/path/to/rod-automation-profile")
+```
+
+The directory is persistent and caller-owned: `Cleanup`, `CleanupContext`, and
+an owning `Browser.Close` preserve it. Reuse the same directory on later runs,
+with only one browser using it at a time. Sign in to sites separately in this
+automation profile; it does not inherit the personal profile's cookies or
+sessions. Whether a login survives a restart also depends on the site's session
+policy. Rod does not copy or recover a personal profile.
+
+`NewUserMode` keeps its default-directory behavior for browsers that support it.
+It does not detect browser versions or bypass Chrome's restriction. An explicit
+`NewUserMode().UserDataDir(...)` also selects a caller-owned automation directory.
+Use an installed browser; Rod does not download a replacement.
+
+See the [persistent profile example](../../examples/persistent-profile/README.md)
+for separate login setup and a runnable launch with bounded cleanup.
+
 ## Remote manager security
 
 `rod-manager` requires a bearer token from `ROD_MANAGER_TOKEN` and listens on

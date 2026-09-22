@@ -520,6 +520,11 @@ func (b *Browser) waitEvent[E proto.Event](sessionID proto.TargetSessionID, out 
 
 // eachEvent enables related domains until the wait ends, then restores them.
 func (b *Browser) eachEvent(sessionID proto.TargetSessionID, handlers ...EventHandler) func() error {
+	return b.eachEventWithSession(sessionID, b.sessionContext(sessionID), handlers...)
+}
+
+// eachEventWithSession bounds the wait by sessionCtx independently of the event session filter.
+func (b *Browser) eachEventWithSession(sessionID proto.TargetSessionID, sessionCtx context.Context, handlers ...EventHandler) func() error {
 	callbacks := make(map[string]func(*Message) bool, len(handlers))
 	for _, handler := range handlers {
 		if handler.handle == nil {
@@ -529,7 +534,7 @@ func (b *Browser) eachEvent(sessionID proto.TargetSessionID, handlers ...EventHa
 	}
 	callerCtx := b.ctx
 	ctx, stopConnection := contextWithSession(b.ctx, b.connectionCtx)
-	ctx, stopSession := contextWithSession(ctx, b.sessionContext(sessionID))
+	ctx, stopSession := contextWithSession(ctx, sessionCtx)
 	cancel := func() { stopSession(); stopConnection() }
 	b = b.Context(ctx)
 	messages := b.Event() // Runtime.enable may emit buffered events immediately.

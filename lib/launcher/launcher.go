@@ -133,9 +133,13 @@ func New() *Launcher {
 	}
 }
 
-// NewUserMode is a preset to enable reusing current user data. Useful for automation of personal browser.
-// If you see any error, it may because you can't launch debug port for existing browser, the solution is to
-// completely close the running browser. Unfortunately, there's no API for rod to tell it automatically yet.
+// NewUserMode uses the browser's default user data directory when the browser
+// supports remote debugging with that directory. Chrome 136 and later ignore
+// remote-debugging switches for the default Chrome data directory; closing an
+// existing browser does not remove that restriction. Set [Launcher.UserDataDir]
+// to a separate, non-default automation directory and sign in there separately.
+// An explicitly supplied directory remains caller-owned after cleanup.
+// See https://developer.chrome.com/blog/remote-debugging-port.
 func NewUserMode() *Launcher {
 	ctx, cancel := context.WithCancel(context.Background())
 	bin, _ := LookPath()

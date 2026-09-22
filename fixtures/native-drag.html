@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Native drag fixture</title>
+<style>
+  #source, #target { width: 200px; height: 80px; margin: 20px; }
+  #source { background: lightblue; }
+  #target { background: lightgreen; }
+</style>
+<div id="source" draggable="true">Drag source</div>
+<div id="target">Drop here</div>
+<script>
+  window.dragEvents = []
+  window.dropped = ''
+  const target = document.querySelector('#target')
+  for (const type of ['dragenter', 'dragover', 'dragleave', 'drop']) {
+    target.addEventListener(type, event => {
+      event.preventDefault()
+      window.dragEvents.push({
+        type: event.type, x: event.clientX, y: event.clientY,
+        ctrl: event.ctrlKey, trusted: event.isTrusted
+      })
+      if (type === 'drop') window.dropped = event.dataTransfer.getData('text/plain')
+    })
+  }
+</script>

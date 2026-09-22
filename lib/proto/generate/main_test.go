@@ -45,7 +45,7 @@ func TestRenderFixture(t *testing.T) {
 		"fetch.go":            {"Body []byte `json:\"body\"`"},
 		"input.go":            {"DeltaX float64 `json:\"deltaX\"`", "DeltaY float64 `json:\"deltaY\"`"},
 		"network.go":          {"Expires TimeSinceEpoch `json:\"expires\"`", "Urls []string `json:\"urls,omitzero\"`"},
-		"target.go":           {"TargetTargetInfoTypeBackgroundPage"},
+		"target.go":           {"TargetTargetInfoTypeBackgroundPage", "EmbedderData map[string]jsonvalue.Value `json:\"embedderData,omitempty\"`"},
 		"page.go":             {"PageLifecycleEventNameDOMContentLoaded"},
 		"definitions.go":      {"reflect.TypeFor[FixtureGetValue]()"},
 		"definitions_test.go": {"func TestFixtureGetValue(t *testing.T)", "c.methodName != \"Fixture.getValue\"", "reflect.DeepEqual(c.params, request)", "got != \"Fixture.changed\""},

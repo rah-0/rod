@@ -1,0 +1,46 @@
+{
+  "targetInfos": [
+    {
+      "targetId": "selected-tab",
+      "type": "tab",
+      "title": "Selected tab",
+      "url": "https://example.com/selected",
+      "attached": false,
+      "canAccessOpener": false,
+      "embedderData": {
+        "tabStripIndex": 0,
+        "tabActive": true,
+        "tabPinned": true,
+        "futureMetadata": {
+          "label": "preserved",
+          "nested": {
+            "enabled": false,
+            "values": [0, "item", null]
+          }
+        }
+      }
+    },
+    {
+      "targetId": "background-tab",
+      "type": "tab",
+      "title": "Background tab",
+      "url": "https://example.com/background",
+      "attached": false,
+      "canAccessOpener": false,
+      "embedderData": {
+        "tabStripIndex": 1,
+        "tabActive": false,
+        "tabPinned": false,
+        "tabGroupId": "example-group"
+      }
+    },
+    {
+      "targetId": "legacy-tab",
+      "type": "tab",
+      "title": "Tab without metadata",
+      "url": "https://example.com/legacy",
+      "attached": false,
+      "canAccessOpener": false
+    }
+  ]
+}

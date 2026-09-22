@@ -70,7 +70,7 @@ query.addEventListener("keydown", event => {
 	fmt.Println(text)
 
 	// Get all input elements. Rod supports query elements by css selector, xpath, and regex.
-	// For more detailed usage, check the query_test.go file.
+	// For more detailed usage, check tests/query_test.go.
 	fmt.Println("Found", len(page.MustElements("input")), "input elements")
 
 	// Eval js on the page

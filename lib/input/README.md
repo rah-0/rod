@@ -43,7 +43,7 @@ err := element.Input("こんにちは 🦊")
 ```
 
 Keyboard listeners observe different events for insertion and typing.
-[Mapping tests](text_test.go) and [browser tests](../../input_text_test.go) cover
+[Mapping tests](text_test.go) and [browser tests](../../tests/input_text_test.go) cover
 validation, keydown/keyup events, Enter actions, and preservation of existing text.
 
 Use the named `Numpad0` through `Numpad9` and `NumpadDecimal` keys for numeric
