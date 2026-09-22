@@ -56,7 +56,7 @@ pure)
         'ManagerLaunchStopsWhenRequestIsCanceled|ManagerAuthentication'
     )
     rod_tests=(
-        'LongestCommonSubsequence|SaveFileDefaultPaths|ShapesEqual|Typed.*'
+        'LongestCommonSubsequence.*|SaveFileDefaultPaths|ShapesEqual|Typed.*|DefaultSleeperBackoff'
         'BrowserResetControlURL|TestTry|BrowserConnect(Failure|Conflict)'
         'PagesOthers|ElementsOthers|EvalOptionsString'
         'OwnedBrowserClose(ExpiredContext|Timeout)|AttachedBrowserCloseContext|MonitorCancellation'

@@ -537,7 +537,14 @@ func (b *Browser) eachEventWithSession(sessionID proto.TargetSessionID, sessionC
 	ctx, stopSession := contextWithSession(ctx, sessionCtx)
 	cancel := func() { stopSession(); stopConnection() }
 	b = b.Context(ctx)
-	messages := b.Event() // Runtime.enable may emit buffered events immediately.
+	// Subscribe before enabling domains: Runtime.enable can emit buffered events.
+	messages := b.event.SubscribeFilter(ctx, func(msg *Message) bool {
+		if sessionID != "" && msg.SessionID != sessionID {
+			return false
+		}
+		_, ok := callbacks[msg.Method]
+		return ok
+	})
 	var releases []func(context.Context) error
 	var setupErr error
 	for _, handler := range handlers {
@@ -581,10 +588,7 @@ func (b *Browser) eachEventWithSession(sessionID proto.TargetSessionID, sessionC
 			return setupErr
 		}
 		for msg := range messages {
-			if sessionID != "" && msg.SessionID != sessionID {
-				continue
-			}
-			if callback, ok := callbacks[msg.Method]; ok && callback(msg) {
+			if callbacks[msg.Method](msg) {
 				return nil
 			}
 		}
@@ -606,29 +610,7 @@ func (b *Browser) eachEventWithSession(sessionID proto.TargetSessionID, sessionC
 
 // Event of the browser.
 func (b *Browser) Event() <-chan *Message {
-	ctx, cancel := contextWithSession(b.ctx, b.connectionCtx)
-	src := b.event.Subscribe(ctx)
-	dst := make(chan *Message)
-	go func() {
-		defer close(dst)
-		defer cancel()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case e, ok := <-src:
-				if !ok {
-					return
-				}
-				select {
-				case <-ctx.Done():
-					return
-				case dst <- e:
-				}
-			}
-		}
-	}()
-	return dst
+	return b.event.Subscribe(b.ctx)
 }
 
 func (b *Browser) initEvents() {

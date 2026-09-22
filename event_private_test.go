@@ -269,6 +269,36 @@ func eventTestMessage(method string, session proto.TargetSessionID, data string)
 	return &Message{Method: method, SessionID: session, data: json.RawMessage(data)}
 }
 
+func TestTypedEventBufferedDuringEnable(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		browser, _ := newEventTestBrowser(t)
+		browser.Client(&sessionTestClient{call: func(_ context.Context, _, method string, _ any) ([]byte, error) {
+			if method == "Network.enable" {
+				browser.event.Publish(eventTestMessage("Network.loadingFinished", "other", `{"requestId":"wrong-session"}`))
+				browser.event.Publish(eventTestMessage("Network.loadingFailed", "page", `{"requestId":"wrong-method"}`))
+				browser.event.Publish(eventTestMessage("Network.loadingFinished", "page", `{"requestId":"first"}`))
+				browser.event.Publish(eventTestMessage("Network.loadingFinished", "page", `{"requestId":"second"}`))
+			}
+			return []byte(`{}`), nil
+		}})
+		var seen []proto.NetworkRequestID
+		wait := browser.eachEvent("page", On(func(event *proto.NetworkLoadingFinished, _ proto.TargetSessionID) bool {
+			seen = append(seen, event.RequestID)
+			return len(seen) == 2
+		}))
+		if err := wait(); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(seen, []proto.NetworkRequestID{"first", "second"}) {
+			t.Fatalf("buffered events = %v", seen)
+		}
+		synctest.Wait()
+		if browser.event.Len() != 0 {
+			t.Fatal("completed buffered-event wait retained its subscription")
+		}
+	})
+}
+
 func TestTypedUnusedWaitCancellation(t *testing.T) {
 	for _, shared := range []bool{false, true} {
 		name := "last-owner"

@@ -2,6 +2,9 @@ package rod
 
 import (
 	"context"
+	"fmt"
+	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -81,4 +84,34 @@ func dynamicLCSLength(left, right []string) int {
 		}
 	}
 	return row[len(right)]
+}
+
+func BenchmarkDOMSnapshotCompare(b *testing.B) {
+	for _, size := range []int{1000, 10000} {
+		left := make([]string, size)
+		for i := range left {
+			left[i] = strconv.Itoa(i)
+		}
+		for _, change := range []string{"same", "one-change", "reversed"} {
+			right := slices.Clone(left)
+			want := size
+			switch change {
+			case "one-change":
+				right[size/2] = "changed"
+				want--
+			case "reversed":
+				slices.Reverse(right)
+				want = 1
+			}
+			b.Run(fmt.Sprintf("%d/%s", size, change), func(b *testing.B) {
+				ctx := context.Background()
+				b.ReportAllocs()
+				for b.Loop() {
+					if got := longestCommonSubsequenceLength(ctx, left, right); got != want {
+						b.Fatalf("LCS length = %d, want %d", got, want)
+					}
+				}
+			})
+		}
+	}
 }

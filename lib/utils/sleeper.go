@@ -81,7 +81,7 @@ func BackoffSleeper(initInterval, maxInterval time.Duration, algorithm func(time
 
 		var interval time.Duration
 		if initInterval < maxInterval {
-			interval = algorithm(initInterval)
+			interval = min(algorithm(initInterval), maxInterval)
 		} else {
 			interval = maxInterval
 		}

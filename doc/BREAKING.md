@@ -10,6 +10,20 @@ Each heading names that version and the previous version it changes. Describe
 the implementation for the named version. Keep historical entries intact; add
 later changes under their own version.
 
+## v0.123.0 — compared with v0.122.0
+
+### Retry timing
+
+`DefaultSleeper` uses a 10 ms seed instead of 100 ms. The first retry occurs
+after approximately 19–21 ms, then intervals grow with jitter up to one second.
+Short waits respond sooner, with more evaluations early in longer waits. Supply
+an explicit sleeper through `Browser.Sleeper`, `Page.Sleeper`, or `Element.Sleeper`
+when an application requires a particular retry cadence.
+
+`utils.BackoffSleeper` caps each computed interval at `maxInterval`, including
+intervals returned by a custom backoff algorithm. Algorithms can no longer
+overshoot that configured limit.
+
 ## v0.122.0 — compared with v0.121.0
 
 ### Runtime behavior

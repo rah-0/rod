@@ -61,15 +61,15 @@ func (msg *Message) Load[E proto.Event](out *E) bool {
 // DefaultLogger for rod.
 var DefaultLogger = log.New(os.Stdout, "[rod] ", log.LstdFlags)
 
-// DefaultSleeper generates the default sleeper for retry, it uses backoff to grow the interval.
-// The growth looks like:
+// DefaultSleeper creates a retry sleeper with a 10 ms seed and exponential backoff:
 //
-//	A(0) = 100ms, A(n) = A(n-1) * random[1.9, 2.1), A(n) < 1s
+//	A(0) = 10ms, A(n) = min(A(n-1) * random[1.9, 2.1), 1s)
 //
-// Why the default is not RequestAnimationFrame or DOM change events is because of if a retry never
-// ends it can easily flood the program. But you can always easily config it into what you want.
+// The first sleep is approximately 19–21 ms. Increasing the interval limits
+// repeated evaluations during longer waits. Use a custom sleeper to choose a
+// different retry cadence.
 var DefaultSleeper = func() utils.Sleeper {
-	return utils.BackoffSleeper(100*time.Millisecond, time.Second, nil)
+	return utils.BackoffSleeper(10*time.Millisecond, time.Second, nil)
 }
 
 // NewPagePool instance.

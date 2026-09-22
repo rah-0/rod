@@ -241,9 +241,18 @@ func (p *Page) ElementsByJS(opts *EvalOptions) (elements Elements, err error) {
 			return nil, &ExpectElementsError{val}
 		}
 
-		el, err := p.ElementFromObject(val)
-		if err != nil {
-			return nil, err
+		var el *Element
+		if len(elemList) == 0 {
+			el, err = p.ElementFromObject(val)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			// Runtime.getProperties binds all member handles to the collection's
+			// execution context, including nodes belonging to other frames.
+			clone := *elemList[0]
+			clone.Object = val
+			el = &clone
 		}
 
 		elemList = append(elemList, el)

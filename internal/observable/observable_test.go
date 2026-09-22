@@ -2,9 +2,111 @@ package observable
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"testing/synctest"
 )
+
+func TestObservableConcurrentPublishOrder(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	o := New[int](ctx)
+	streams := make([]<-chan int, 8)
+	for i := range streams {
+		streams[i] = o.Subscribe(ctx)
+	}
+	const publishers, events = 8, 128
+	start := make(chan struct{})
+	var publishersDone sync.WaitGroup
+	for publisher := range publishers {
+		publishersDone.Go(func() {
+			<-start
+			for event := range events {
+				o.Publish(publisher*events + event)
+			}
+		})
+	}
+	close(start)
+	publishersDone.Wait()
+	seen := make([]bool, publishers*events)
+	for range seen {
+		want := <-streams[0]
+		if seen[want] {
+			t.Fatalf("duplicate event %d", want)
+		}
+		seen[want] = true
+		for _, stream := range streams[1:] {
+			if got := <-stream; got != want {
+				t.Fatalf("subscriber order differs: got %d, want %d", got, want)
+			}
+		}
+	}
+}
+
+func TestObservableFilterAndUnreadSubscriber(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		o := New[int](ctx)
+		unreadCtx, stopUnread := context.WithCancel(ctx)
+		unread := o.Subscribe(unreadCtx)
+		even := o.SubscribeFilter(ctx, func(event int) bool { return event%2 == 0 })
+		rejected := o.SubscribeFilter(ctx, func(int) bool { return false })
+		for event := range 512 {
+			o.Publish(event)
+		}
+		for event := 0; event < 512; event += 2 {
+			if got := <-even; got != event {
+				t.Fatalf("filtered event = %d, want %d", got, event)
+			}
+		}
+		stopUnread()
+		synctest.Wait()
+		if _, open := <-unread; open {
+			t.Fatal("canceled unread subscription retained queued events")
+		}
+		o.Publish(512)
+		if got := <-even; got != 512 {
+			t.Fatalf("event after canceling another subscriber = %d", got)
+		}
+		cancel()
+		synctest.Wait()
+		if _, open := <-rejected; open {
+			t.Fatal("filter delivered a rejected event")
+		}
+		if got := o.Len(); got != 0 {
+			t.Fatalf("canceled subscribers retained: %d", got)
+		}
+	})
+}
+
+func TestObservableBacklogOrder(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	o := New[int](ctx)
+	stream := o.Subscribe(ctx)
+	read := 0
+	// Keep a backlog while alternating writes and reads, then drain and reuse it.
+	for cycle := range 4 {
+		for burst := range 8 {
+			for event := range 64 {
+				o.Publish(cycle*512 + burst*64 + event)
+			}
+			for range 32 {
+				if got := <-stream; got != read {
+					t.Fatalf("event = %d, want %d", got, read)
+				}
+				read++
+			}
+		}
+		for read < (cycle+1)*512 {
+			if got := <-stream; got != read {
+				t.Fatalf("backlogged event = %d, want %d", got, read)
+			}
+			read++
+		}
+	}
+}
 
 func TestObservableOrderAndCancellation(t *testing.T) {
 	t.Parallel()

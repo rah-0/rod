@@ -17,6 +17,21 @@ func TestBackoffSleeperWakeNow(t *testing.T) {
 	g.E(utils.BackoffSleeper(0, 0, nil)(g.Context()))
 }
 
+func TestBackoffSleeperCapsGrowth(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		sleep := utils.BackoffSleeper(2*time.Millisecond, 5*time.Millisecond, func(d time.Duration) time.Duration { return 2 * d })
+		for _, want := range []time.Duration{4 * time.Millisecond, 5 * time.Millisecond, 5 * time.Millisecond} {
+			start := time.Now()
+			if err := sleep(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if got := time.Since(start); got != want {
+				t.Fatalf("sleep = %s, want %s", got, want)
+			}
+		}
+	})
+}
+
 func TestRetry(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		g := setup(t)

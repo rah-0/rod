@@ -1145,31 +1145,7 @@ func (p *Page) Call(ctx context.Context, sessionID, methodName string, params an
 
 // Event of the page.
 func (p *Page) Event() <-chan *Message {
-	ctx, cancel := contextWithSession(p.ctx, p.sessionCtx)
-	dst := make(chan *Message)
-	s := p.event.Subscribe(ctx)
-
-	go func() {
-		defer close(dst)
-		defer cancel()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case msg, ok := <-s:
-				if !ok {
-					return
-				}
-				select {
-				case <-ctx.Done():
-					return
-				case dst <- msg:
-				}
-			}
-		}
-	}()
-
-	return dst
+	return p.event.Subscribe(p.ctx)
 }
 
 func (p *Page) initEvents() {
@@ -1178,7 +1154,11 @@ func (p *Page) initEvents() {
 		ctx = p.ctx
 	}
 	p.event = observable.New[*Message](ctx)
-	event := p.browser.Context(ctx).Event()
+	event := p.browser.event.SubscribeFilter(ctx, func(msg *Message) bool {
+		return msg.SessionID == p.SessionID ||
+			msg.Method == (proto.TargetDetachedFromTarget{}).ProtoEvent() ||
+			msg.Method == (proto.TargetTargetDestroyed{}).ProtoEvent()
+	})
 
 	go func() {
 		defer p.terminateSession()

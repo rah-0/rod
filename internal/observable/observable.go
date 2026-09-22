@@ -26,13 +26,10 @@ func New[T any](ctx context.Context) *Observable[T] {
 // within each subscription.
 func (o *Observable[T]) Publish(event T) {
 	o.mu.Lock()
-	writers := make([]func(T), 0, len(o.subscribers))
+	defer o.mu.Unlock()
+	// Enqueueing never waits for a reader. Holding the lock also gives concurrent
+	// publishers the same order in every subscription.
 	for _, write := range o.subscribers {
-		writers = append(writers, write)
-	}
-	o.mu.Unlock()
-
-	for _, write := range writers {
 		write(event)
 	}
 }
@@ -40,8 +37,23 @@ func (o *Observable[T]) Publish(event T) {
 // Subscribe returns an ordered, lossless event stream that closes when either
 // the subscription context or the Observable context ends.
 func (o *Observable[T]) Subscribe(ctx context.Context) <-chan T {
+	return o.SubscribeFilter(ctx, nil)
+}
+
+// SubscribeFilter subscribes only to matching events. A nil match accepts every
+// event. The predicate runs during Publish and must not block or call Observable
+// methods. Rejected events are never queued or delivered to the subscription.
+func (o *Observable[T]) SubscribeFilter(ctx context.Context, match func(T) bool) <-chan T {
 	ctx, cancel := context.WithCancel(ctx)
 	write, events := newPipe[T](ctx)
+	if match != nil {
+		enqueue := write
+		write = func(event T) {
+			if match(event) {
+				enqueue(event)
+			}
+		}
+	}
 
 	o.mu.Lock()
 	o.subscribers[events] = write
@@ -74,6 +86,7 @@ func newPipe[T any](ctx context.Context) (func(T), <-chan T) {
 	var (
 		mu    sync.Mutex
 		queue []T
+		head  int
 	)
 
 	write := func(event T) {
@@ -81,6 +94,14 @@ func newPipe[T any](ctx context.Context) (func(T), <-chan T) {
 			return
 		}
 		mu.Lock()
+		// Compact only after consuming at least half the storage, so a steady
+		// backlog does not require copying the whole queue for each event.
+		if len(queue) == cap(queue) && head > 0 && head >= len(queue)/2 {
+			remaining := copy(queue, queue[head:])
+			clear(queue[remaining:])
+			queue = queue[:remaining]
+			head = 0
+		}
 		queue = append(queue, event)
 		mu.Unlock()
 		select {
@@ -104,10 +125,20 @@ func newPipe[T any](ctx context.Context) (func(T), <-chan T) {
 					mu.Unlock()
 					break
 				}
-				event := queue[0]
+				event := queue[head]
 				var zero T
-				queue[0] = zero
-				queue = queue[1:]
+				queue[head] = zero
+				head++
+				if head == len(queue) {
+					// Reuse ordinary bursts without retaining arbitrarily large
+					// historical backlogs for the subscription's entire lifetime.
+					if cap(queue) > 1024 {
+						queue = nil
+					} else {
+						queue = queue[:0]
+					}
+					head = 0
+				}
 				mu.Unlock()
 
 				select {

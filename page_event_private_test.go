@@ -10,7 +10,7 @@ import (
 )
 
 func TestPageSessionEndClosesUnreadEvent(t *testing.T) {
-	for _, end := range []string{"target-destroyed", "browser-disconnected"} {
+	for _, end := range []string{"target-destroyed", "session-detached", "browser-disconnected"} {
 		t.Run(end, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
@@ -24,10 +24,13 @@ func TestPageSessionEndClosesUnreadEvent(t *testing.T) {
 				}
 				stream := page.Event()
 				client.events <- &cdp.Event{SessionID: string(page.SessionID), Method: "Page.loadEventFired", Params: json.RawMessage(`{}`)}
-				synctest.Wait() // Page.Event is forwarding to an unread destination.
-				if end == "target-destroyed" {
-					client.events <- &cdp.Event{Method: "Target.targetDestroyed", Params: json.RawMessage(`{"targetId":"target"}`)}
-				} else {
+				synctest.Wait() // The subscription is waiting for its unread consumer.
+				switch end {
+				case "target-destroyed":
+					client.events <- &cdp.Event{SessionID: "parent-session", Method: "Target.targetDestroyed", Params: json.RawMessage(`{"targetId":"target"}`)}
+				case "session-detached":
+					client.events <- &cdp.Event{SessionID: "parent-session", Method: "Target.detachedFromTarget", Params: json.RawMessage(`{"sessionId":"target-session"}`)}
+				default:
 					close(client.events)
 				}
 				synctest.Wait()

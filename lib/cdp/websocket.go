@@ -331,7 +331,11 @@ func (ws *WebSocket) read() ([]byte, error) {
 		case 10:
 			continue
 		}
-		message = append(message, payload...)
+		if message == nil {
+			message = payload
+		} else {
+			message = append(message, payload...)
+		}
 		if fin {
 			if !utf8.Valid(message) {
 				return nil, fmt.Errorf("%w: invalid UTF-8 text", ErrWebSocketProtocol)

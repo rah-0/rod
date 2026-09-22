@@ -35,6 +35,40 @@ type Event struct {
 	Params    json.RawMessage `json:"params,omitempty"`
 }
 
+// incomingMessage decodes the shared envelope in one pass. Only the fields for
+// the selected message kind are delivered to callers.
+type incomingMessage struct {
+	Response
+	Event
+}
+
+type messageID struct {
+	ID int `json:"id"`
+}
+
+func (msg *incomingMessage) decode(data []byte) error {
+	if err := json.Unmarshal(data, msg); err == nil {
+		return nil
+	}
+
+	// Keep the protocol's existing treatment of fields belonging to the other
+	// message kind: an event ignores response fields and vice versa. Retrying
+	// separately also preserves the original decoding error and its context.
+	var id messageID
+	if err := json.Unmarshal(data, &id); err != nil {
+		return fmt.Errorf("decode CDP message: %w", err)
+	}
+	*msg = incomingMessage{}
+	if id.ID == 0 {
+		if err := json.Unmarshal(data, &msg.Event); err != nil {
+			return fmt.Errorf("decode CDP event: %w", err)
+		}
+	} else if err := json.Unmarshal(data, &msg.Response); err != nil {
+		return fmt.Errorf("decode CDP response: %w", err)
+	}
+	return nil
+}
+
 // WebSocketable enables you to choose the websocket lib you want to use.
 // Such as you can easily wrap gorilla/websocket and use it as the transport layer.
 type WebSocketable interface {
@@ -208,36 +242,25 @@ func (cdp *Client) consumeMessages() {
 			return
 		}
 
-		var id struct {
-			ID int `json:"id"`
-		}
-		if err := json.Unmarshal(data, &id); err != nil {
-			readErr = fmt.Errorf("decode CDP message: %w", err)
+		var msg incomingMessage
+		if err := msg.decode(data); err != nil {
+			readErr = err
 			return
 		}
 
-		if id.ID == 0 {
-			var evt Event
-			if err := json.Unmarshal(data, &evt); err != nil {
-				readErr = fmt.Errorf("decode CDP event: %w", err)
-				return
-			}
-			cdp.logger.Println(&evt)
+		if msg.ID == 0 {
+			evt := &msg.Event
+			cdp.logger.Println(evt)
 			select {
-			case cdp.event <- &evt:
+			case cdp.event <- evt:
 			case <-cdp.done:
 				return
 			}
 			continue
 		}
 
-		var res Response
-		if err := json.Unmarshal(data, &res); err != nil {
-			readErr = fmt.Errorf("decode CDP response: %w", err)
-			return
-		}
-
-		cdp.logger.Println(&res)
+		res := &msg.Response
+		cdp.logger.Println(res)
 
 		cdp.pendingMu.Lock()
 		done := cdp.pending[res.ID]

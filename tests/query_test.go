@@ -395,8 +395,18 @@ func TestPageElementsByJS(t *testing.T) {
 	_, err = p.ElementsByJS(rod.Eval(`() => [document.body]`))
 	g.Err(err)
 
-	g.mc.stubErr(4, proto.RuntimeCallFunctionOn{})
-	g.Err(p.Elements("button"))
+	injected := errors.New("element context lookup failed")
+	g.mc.setCall(func(ctx context.Context, session, method string, params any) ([]byte, error) {
+		if request, ok := params.(proto.RuntimeCallFunctionOn); ok && request.FunctionDeclaration == `() => window` {
+			return nil, injected
+		}
+		return g.mc.principal.Call(ctx, session, method, params)
+	})
+	defer g.mc.resetCall()
+	_, err = p.Elements("button")
+	if !errors.Is(err, injected) {
+		t.Fatalf("element query error = %v, want context lookup error", err)
+	}
 }
 
 func TestPageElementTimeout(t *testing.T) {
