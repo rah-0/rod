@@ -47,7 +47,7 @@ func MustNewManaged(ctx context.Context, serviceURL, authToken string) *Launcher
 // Plain HTTP and WebSocket URLs are accepted only for loopback hosts; use HTTPS or WSS remotely.
 // ctx covers the initial HTTP request and response decoding, and remains the
 // launcher context for Client. Supply a deadline when initialization must be bounded.
-func NewManaged(ctx context.Context, serviceURL, authToken string) (*Launcher, error) {
+func NewManaged(ctx context.Context, serviceURL, authToken string) (_ *Launcher, err error) {
 	if serviceURL == "" {
 		serviceURL = "ws://127.0.0.1:7317"
 	}
@@ -61,6 +61,11 @@ func NewManaged(ctx context.Context, serviceURL, authToken string) (*Launcher, e
 	}
 
 	l := New().Context(ctx)
+	defer func() {
+		if err != nil {
+			l.ctxCancel()
+		}
+	}()
 	l.managed = true
 	l.managerToken = authToken
 	l.serviceURL = toWS(*u).String()

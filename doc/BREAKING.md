@@ -10,6 +10,21 @@ Each heading names that version and the previous version it changes. Describe
 the implementation for the named version. Keep historical entries intact; add
 later changes under their own version.
 
+## v0.124.0 — compared with v0.123.0
+
+### Resource cleanup
+
+`launcher.Launcher.Context` cancels its previous internal context when replacing
+it. Operations and managed clients still using that context are canceled.
+Configure the context before launching or creating a managed client.
+
+Element lookup, `Page.HTML`, and interactability helpers release their internally
+owned remote objects. Cleanup failures can return errors or panic in `Must`
+helpers. Cleanup uses a separate bounded context after operation cancellation;
+objects already reclaimed by navigation count as released. Check returned errors
+and use `errors.Is` or `errors.As` to inspect causes when operation and cleanup
+errors are joined.
+
 ## v0.123.0 — compared with v0.122.0
 
 ### Retry timing

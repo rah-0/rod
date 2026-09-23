@@ -186,13 +186,11 @@ func (el *Element) Interactable() (pt *proto.Point, err error) {
 	}
 
 	isParent, err := el.ContainsElement(elAtPoint)
-	if err != nil {
+	if err == nil && !isParent {
+		err = &CoveredError{elAtPoint}
 		return
 	}
-
-	if !isParent {
-		err = &CoveredError{elAtPoint}
-	}
+	err = errors.Join(err, el.page.Context(el.ctx).releaseObject(elAtPoint.Object))
 	return
 }
 
@@ -658,8 +656,9 @@ func (el *Element) WaitInteractable() (pt *proto.Point, err error) {
 		}
 
 		pt, err = el.Interactable()
-		if errors.Is(err, &CoveredError{}) {
-			return false, nil
+		if covered, ok := errors.AsType[*CoveredError](err); ok {
+			err := el.page.Context(el.ctx).releaseObject(covered.Object)
+			return err != nil, err
 		}
 		return true, err
 	})

@@ -28,17 +28,6 @@ type jsHelperCache struct {
 	contexts map[proto.RuntimeRemoteObjectID]map[string]proto.RuntimeRemoteObjectID
 }
 
-func (cache *jsHelperCache) addContext(id proto.RuntimeRemoteObjectID) {
-	cache.Lock()
-	defer cache.Unlock()
-	if cache.contexts == nil {
-		cache.contexts = map[proto.RuntimeRemoteObjectID]map[string]proto.RuntimeRemoteObjectID{}
-	}
-	if cache.contexts[id] == nil {
-		cache.contexts[id] = map[string]proto.RuntimeRemoteObjectID{}
-	}
-}
-
 // EvalOptions for Page.Evaluate.
 type EvalOptions struct {
 	// If enabled the eval result will be a plain JSON value.
@@ -445,11 +434,11 @@ func (p *Page) getJSCtxID() (proto.RuntimeRemoteObjectID, error) {
 	}
 
 	id, err := p.jsCtxIDByObjectID(obj.Object.ObjectID)
+	err = errors.Join(err, p.releaseObject(obj.Object))
 	if err != nil {
 		return "", err
 	}
 	*p.jsCtxID = id
-	p.helpers.addContext(id)
 	return id, nil
 }
 
@@ -471,7 +460,7 @@ func (p *Page) unsetJSCtxID() {
 	*p.jsCtxID = ""
 }
 
-func (p *Page) jsCtxIDByObjectID(id proto.RuntimeRemoteObjectID) (proto.RuntimeRemoteObjectID, error) {
+func (p *Page) jsCtxIDByObjectID(id proto.RuntimeRemoteObjectID) (_ proto.RuntimeRemoteObjectID, err error) {
 	res, err := proto.RuntimeCallFunctionOn{
 		ObjectID:            id,
 		FunctionDeclaration: `() => window`,
@@ -479,6 +468,64 @@ func (p *Page) jsCtxIDByObjectID(id proto.RuntimeRemoteObjectID) (proto.RuntimeR
 	if err != nil {
 		return "", err
 	}
-
-	return res.Result.ObjectID, nil
+	// CDP assigns a new handle every time window is returned, even in the same
+	// execution context. Compare the actual objects before retaining a context.
+	keep := false
+	defer func() {
+		if !keep {
+			err = errors.Join(err, p.releaseObject(res.Result))
+		}
+	}()
+	checked := map[proto.RuntimeRemoteObjectID]bool{}
+	for {
+		p.helpers.Lock()
+		var candidates []proto.RuntimeRemoteObjectID
+		for cached := range p.helpers.contexts {
+			if !checked[cached] {
+				candidates = append(candidates, cached)
+			}
+		}
+		if len(candidates) == 0 {
+			if p.helpers.contexts == nil {
+				p.helpers.contexts = map[proto.RuntimeRemoteObjectID]map[string]proto.RuntimeRemoteObjectID{}
+			}
+			id = res.Result.ObjectID
+			p.helpers.contexts[id] = map[string]proto.RuntimeRemoteObjectID{}
+			p.helpers.Unlock()
+			keep = true
+			return id, nil
+		}
+		p.helpers.Unlock()
+		for _, cached := range candidates {
+			checked[cached] = true
+			match, err := (proto.RuntimeCallFunctionOn{
+				ObjectID: cached, FunctionDeclaration: `function(other) { return this === other }`,
+				Arguments:     []*proto.RuntimeCallArgument{{ObjectID: res.Result.ObjectID}},
+				ReturnByValue: new(true),
+			}).Call(p)
+			if err != nil {
+				if errors.Is(err, cdp.ErrObjNotFound) || errors.Is(err, cdp.ErrCtxNotFound) {
+					p.helpers.Lock()
+					delete(p.helpers.contexts, cached)
+					p.helpers.Unlock()
+					continue
+				}
+				// CDP rejects arguments from another execution context before the
+				// function runs. Those windows need separate helper caches.
+				if protocolErr, ok := errors.AsType[*cdp.Error](err); ok && protocolErr.Code == -32000 &&
+					protocolErr.Message == "Argument should belong to the same JavaScript world as target object" {
+					continue
+				}
+				return "", err
+			}
+			if match.Result.Value.Bool() {
+				p.helpers.Lock()
+				_, valid := p.helpers.contexts[cached]
+				p.helpers.Unlock()
+				if valid {
+					return cached, nil
+				}
+			}
+		}
+	}
 }

@@ -10,9 +10,80 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+type launcherTrackedContext struct {
+	context.Context
+	active atomic.Int64
+}
+
+// Hide the embedded cancellation implementation so context uses AfterFunc to
+// register children, allowing the tests to account for their release.
+func (ctx *launcherTrackedContext) Value(any) any { return nil }
+
+func (ctx *launcherTrackedContext) AfterFunc(callback func()) func() bool {
+	ctx.active.Add(1)
+	var once sync.Once
+	release := func() { once.Do(func() { ctx.active.Add(-1) }) }
+	stop := context.AfterFunc(ctx.Context, func() {
+		release()
+		callback()
+	})
+	return func() bool {
+		stopped := stop()
+		if stopped {
+			release()
+		}
+		return stopped
+	}
+}
+
+func TestLauncherContextReplacementReleasesParent(t *testing.T) {
+	ctx := &launcherTrackedContext{Context: t.Context()}
+	l := New()
+	t.Cleanup(func() { l.ctxCancel() })
+	for range 100 {
+		l.Context(ctx)
+	}
+	if got := ctx.active.Load(); got != 1 {
+		t.Fatalf("parent retains %d cancellation registrations, want only the current context", got)
+	}
+	l.ctxCancel()
+	if got := ctx.active.Load(); got != 0 {
+		t.Fatalf("parent retains %d cancellation registrations after cancellation", got)
+	}
+}
+
+func TestFailedManagedInitializationReleasesParent(t *testing.T) {
+	for _, response := range []string{"unauthorized", "server error", "invalid JSON"} {
+		t.Run(response, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				switch response {
+				case "unauthorized":
+					w.WriteHeader(http.StatusUnauthorized)
+				case "server error":
+					w.WriteHeader(http.StatusInternalServerError)
+				case "invalid JSON":
+					_, _ = io.WriteString(w, `{`)
+				}
+			}))
+			defer server.Close()
+			ctx := &launcherTrackedContext{Context: t.Context()}
+			for range 100 {
+				if _, err := NewManaged(ctx, server.URL, "test-token"); err == nil {
+					t.Fatal("initialization unexpectedly succeeded")
+				}
+			}
+			if got := ctx.active.Load(); got != 0 {
+				t.Fatalf("failed initialization retained %d parent cancellation registrations", got)
+			}
+		})
+	}
+}
 
 func TestManagedInitializationCancellation(t *testing.T) {
 	for _, phase := range []string{"headers", "body", "deadline"} {

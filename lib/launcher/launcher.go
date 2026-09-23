@@ -171,9 +171,11 @@ func NewAppMode(u string) *Launcher {
 	return l
 }
 
-// Context sets the context.
+// Context replaces the launcher context and cancels the previous one.
+// Configure it before launching or creating a managed client.
 func (l *Launcher) Context(ctx context.Context) *Launcher {
 	ctx, cancel := context.WithCancel(ctx)
+	l.ctxCancel()
 	l.ctx = ctx
 	l.parser.Context(ctx)
 	l.ctxCancel = cancel

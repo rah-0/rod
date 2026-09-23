@@ -828,6 +828,10 @@ func (el *Element) MustTap() *Element {
 // MustInteractable is similar to [Element.Interactable].
 func (el *Element) MustInteractable() bool {
 	_, err := el.Interactable()
+	if covered, ok := errors.AsType[*CoveredError](err); ok {
+		el.e(el.page.Context(el.ctx).releaseObject(covered.Object))
+		return false
+	}
 	if errors.Is(err, &NotInteractableError{}) {
 		return false
 	}

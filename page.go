@@ -106,11 +106,14 @@ func (p *Page) Info() (*proto.TargetTargetInfo, error) {
 }
 
 // HTML of the page.
-func (p *Page) HTML() (string, error) {
+func (p *Page) HTML() (_ string, err error) {
 	el, err := p.Element("html")
 	if err != nil {
 		return "", err
 	}
+	defer func() {
+		err = errors.Join(err, p.releaseObject(el.Object))
+	}()
 	return el.HTML()
 }
 
@@ -1059,18 +1062,17 @@ func (p *Page) ObjectToJSON(obj *proto.RuntimeRemoteObject) (jsonvalue.Value, er
 // ElementFromObject creates an Element from the remote object id.
 func (p *Page) ElementFromObject(obj *proto.RuntimeRemoteObject) (*Element, error) {
 	// If the element is in an iframe, we need the jsCtxID to inject helper.js to the correct context.
-	id, err := p.jsCtxIDByObjectID(obj.ObjectID)
-	if err != nil {
-		return nil, err
-	}
-
 	pid, err := p.getJSCtxID()
 	if err != nil {
 		return nil, err
 	}
 
+	id, err := p.jsCtxIDByObjectID(obj.ObjectID)
+	if err != nil {
+		return nil, err
+	}
+
 	if id != pid {
-		p.helpers.addContext(id)
 		clone := *p
 		clone.jsCtxID = &id
 		p = &clone
@@ -1086,7 +1088,7 @@ func (p *Page) ElementFromObject(obj *proto.RuntimeRemoteObject) (*Element, erro
 }
 
 // ElementFromNode creates an Element from the node, [proto.DOMNodeID] or [proto.DOMBackendNodeID] must be specified.
-func (p *Page) ElementFromNode(node *proto.DOMNode) (*Element, error) {
+func (p *Page) ElementFromNode(node *proto.DOMNode) (element *Element, err error) {
 	res, err := proto.DOMResolveNode{
 		NodeID:        node.NodeID,
 		BackendNodeID: node.BackendNodeID,
@@ -1094,6 +1096,15 @@ func (p *Page) ElementFromNode(node *proto.DOMNode) (*Element, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if element == nil || element.Object != res.Object {
+			err = errors.Join(err, p.releaseObject(res.Object))
+			if err != nil && element != nil {
+				err = errors.Join(err, p.releaseObject(element.Object))
+				element = nil
+			}
+		}
+	}()
 
 	el, err := p.ElementFromObject(res.Object)
 	if err != nil {
@@ -1133,6 +1144,21 @@ func (p *Page) ElementFromPoint(x, y int) (*Element, error) {
 // It's useful if the page never closes or reloads.
 func (p *Page) Release(obj *proto.RuntimeRemoteObject) error {
 	err := proto.RuntimeReleaseObject{ObjectID: obj.ObjectID}.Call(p)
+	return err
+}
+
+// releaseObject cleans up an internally owned handle even after the operation
+// expires. Navigation may already have reclaimed the object or its context.
+func (p *Page) releaseObject(obj *proto.RuntimeRemoteObject) error {
+	if obj == nil || obj.ObjectID == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(p.ctx), 5*time.Second)
+	defer cancel()
+	err := p.Context(ctx).Release(obj)
+	if errors.Is(err, cdp.ErrObjNotFound) || errors.Is(err, cdp.ErrCtxNotFound) || errors.Is(err, cdp.ErrCtxDestroyed) {
+		return nil
+	}
 	return err
 }
 

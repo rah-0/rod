@@ -439,6 +439,9 @@ func (ws *WebSocket) handshake(ctx context.Context, u *url.URL, header http.Head
 		!protocolOK || len(res.Header.Values("Sec-WebSocket-Protocol")) > 1 ||
 		!headerToken(res.Header, "Upgrade", "websocket") || !headerToken(res.Header, "Connection", "upgrade") || res.Header.Get("Sec-WebSocket-Extensions") != "" {
 		body, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+		// Body.Close drains unread bytes. Stop the failed connection first so a
+		// stalled response cannot retain the handshake beyond the body limit.
+		_ = ws.conn.Close()
 		return &BadHandshakeError{Status: res.Status, Body: string(body)}
 	}
 	return nil
