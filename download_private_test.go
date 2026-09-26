@@ -2,6 +2,7 @@ package rod
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"testing"
@@ -16,13 +17,13 @@ func newDownloadTestBrowser(t *testing.T) (*Browser, *sessionTestClient) {
 	client := &sessionTestClient{call: func(_ context.Context, _, method string, _ any) ([]byte, error) {
 		switch method {
 		case "Target.getTargets":
-			return []byte(`{"targetInfos":[{"targetId":"normal","type":"page","browserContextId":"default"},{"targetId":"private","type":"page","browserContextId":"incognito"}]}`), nil
+			return []byte(`{"targetInfos":[{"targetId":"normal","type":"page","browserContextId":"default","title":"","url":"","attached":false},{"targetId":"private","type":"page","browserContextId":"incognito","title":"","url":"","attached":false}]}`), nil
 		case "Target.getBrowserContexts":
 			return []byte(`{"browserContextIds":["incognito"]}`), nil
 		case "Target.attachToTarget":
 			return []byte(`{"sessionId":"temporary"}`), nil
 		case "Page.getFrameTree":
-			return []byte(`{"frameTree":{"frame":{"id":"normal"},"childFrames":[{"frame":{"id":"child"}}]}}`), nil
+			return []byte(`{"frameTree":{"frame":{"id":"normal","loaderId":"","url":"","securityOrigin":"","mimeType":""},"childFrames":[{"frame":{"id":"child","loaderId":"","url":"","securityOrigin":"","mimeType":""}}]}}`), nil
 		default:
 			return []byte(`{}`), nil
 		}
@@ -43,16 +44,16 @@ func TestDownloadContextAndGUID(t *testing.T) {
 				if !browser.LoadState("", &behavior) || (behavior.EventsEnabled == nil || !*behavior.EventsEnabled) {
 					t.Fatal("Browser download events were not enabled")
 				}
-				browser.event.Publish(eventTestMessage("Browser.downloadWillBegin", "", `{"frameId":"private","guid":"wrong-context"}`))
-				browser.event.Publish(eventTestMessage("Browser.downloadProgress", "", `{"guid":"wrong-context","state":"completed"}`))
+				browser.event.Publish(eventTestMessage("Browser.downloadWillBegin", "", `{"frameId":"private","guid":"wrong-context","url":"","suggestedFilename":""}`))
+				browser.event.Publish(eventTestMessage("Browser.downloadProgress", "", `{"guid":"wrong-context","state":"completed","totalBytes":0,"receivedBytes":0}`))
 				if frame == "new-tab" {
-					browser.event.Publish(eventTestMessage("Target.targetCreated", "", `{"targetInfo":{"targetId":"new-tab","browserContextId":"default"}}`))
+					browser.event.Publish(eventTestMessage("Target.targetCreated", "", `{"targetInfo":{"targetId":"new-tab","browserContextId":"default","type":"","title":"","url":"","attached":false}}`))
 					browser.event.Publish(eventTestMessage("Target.targetDestroyed", "", `{"targetId":"new-tab"}`))
 				}
-				browser.event.Publish(eventTestMessage("Browser.downloadWillBegin", "", `{"frameId":"`+frame+`","guid":"first","suggestedFilename":"one.txt"}`))
-				browser.event.Publish(eventTestMessage("Browser.downloadWillBegin", "", `{"frameId":"normal","guid":"second"}`))
-				browser.event.Publish(eventTestMessage("Browser.downloadProgress", "", `{"guid":"second","state":"canceled"}`))
-				browser.event.Publish(eventTestMessage("Browser.downloadProgress", "", `{"guid":"first","state":"completed"}`))
+				browser.event.Publish(eventTestMessage("Browser.downloadWillBegin", "", `{"frameId":"`+frame+`","guid":"first","url":"","suggestedFilename":"one.txt"}`))
+				browser.event.Publish(eventTestMessage("Browser.downloadWillBegin", "", `{"frameId":"normal","guid":"second","url":"","suggestedFilename":""}`))
+				browser.event.Publish(eventTestMessage("Browser.downloadProgress", "", `{"guid":"second","state":"canceled","totalBytes":0,"receivedBytes":0}`))
+				browser.event.Publish(eventTestMessage("Browser.downloadProgress", "", `{"guid":"first","state":"completed","totalBytes":0,"receivedBytes":0}`))
 				info, err := wait()
 				if err != nil || info == nil || info.GUID != "first" || info.SuggestedFilename != "one.txt" {
 					t.Fatalf("download: %+v, %v", info, err)
@@ -131,50 +132,6 @@ func TestDownloadSetupFailureRollsBack(t *testing.T) {
 	})
 }
 
-func TestDownloadBrowserCancellation(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		browser, _ := newDownloadTestBrowser(t)
-		wait, err := browser.WaitDownload("/downloads")
-		if err != nil {
-			t.Fatal(err)
-		}
-		browser.event.Publish(eventTestMessage("Browser.downloadWillBegin", "", `{"frameId":"normal","guid":"canceled"}`))
-		browser.event.Publish(eventTestMessage("Browser.downloadProgress", "", `{"guid":"canceled","state":"canceled"}`))
-		info, err := wait()
-		if info == nil || info.GUID != "canceled" || !errors.Is(err, ErrDownloadCanceled) {
-			t.Fatalf("browser canceled: %+v, %v", info, err)
-		}
-	})
-}
-
-func TestDownloadDistinctContexts(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		browser, _ := newDownloadTestBrowser(t)
-		private := browser.Context(t.Context())
-		private.BrowserContextID = "incognito"
-		waitRoot, err := browser.WaitDownload("/normal")
-		if err != nil {
-			t.Fatal(err)
-		}
-		waitPrivate, err := private.WaitDownload("/private")
-		if err != nil {
-			t.Fatal(err)
-		}
-		browser.event.Publish(eventTestMessage("Browser.downloadWillBegin", "", `{"frameId":"normal","guid":"normal"}`))
-		browser.event.Publish(eventTestMessage("Browser.downloadWillBegin", "", `{"frameId":"private","guid":"private"}`))
-		browser.event.Publish(eventTestMessage("Browser.downloadProgress", "", `{"guid":"private","state":"completed"}`))
-		browser.event.Publish(eventTestMessage("Browser.downloadProgress", "", `{"guid":"normal","state":"completed"}`))
-		one, err := waitRoot()
-		if err != nil || one.GUID != "normal" {
-			t.Fatalf("default: %+v, %v", one, err)
-		}
-		two, err := waitPrivate()
-		if err != nil || two.GUID != "private" {
-			t.Fatalf("incognito: %+v, %v", two, err)
-		}
-	})
-}
-
 func TestDownloadSharedEventsRestoration(t *testing.T) {
 	for _, firstPrivate := range []bool{false, true} {
 		for _, initiallyEnabled := range []bool{false, true} {
@@ -199,16 +156,16 @@ func TestDownloadSharedEventsRestoration(t *testing.T) {
 					first, second = second, first
 					firstFrame, secondFrame = secondFrame, firstFrame
 				}
-				browser.event.Publish(eventTestMessage("Browser.downloadWillBegin", "", `{"frameId":"`+firstFrame+`","guid":"first"}`))
-				browser.event.Publish(eventTestMessage("Browser.downloadProgress", "", `{"guid":"first","state":"completed"}`))
+				browser.event.Publish(eventTestMessage("Browser.downloadWillBegin", "", `{"frameId":"`+firstFrame+`","guid":"first","url":"","suggestedFilename":""}`))
+				browser.event.Publish(eventTestMessage("Browser.downloadProgress", "", `{"guid":"first","state":"completed","totalBytes":0,"receivedBytes":0}`))
 				if _, err := first(); err != nil {
 					t.Fatal(err)
 				}
 				if enabled, _ := browser.states.Load(downloadEventsEnabledKey{}); enabled != true {
 					t.Fatal("first completed waiter disabled global download events")
 				}
-				browser.event.Publish(eventTestMessage("Browser.downloadWillBegin", "", `{"frameId":"`+secondFrame+`","guid":"second"}`))
-				browser.event.Publish(eventTestMessage("Browser.downloadProgress", "", `{"guid":"second","state":"completed"}`))
+				browser.event.Publish(eventTestMessage("Browser.downloadWillBegin", "", `{"frameId":"`+secondFrame+`","guid":"second","url":"","suggestedFilename":""}`))
+				browser.event.Publish(eventTestMessage("Browser.downloadProgress", "", `{"guid":"second","state":"completed","totalBytes":0,"receivedBytes":0}`))
 				if _, err := second(); err != nil {
 					t.Fatal(err)
 				}
@@ -243,8 +200,8 @@ func TestDownloadFailedSetupPreservesSharedEvents(t *testing.T) {
 		if enabled, _ := browser.states.Load(downloadEventsEnabledKey{}); enabled != true {
 			t.Fatal("failed setup disabled another waiter's events")
 		}
-		browser.event.Publish(eventTestMessage("Browser.downloadWillBegin", "", `{"frameId":"normal","guid":"normal"}`))
-		browser.event.Publish(eventTestMessage("Browser.downloadProgress", "", `{"guid":"normal","state":"completed"}`))
+		browser.event.Publish(eventTestMessage("Browser.downloadWillBegin", "", `{"frameId":"normal","guid":"normal","url":"","suggestedFilename":""}`))
+		browser.event.Publish(eventTestMessage("Browser.downloadProgress", "", `{"guid":"normal","state":"completed","totalBytes":0,"receivedBytes":0}`))
 		if _, err := wait(); err != nil {
 			t.Fatal(err)
 		}
@@ -254,27 +211,40 @@ func TestDownloadFailedSetupPreservesSharedEvents(t *testing.T) {
 	})
 }
 
-func TestDownloadDisposedContextIsNotDefault(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		browser, client := newDownloadTestBrowser(t)
-		wait, err := browser.WaitDownload("/normal")
-		if err != nil {
-			t.Fatal(err)
-		}
-		call := client.call
-		client.call = func(ctx context.Context, session, method string, params any) ([]byte, error) {
-			if method == "Target.getBrowserContexts" {
-				return []byte(`{"browserContextIds":[]}`), nil
-			}
-			return call(ctx, session, method, params)
-		}
-		browser.event.Publish(eventTestMessage("Browser.downloadWillBegin", "", `{"frameId":"private","guid":"closed-context"}`))
-		browser.event.Publish(eventTestMessage("Browser.downloadProgress", "", `{"guid":"closed-context","state":"completed"}`))
-		browser.event.Publish(eventTestMessage("Browser.downloadWillBegin", "", `{"frameId":"normal","guid":"normal"}`))
-		browser.event.Publish(eventTestMessage("Browser.downloadProgress", "", `{"guid":"normal","state":"completed"}`))
-		info, err := wait()
-		if err != nil || info.GUID != "normal" {
-			t.Fatalf("download after context disposal: %+v, %v", info, err)
-		}
-	})
+func TestDownloadUndecodableEvent(t *testing.T) {
+	for _, event := range []string{"Target.targetCreated", "Browser.downloadWillBegin", "Browser.downloadProgress"} {
+		t.Run(event, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				browser, _ := newDownloadTestBrowser(t)
+				wait, err := browser.WaitDownload("/downloads")
+				if err != nil {
+					t.Fatal(err)
+				}
+				browser.event.Publish(eventTestMessage("Browser.downloadWillBegin", "", `{"frameId":"normal","guid":"guid","url":"","suggestedFilename":""}`))
+				browser.event.Publish(eventTestMessage(event, "", `{"targetInfo":1,"guid":1}`))
+				var typeErr *json.UnmarshalTypeError
+				if _, err := wait(); !errors.As(err, &typeErr) {
+					t.Fatalf("wait error = %v", err)
+				}
+				synctest.Wait()
+				if browser.event.Len() != 0 {
+					t.Fatal("failed download wait retained its subscription")
+				}
+			})
+		})
+	}
+}
+
+func TestDownloadSubscriptionSkipsUnusedEvents(t *testing.T) {
+	browser, _ := newDownloadTestBrowser(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	// The wait is never invoked, so every accepted event stays queued.
+	if _, err := browser.Context(ctx).WaitDownload("/downloads"); err != nil {
+		t.Fatal(err)
+	}
+	requireReleased(t,
+		publishUnused(browser, "Target.targetDestroyed", ""),
+		publishUnused(browser, "Network.dataReceived", "page"),
+	)
 }

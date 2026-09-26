@@ -39,7 +39,7 @@
 
       async function update() {
         try {
-          const response = await fetch('/api/pages')
+          const response = await fetch('api/pages')
           if (!response.ok) throw new Error(`HTTP ${response.status}`)
           const list = await response.json()
           const links = document.createDocumentFragment()
@@ -55,8 +55,8 @@
             }
 
             const url = new URL(
-              `/page/${encodeURIComponent(target.targetId)}`,
-              window.location.origin,
+              `page/${encodeURIComponent(target.targetId)}`,
+              window.location.href,
             )
             if (url.origin !== window.location.origin) return
 

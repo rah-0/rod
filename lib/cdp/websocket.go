@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,13 +24,53 @@ import (
 
 var _ WebSocketable = &WebSocket{}
 
+const (
+	// DefaultHandshakeTimeout bounds WebSocket.Connect when
+	// WebSocket.HandshakeTimeout is zero.
+	DefaultHandshakeTimeout = 30 * time.Second
+
+	// DefaultMaxMessageSize limits one incoming message when
+	// WebSocket.MaxMessageSize is not positive. It accommodates large
+	// screenshots, PDFs, and evaluation results.
+	DefaultMaxMessageSize = 256 << 20
+
+	// maxHandshakeResponse bounds the bytes Connect reads before the upgrade
+	// completes, using the net/http default for request headers. Chrome's
+	// response has only a few hundred bytes.
+	maxHandshakeResponse = http.DefaultMaxHeaderBytes
+
+	// maxPayloadPrealloc bounds the bytes Read allocates for a frame before its
+	// payload arrives, whatever MaxMessageSize allows. Messages up to the
+	// default limit are allocated once at their exact size.
+	maxPayloadPrealloc = DefaultMaxMessageSize
+)
+
 // WebSocket carries CDP text messages, including fragmented messages and control frames.
 // Read and Send are safe for concurrent use. Compression and binary messages are not supported.
 // Limitation: https://bugs.chromium.org/p/chromium/issues/detail?id=1069431
 // Ref: https://tools.ietf.org/html/rfc6455
 type WebSocket struct {
-	// Dialer is usually used for proxy
+	// Dialer is usually used for proxy. Its context can end when Connect
+	// returns, so the dialed connection must not depend on that context, as
+	// with net.Dialer.
 	Dialer Dialer
+
+	// HandshakeTimeout bounds dialing, TLS, and the HTTP upgrade in Connect,
+	// in addition to Connect's context. Zero selects DefaultHandshakeTimeout;
+	// a negative value leaves only the context in effect. It does not limit
+	// the connection after Connect returns.
+	HandshakeTimeout time.Duration
+
+	// MaxMessageSize limits the bytes of one message read from the peer,
+	// including all of its fragments. Zero or a negative value selects
+	// DefaultMaxMessageSize, and math.MaxInt64 accepts any size. A larger
+	// message fails Read with ErrWebSocketMessageTooLarge and closes the
+	// connection with status 1009. Set it before the first Read.
+	//
+	// Read allocates a frame's payload as soon as its header announces the
+	// length, up to DefaultMaxMessageSize bytes. Longer payloads grow as their
+	// bytes arrive, so a header alone cannot force a larger allocation.
+	MaxMessageSize int64
 
 	closeOnce sync.Once
 	closeErr  error
@@ -42,6 +83,8 @@ type WebSocket struct {
 
 // Connect to browser. The context controls connection establishment only;
 // canceling it after Connect succeeds does not close the connection.
+// HandshakeTimeout also bounds establishment, and at most 1 MiB of handshake
+// response is read.
 func (ws *WebSocket) Connect(ctx context.Context, wsURL string, header http.Header) error {
 	if ws.conn != nil {
 		panic("duplicated connection: " + wsURL)
@@ -73,6 +116,17 @@ func (ws *WebSocket) Connect(ctx context.Context, wsURL string, header http.Head
 		}
 	}
 	address := net.JoinHostPort(u.Hostname(), port)
+	parent := ctx
+	handshakeTimeout := ws.HandshakeTimeout
+	if handshakeTimeout == 0 {
+		handshakeTimeout = DefaultHandshakeTimeout
+	}
+	if handshakeTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeoutCause(ctx, handshakeTimeout,
+			fmt.Errorf("WebSocket handshake exceeded %s: %w", handshakeTimeout, context.DeadlineExceeded))
+		defer cancel()
+	}
 	conn, err := ws.Dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return err
@@ -86,7 +140,8 @@ func (ws *WebSocket) Connect(ctx context.Context, wsURL string, header http.Head
 	}
 
 	ws.conn = conn
-	ws.r = bufio.NewReader(conn)
+	limit := &handshakeReader{conn: conn, remaining: maxHandshakeResponse}
+	ws.r = bufio.NewReader(limit)
 	canceled := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() {
 		_ = conn.Close()
@@ -97,15 +152,19 @@ func (ws *WebSocket) Connect(ctx context.Context, wsURL string, header http.Head
 		// Wait for a callback that already started before inspecting or reusing conn.
 		<-canceled
 	}
-	if ctx.Err() != nil {
-		err = ctx.Err()
-	} else if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+	if deadline, ok := ctx.Deadline(); ok && err != nil && !time.Now().Before(deadline) {
 		// The connection deadline can fire before the context's timer callback.
 		if timeout, ok := errors.AsType[net.Error](err); ok && timeout.Timeout() {
-			err = context.DeadlineExceeded
+			<-ctx.Done()
 		}
 	}
+	if parent.Err() != nil {
+		err = parent.Err()
+	} else if ctx.Err() != nil {
+		err = context.Cause(ctx)
+	}
 	if err == nil {
+		limit.remaining = -1
 		err = conn.SetDeadline(time.Time{})
 	}
 	if err != nil {
@@ -149,8 +208,11 @@ func (ws *WebSocket) Send(msg []byte) error {
 }
 
 // SendContext sends one frame, honoring cancellation while waiting to write or
-// writing. An interrupted write closes the connection because a partial frame
-// cannot safely be resumed by another request.
+// writing. If cancellation interrupts a write before the connection accepts any
+// of the frame, the frame is abandoned and the connection remains usable. A
+// partially written frame cannot be resumed by another request, so that failure
+// closes the connection. TLS connections close after any failed write because
+// TLS rejects every later write.
 func (ws *WebSocket) SendContext(ctx context.Context, msg []byte) error {
 	if !utf8.Valid(msg) {
 		return fmt.Errorf("%w: invalid UTF-8 text", ErrWebSocketProtocol)
@@ -172,9 +234,18 @@ func (ws *WebSocket) writeFrame(ctx context.Context, opcode byte, msg []byte) er
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	frame, err := clientFrame(opcode, msg)
+	if err != nil {
+		return err
+	}
+	// Building a large frame takes time. Leave the stream untouched if the
+	// operation ended meanwhile.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if ctx.Done() == nil {
-		err := ws.send(opcode, msg)
-		if err != nil {
+		n, err := ws.write(frame)
+		if err != nil && ws.writeBroken(n, err) {
 			_ = ws.Close()
 		}
 		return err
@@ -189,14 +260,14 @@ func (ws *WebSocket) writeFrame(ctx context.Context, opcode byte, msg []byte) er
 		_ = ws.conn.SetWriteDeadline(time.Now())
 		close(interrupted)
 	})
-	err := ws.send(opcode, msg)
+	n, err := ws.write(frame)
 	if !stop() {
 		<-interrupted
 	}
-	if err != nil {
+	if err != nil && ws.writeBroken(n, err) {
 		_ = ws.Close()
-	} else {
-		err = ws.conn.SetWriteDeadline(time.Time{})
+	} else if reset := ws.conn.SetWriteDeadline(time.Time{}); err == nil {
+		err = reset
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -209,7 +280,28 @@ func (ws *WebSocket) writeFrame(ctx context.Context, opcode byte, msg []byte) er
 	return err
 }
 
-func (ws *WebSocket) send(opcode byte, msg []byte) error {
+func (ws *WebSocket) write(frame []byte) (int, error) {
+	n, err := ws.conn.Write(frame)
+	if err == nil && n != len(frame) {
+		err = io.ErrShortWrite
+	}
+	return n, err
+}
+
+// writeBroken reports whether a failed write of n bytes leaves the stream
+// unusable. A timeout before the connection accepts any byte abandons only the
+// frame. A partial frame cannot be completed, TLS rejects all writes after a
+// failed one, and other write errors indicate a failed connection.
+func (ws *WebSocket) writeBroken(n int, err error) bool {
+	if _, secure := ws.conn.(interface{ ConnectionState() tls.ConnectionState }); secure {
+		return true
+	}
+	timeout, ok := errors.AsType[net.Error](err)
+	return n != 0 || !ok || !timeout.Timeout()
+}
+
+// clientFrame encodes msg as one final frame with a fresh random mask.
+func clientFrame(opcode byte, msg []byte) ([]byte, error) {
 	headerSize := 6 // two fixed bytes plus the client mask
 	if len(msg) > 65535 {
 		headerSize += 8
@@ -231,19 +323,27 @@ func (ws *WebSocket) send(opcode byte, msg []byte) error {
 	}
 	mask := data[headerSize-4 : headerSize]
 	if _, err := rand.Read(mask); err != nil {
-		return err
+		return nil, err
 	}
-	for i, value := range msg {
-		data[headerSize+i] = value ^ mask[i%4]
-	}
-	n, err := ws.conn.Write(data)
-	if err == nil && n != len(data) {
-		err = io.ErrShortWrite
-	}
-	return err
+	maskBytes(data[headerSize:], msg, [4]byte(mask))
+	return data, nil
 }
 
-// Read a message from browser.
+// maskBytes stores src XOR the repeating mask in dst, eight bytes at a time.
+func maskBytes(dst, src []byte, mask [4]byte) {
+	word := uint64(binary.LittleEndian.Uint32(mask[:]))
+	word |= word << 32
+	i := 0
+	for ; i+8 <= len(src); i += 8 {
+		binary.LittleEndian.PutUint64(dst[i:], binary.LittleEndian.Uint64(src[i:])^word)
+	}
+	for ; i < len(src); i++ {
+		dst[i] = src[i] ^ mask[i%4]
+	}
+}
+
+// Read a message from browser. A message larger than MaxMessageSize returns
+// ErrWebSocketMessageTooLarge. Every error closes the connection.
 func (ws *WebSocket) Read() ([]byte, error) {
 	b, err := ws.read()
 	if err != nil {
@@ -256,11 +356,15 @@ func (ws *WebSocket) Read() ([]byte, error) {
 func (ws *WebSocket) read() ([]byte, error) {
 	ws.lock.Lock()
 	defer ws.lock.Unlock()
+	limit := uint64(DefaultMaxMessageSize)
+	if ws.MaxMessageSize > 0 {
+		limit = min(uint64(ws.MaxMessageSize), math.MaxInt)
+	}
 	var message []byte
 	fragmented := false
 	for {
-		var header [2]byte
-		if _, err := io.ReadFull(ws.r, header[:]); err != nil {
+		header, err := ws.readHeader(2)
+		if err != nil {
 			return nil, err
 		}
 		fin, opcode := header[0]&0x80 != 0, header[0]&0x0f
@@ -279,34 +383,48 @@ func (ws *WebSocket) read() ([]byte, error) {
 		}
 		switch size {
 		case 126:
-			var extended [2]byte
-			if _, err := io.ReadFull(ws.r, extended[:]); err != nil {
+			extended, err := ws.readHeader(2)
+			if err != nil {
 				return nil, err
 			}
-			size = uint64(binary.BigEndian.Uint16(extended[:]))
+			size = uint64(binary.BigEndian.Uint16(extended))
 			if size < 126 {
 				return nil, fmt.Errorf("%w: nonminimal frame length", ErrWebSocketProtocol)
 			}
 		case 127:
-			var extended [8]byte
-			if _, err := io.ReadFull(ws.r, extended[:]); err != nil {
+			extended, err := ws.readHeader(8)
+			if err != nil {
 				return nil, err
 			}
-			size = binary.BigEndian.Uint64(extended[:])
+			size = binary.BigEndian.Uint64(extended)
 			if size <= 65535 || size>>63 != 0 {
 				return nil, fmt.Errorf("%w: invalid frame length", ErrWebSocketProtocol)
 			}
 		}
-		if size > uint64(int(^uint(0)>>1))-uint64(len(message)) {
-			return nil, fmt.Errorf("%w: message exceeds addressable size", ErrWebSocketProtocol)
+		if opcode < 8 {
+			// Reject an oversized message before allocating its announced length.
+			if size > limit-uint64(len(message)) {
+				err := fmt.Errorf("%w: at least %d bytes exceed the %d-byte limit",
+					ErrWebSocketMessageTooLarge, uint64(len(message))+size, limit)
+				return nil, errors.Join(err, ws.replyControl(8, []byte{0x03, 0xf1})) // 1009
+			}
+			message, err = appendPayload(ws.r, message, int(size), maxPayloadPrealloc)
+			if err != nil {
+				return nil, err
+			}
+			if fin {
+				if !utf8.Valid(message) {
+					return nil, fmt.Errorf("%w: invalid UTF-8 text", ErrWebSocketProtocol)
+				}
+				return message, nil
+			}
+			fragmented = true
+			continue
 		}
-		// Grow only as bytes arrive, never allocate the peer's advertised length.
-		payload, err := io.ReadAll(io.LimitReader(ws.r, int64(size)))
-		if err != nil {
+		var control [125]byte
+		payload := control[:size]
+		if err := readPayload(ws.r, payload); err != nil {
 			return nil, err
-		}
-		if uint64(len(payload)) != size {
-			return nil, io.ErrUnexpectedEOF
 		}
 		switch opcode {
 		case 8:
@@ -327,23 +445,53 @@ func (ws *WebSocket) read() ([]byte, error) {
 			if err := ws.replyControl(10, payload); err != nil {
 				return nil, err
 			}
-			continue
-		case 10:
-			continue
 		}
-		if message == nil {
-			message = payload
-		} else {
-			message = append(message, payload...)
-		}
-		if fin {
-			if !utf8.Valid(message) {
-				return nil, fmt.Errorf("%w: invalid UTF-8 text", ErrWebSocketProtocol)
-			}
-			return message, nil
-		}
-		fragmented = true
 	}
+}
+
+// readHeader consumes n header bytes, returning a view of the read buffer that
+// is valid until the next read. Unlike io.ReadFull, it does not allocate.
+func (ws *WebSocket) readHeader(n int) ([]byte, error) {
+	header, err := ws.r.Peek(n)
+	if len(header) < n {
+		if len(header) > 0 && errors.Is(err, io.EOF) {
+			err = io.ErrUnexpectedEOF
+		}
+		return nil, err
+	}
+	_, _ = ws.r.Discard(n)
+	return header, nil
+}
+
+// appendPayload reads size payload bytes from r and appends them to message.
+// Each step allocates for at most prealloc bytes, or for as many bytes as the
+// message already holds if that is more, and fills them before growing again.
+// A payload up to prealloc bytes is therefore allocated at once, while a longer
+// one requires the peer to send data before the allocation grows further.
+func appendPayload(r io.Reader, message []byte, size, prealloc int) ([]byte, error) {
+	end := len(message) + size
+	for message == nil || len(message) < end {
+		start := len(message)
+		n := min(end-start, max(prealloc, start))
+		if message == nil {
+			message = make([]byte, n)
+		} else {
+			message = slices.Grow(message, n)[:start+n]
+		}
+		if err := readPayload(r, message[start:]); err != nil {
+			return nil, err
+		}
+	}
+	return message, nil
+}
+
+// readPayload fills payload, reporting a truncated frame as unexpected EOF.
+func readPayload(r io.Reader, payload []byte) error {
+	_, err := io.ReadFull(r, payload)
+	if errors.Is(err, io.EOF) {
+		return io.ErrUnexpectedEOF
+	}
+	return err
 }
 
 func (ws *WebSocket) replyControl(opcode byte, payload []byte) error {
@@ -445,6 +593,24 @@ func (ws *WebSocket) handshake(ctx context.Context, u *url.URL, header http.Head
 		return &BadHandshakeError{Status: res.Status, Body: string(body)}
 	}
 	return nil
+}
+
+// handshakeReader limits the bytes read from conn until remaining is negative.
+type handshakeReader struct {
+	conn      io.Reader
+	remaining int
+}
+
+func (r *handshakeReader) Read(p []byte) (int, error) {
+	if r.remaining < 0 {
+		return r.conn.Read(p)
+	}
+	if r.remaining == 0 {
+		return 0, fmt.Errorf("%w: handshake response exceeds %d bytes", ErrWebSocketProtocol, maxHandshakeResponse)
+	}
+	n, err := r.conn.Read(p[:min(len(p), r.remaining)])
+	r.remaining -= n
+	return n, err
 }
 
 func headerToken(header http.Header, name, token string) bool {

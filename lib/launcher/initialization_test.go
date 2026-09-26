@@ -10,10 +10,14 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/rah-0/rod/lib/launcher/flags"
 )
 
 type launcherTrackedContext struct {
@@ -59,7 +63,7 @@ func TestLauncherContextReplacementReleasesParent(t *testing.T) {
 }
 
 func TestFailedManagedInitializationReleasesParent(t *testing.T) {
-	for _, response := range []string{"unauthorized", "server error", "invalid JSON"} {
+	for _, response := range []string{"unauthorized", "server error", "invalid JSON", "oversized"} {
 		t.Run(response, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				switch response {
@@ -69,6 +73,8 @@ func TestFailedManagedInitializationReleasesParent(t *testing.T) {
 					w.WriteHeader(http.StatusInternalServerError)
 				case "invalid JSON":
 					_, _ = io.WriteString(w, `{`)
+				case "oversized":
+					_, _ = io.WriteString(w, `{"flags":{}}`+strings.Repeat(" ", maxManagerResponse))
 				}
 			}))
 			defer server.Close()
@@ -118,6 +124,40 @@ func TestManagedInitializationCancellation(t *testing.T) {
 	}
 }
 
+// A managed launcher holds settings for the manager's host, including the
+// executable, so local launches reject it before running anything.
+func TestManagedLauncherRejectsLocalLaunch(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "manager-chosen-browser")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"flags":{"rod-bin":[`+strconv.Quote(bin)+`]}}`)
+	}))
+	defer server.Close()
+	l, err := NewManaged(t.Context(), server.URL, "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := l.Get(flags.Bin); got != bin {
+		t.Fatalf("managed executable = %q, want the manager's %q", got, bin)
+	}
+	if _, err := l.Launch(); !errors.Is(err, ErrManagedLaunch) {
+		t.Fatalf("Launch = %v, want ErrManagedLaunch", err)
+	}
+	if _, err := l.LaunchNew(t.Context()); !errors.Is(err, ErrManagedLaunch) {
+		t.Fatalf("LaunchNew = %v, want ErrManagedLaunch", err)
+	}
+	func() {
+		defer func() {
+			if err, _ := recover().(error); !errors.Is(err, ErrManagedLaunch) {
+				t.Fatalf("MustLaunch panicked with %v, want ErrManagedLaunch", err)
+			}
+		}()
+		l.MustLaunch()
+	}()
+	if err := l.ctx.Err(); err != nil {
+		t.Fatalf("rejected launches canceled the context that Client uses: %v", err)
+	}
+}
+
 func TestFormatArgsPreservesProfileOwnership(t *testing.T) {
 	parent := t.TempDir()
 	cwd, err := os.Getwd()
@@ -128,11 +168,17 @@ func TestFormatArgsPreservesProfileOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	previous := DefaultUserDataDirPrefix
-	DefaultUserDataDirPrefix = relative
-	t.Cleanup(func() { DefaultUserDataDirPrefix = previous })
+	for _, name := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(name, relative)
+	}
+	if os.TempDir() != relative {
+		t.Skip("the temporary directory cannot be made relative through the environment")
+	}
 	l := New().Preferences(`{}`).Bin(filepath.Join(parent, "missing-browser"))
 	profile := l.Get("user-data-dir")
+	if filepath.Dir(profile) != relative {
+		t.Fatalf("generated profile %q is not inside %q", profile, relative)
+	}
 	first := l.FormatArgs()
 	if !reflect.DeepEqual(first, l.FormatArgs()) || l.Get("user-data-dir") != profile {
 		t.Fatal("FormatArgs mutated launch options")

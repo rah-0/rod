@@ -18,7 +18,8 @@ var ErrManagerInsecureTransport = errors.New(
 	"launcher manager requires HTTPS or WSS for non-loopback connections",
 )
 
-// ErrManagedLaunch indicates that a local owned launch was given a remote launcher.
+// ErrManagedLaunch indicates that Launch, MustLaunch, or LaunchNew was called
+// on a launcher from NewManaged, whose settings are meant for the manager's host.
 var ErrManagedLaunch = errors.New("owned launch requires a local launcher")
 
 // ErrDebuggingPortInUse indicates that the configured local port cannot be bound.

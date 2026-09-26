@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/rah-0/rod/lib/proto"
 	"github.com/rah-0/rod/lib/utils"
@@ -14,6 +15,46 @@ var ErrBrowserDisconnected = errors.New("browser connection closed")
 
 // errWaitCompleted ends an event subscription after an internal idle timer succeeds.
 var errWaitCompleted = errors.New("wait completed")
+
+// missingField returns the error that [proto.DecodeStrict] reports for protocol
+// data of the type typ without the required field at path. Rod's methods
+// return it for a field that they use and that [proto.DecodeLenient] left
+// missing.
+func missingField(typ, path string) error {
+	return &proto.MissingFieldError{Type: typ, Path: path}
+}
+
+// missingEventField returns the error that [Message.Load] returns with
+// [proto.DecodeStrict] for an event of method, whose type typ lacks the
+// required field at path.
+func missingEventField(method, typ, path string) error {
+	return fmt.Errorf("rod: decode %s event: %w", method, missingField(typ, path))
+}
+
+// requireEntries returns the error of [missingField] for a required list at
+// path that is nil, or that has a nil entry. [proto.DecodeLenient] leaves a
+// missing list nil and a null entry nil; [proto.DecodeStrict] rejects both.
+func requireEntries[T any](list []*T, typ, path string) error {
+	if list == nil {
+		return missingField(typ, path)
+	}
+	for i, entry := range list {
+		if entry == nil {
+			return missingField(typ, path+"["+strconv.Itoa(i)+"]")
+		}
+	}
+	return nil
+}
+
+// lenientMissing reports whether value is the zero value that
+// [proto.DecodeLenient] leaves for a missing field. Rod's methods treat such an
+// identifier as missing instead of using it, for example, to send page
+// commands to the browser session. With [proto.DecodeStrict], a missing field
+// fails to decode, and they use the identifier that the endpoint sent.
+func lenientMissing[T comparable](mode proto.Decoding, value T) bool {
+	var zero T
+	return value == zero && mode == proto.DecodeLenient
+}
 
 // TryError error.
 type TryError struct {

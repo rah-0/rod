@@ -136,7 +136,7 @@ func TestCheckProtocolChangesAndNormalization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := render(data)
+	files, err := render(data, compatibility{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestCheckProtocolChangesAndNormalization(t *testing.T) {
 	if err := json.Compact(&compact, data); err != nil {
 		t.Fatal(err)
 	}
-	equivalent, err := render(compact.Bytes())
+	equivalent, err := render(compact.Bytes(), compatibility{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestCheckProtocolChangesAndNormalization(t *testing.T) {
 	if bytes.Equal(data, changed) {
 		t.Fatal("fixture command not found")
 	}
-	newFiles, err := render(changed)
+	newFiles, err := render(changed, compatibility{})
 	if err != nil {
 		t.Fatal(err)
 	}

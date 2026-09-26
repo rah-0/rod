@@ -41,7 +41,7 @@ These are the defaults implemented in [query.go](../../query.go):
 | `Element(selector)` | First CSS match. | Retries until a match, cancellation, or another error. |
 | `ElementX(xpath)` | First XPath match. | Retries. |
 | `ElementR(selector, regex)` | First CSS match whose text matches a JavaScript regular expression. | Retries. |
-| `ElementByJS(rod.Eval(function, args...))` | DOM node returned by a JavaScript function. | Retries when the function returns `null`. Other non-node values, including `undefined`, return `ExpectElementError`. |
+| `ElementByJS(rod.Eval(function, args...))` | DOM node returned by a JavaScript function. | Retries when the function returns `null`. Other non-node values, including `undefined`, return `ExpectElementError` after their remote object is released. |
 | `Elements(selector)` / `ElementsX(xpath)` | Current CSS / XPath matches. | Returns an empty list without retrying for a match. |
 | `Has(selector)` / `HasX(xpath)` / `HasR(selector, regex)` | One optional match. | Returns `false, nil, nil` without retrying for a match. |
 | `Search(query)` | Browser DOM search using text, CSS, or XPath. | Retries until results are available. Returns a `SearchResult` that needs `Release`. |

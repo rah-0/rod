@@ -4,6 +4,7 @@ package launcher
 import (
 	"context"
 	"crypto"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -21,9 +22,6 @@ import (
 	"github.com/rah-0/rod/lib/launcher/flags"
 	"github.com/rah-0/rod/lib/utils"
 )
-
-// DefaultUserDataDirPrefix ...
-var DefaultUserDataDirPrefix = filepath.Join(os.TempDir(), "rod", "user-data")
 
 // Launcher is a helper to launch browser binary smartly.
 type Launcher struct {
@@ -55,7 +53,9 @@ type Launcher struct {
 
 // New returns the default arguments to start browser.
 // Headless will be enabled by default.
-// UserDataDir uses a temporary directory by default, removed when the browser exits.
+// UserDataDir defaults to a new randomly named directory directly inside
+// [os.TempDir]. Launch creates it with owner-only permissions, fails if the
+// path already exists, and removes it when the browser exits.
 // If [Launcher.Bin] is empty, it searches for an installed Chrome, Chromium, or Edge browser.
 func New() *Launcher {
 	defaults.Load()
@@ -63,7 +63,10 @@ func New() *Launcher {
 	dir := defaults.Dir
 	ownedUserDataDir := ""
 	if dir == "" {
-		dir = filepath.Join(DefaultUserDataDirPrefix, utils.RandString(8))
+		// A direct child of the system temporary directory cannot be renamed
+		// or replaced by other users of a shared, sticky directory such as
+		// /tmp. The unpredictable name prevents planting a path in advance.
+		dir = filepath.Join(os.TempDir(), "rod-profile-"+rand.Text())
 		ownedUserDataDir = dir
 	}
 
@@ -413,7 +416,8 @@ func (l *Launcher) Logger(w io.Writer) *Launcher {
 	return l
 }
 
-// MustLaunch is similar to Launch.
+// MustLaunch is similar to Launch. It panics with ErrManagedLaunch for a
+// launcher from NewManaged.
 func (l *Launcher) MustLaunch() string {
 	u, err := l.Launch()
 	utils.E(err)
@@ -425,7 +429,14 @@ func (l *Launcher) MustLaunch() string {
 // If you want to reuse sessions, such as cookies, set the [Launcher.UserDataDir] to the same location.
 //
 // Please note launcher can only be used once.
+//
+// A launcher from NewManaged holds the manager's settings, including the
+// executable, environment, and working directory, for the manager's host.
+// Launch rejects it with ErrManagedLaunch; use Client or MustClient instead.
 func (l *Launcher) Launch() (string, error) {
+	if l.managed {
+		return "", ErrManagedLaunch
+	}
 	return l.launch(nil, true)
 }
 
@@ -495,11 +506,9 @@ func (l *Launcher) launch(ctx context.Context, reuse bool) (u string, err error)
 		if err != nil {
 			return "", err
 		}
-		if err := os.MkdirAll(filepath.Dir(profile), 0o700); err != nil {
-			return "", err
-		}
-		// A pre-existing path belongs to somebody else, even if it happens to
-		// match the random default. Establish ownership only after creation.
+		// A pre-existing path, including a symlink, belongs to somebody else,
+		// even if it happens to match the random default. Establish ownership
+		// only after creation.
 		if err := os.Mkdir(profile, 0o700); err != nil {
 			return "", err
 		}

@@ -44,7 +44,7 @@ func TestClick(t *testing.T) {
 		el.MustClick()
 	})
 	g.Panic(func() {
-		g.mc.stubErr(8, proto.RuntimeCallFunctionOn{})
+		g.mc.stubErr(6, proto.RuntimeCallFunctionOn{})
 		el.MustClick()
 	})
 }
@@ -101,7 +101,7 @@ func TestInteractable(t *testing.T) {
 	el := p.MustElement("button")
 	g.True(el.MustInteractable())
 
-	g.mc.stubErr(4, proto.RuntimeCallFunctionOn{})
+	g.mc.stubErr(3, proto.RuntimeCallFunctionOn{})
 	g.Err(el.Interactable())
 }
 
@@ -135,7 +135,7 @@ func TestNotInteractable(t *testing.T) {
 	g.mc.stubErr(1, proto.RuntimeCallFunctionOn{})
 	g.Err(el.Interactable())
 
-	g.mc.stubErr(1, proto.DOMDescribeNode{})
+	g.mc.stubErr(1, proto.DOMResolveNode{})
 	g.Err(el.Interactable())
 
 	g.mc.stubErr(2, proto.RuntimeCallFunctionOn{})
@@ -935,7 +935,7 @@ func TestElementFromNodeErr(t *testing.T) {
 	p := g.page.MustNavigate(g.srcFile("fixtures/click.html"))
 	el := p.MustElementX("//button/text()")
 
-	g.mc.stubErr(3, proto.RuntimeCallFunctionOn{})
+	g.mc.stubErr(2, proto.RuntimeCallFunctionOn{})
 	g.Err(p.ElementFromNode(el.MustDescribe()))
 }
 

@@ -4,6 +4,7 @@
 package proto_test
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -53,7 +54,7 @@ func TestAccessibilityGetPartialAXTree(t *testing.T) {
 	if got := request.ProtoReq(); got != "Accessibility.getPartialAXTree" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodes":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +75,7 @@ func TestAccessibilityGetFullAXTree(t *testing.T) {
 	if got := request.ProtoReq(); got != "Accessibility.getFullAXTree" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodes":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +96,7 @@ func TestAccessibilityGetRootAXNode(t *testing.T) {
 	if got := request.ProtoReq(); got != "Accessibility.getRootAXNode" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"node":{"nodeId":"","ignored":false}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +117,7 @@ func TestAccessibilityGetAXNodeAndAncestors(t *testing.T) {
 	if got := request.ProtoReq(); got != "Accessibility.getAXNodeAndAncestors" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodes":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +138,7 @@ func TestAccessibilityGetChildAXNodes(t *testing.T) {
 	if got := request.ProtoReq(); got != "Accessibility.getChildAXNodes" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodes":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -158,7 +159,7 @@ func TestAccessibilityQueryAXTree(t *testing.T) {
 	if got := request.ProtoReq(); got != "Accessibility.queryAXTree" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodes":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +192,7 @@ func TestAdsGetAdMetrics(t *testing.T) {
 	if got := request.ProtoReq(); got != "Ads.getAdMetrics" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"metrics":{"viewportAdDensityByArea":0,"averageViewportAdDensityByArea":0,"viewportAdCount":0,"averageViewportAdCount":0,"totalAdCpuTime":0,"totalAdNetworkBytes":0,"updateAdFrames":[],"removeAdFrames":[]}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -250,7 +251,7 @@ func TestAnimationGetCurrentTime(t *testing.T) {
 	if got := request.ProtoReq(); got != "Animation.getCurrentTime" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"currentTime":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +272,7 @@ func TestAnimationGetPlaybackRate(t *testing.T) {
 	if got := request.ProtoReq(); got != "Animation.getPlaybackRate" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"playbackRate":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -311,7 +312,7 @@ func TestAnimationResolveAnimation(t *testing.T) {
 	if got := request.ProtoReq(); got != "Animation.resolveAnimation" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"remoteObject":{"type":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -432,7 +433,7 @@ func TestAuditsGetEncodedResponse(t *testing.T) {
 	if got := request.ProtoReq(); got != "Audits.getEncodedResponse" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"originalSize":0,"encodedSize":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -491,7 +492,7 @@ func TestAuditsCheckFormsIssues(t *testing.T) {
 	if got := request.ProtoReq(); got != "Audits.checkFormsIssues" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"formIssues":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -840,7 +841,7 @@ func TestBluetoothEmulationAddService(t *testing.T) {
 	if got := request.ProtoReq(); got != "BluetoothEmulation.addService" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"serviceId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -880,7 +881,7 @@ func TestBluetoothEmulationAddCharacteristic(t *testing.T) {
 	if got := request.ProtoReq(); got != "BluetoothEmulation.addCharacteristic" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"characteristicId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -920,7 +921,7 @@ func TestBluetoothEmulationAddDescriptor(t *testing.T) {
 	if got := request.ProtoReq(); got != "BluetoothEmulation.addDescriptor" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"descriptorId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1149,7 +1150,7 @@ func TestBrowserGetVersion(t *testing.T) {
 	if got := request.ProtoReq(); got != "Browser.getVersion" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"protocolVersion":"","product":"","revision":"","userAgent":"","jsVersion":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1170,7 +1171,7 @@ func TestBrowserGetBrowserCommandLine(t *testing.T) {
 	if got := request.ProtoReq(); got != "Browser.getBrowserCommandLine" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"arguments":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1191,7 +1192,7 @@ func TestBrowserGetHistograms(t *testing.T) {
 	if got := request.ProtoReq(); got != "Browser.getHistograms" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"histograms":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1212,7 +1213,7 @@ func TestBrowserGetHistogram(t *testing.T) {
 	if got := request.ProtoReq(); got != "Browser.getHistogram" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"histogram":{"name":"","sum":0,"count":0,"buckets":[]}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1233,7 +1234,7 @@ func TestBrowserGetWindowBounds(t *testing.T) {
 	if got := request.ProtoReq(); got != "Browser.getWindowBounds" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"bounds":{}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1254,7 +1255,7 @@ func TestBrowserGetWindowForTarget(t *testing.T) {
 	if got := request.ProtoReq(); got != "Browser.getWindowForTarget" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"windowId":0,"bounds":{}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1382,7 +1383,7 @@ func TestCSSAddRule(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.addRule" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"rule":{"selectorList":{"selectors":[],"text":""},"origin":"","style":{"cssProperties":[],"shorthandEntries":[]}}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1403,7 +1404,7 @@ func TestCSSCollectClassNames(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.collectClassNames" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"classNames":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1424,7 +1425,7 @@ func TestCSSCreateStyleSheet(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.createStyleSheet" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"styleSheetId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1542,7 +1543,7 @@ func TestCSSGetComputedStyleForNode(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.getComputedStyleForNode" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"computedStyle":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1563,7 +1564,7 @@ func TestCSSResolveValues(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.resolveValues" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"results":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1584,7 +1585,7 @@ func TestCSSGetLonghandProperties(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.getLonghandProperties" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"longhandProperties":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1668,7 +1669,7 @@ func TestCSSGetEnvironmentVariables(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.getEnvironmentVariables" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"environmentVariables":{}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1689,7 +1690,7 @@ func TestCSSGetMediaQueries(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.getMediaQueries" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"medias":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1710,7 +1711,7 @@ func TestCSSGetPlatformFontsForNode(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.getPlatformFontsForNode" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"fonts":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1731,7 +1732,7 @@ func TestCSSGetStyleSheetText(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.getStyleSheetText" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"text":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1752,7 +1753,7 @@ func TestCSSGetLayersForNode(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.getLayersForNode" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"rootLayer":{"name":"","order":0}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1773,7 +1774,7 @@ func TestCSSGetLocationForSelector(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.getLocationForSelector" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"ranges":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1832,7 +1833,7 @@ func TestCSSTakeComputedStyleUpdates(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.takeComputedStyleUpdates" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodeIds":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1872,7 +1873,7 @@ func TestCSSSetPropertyRulePropertyName(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.setPropertyRulePropertyName" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"propertyName":{"text":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1893,7 +1894,7 @@ func TestCSSSetKeyframeKey(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.setKeyframeKey" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"keyText":{"text":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1914,7 +1915,7 @@ func TestCSSSetMediaText(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.setMediaText" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"media":{"text":"","source":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1935,7 +1936,7 @@ func TestCSSSetContainerQueryText(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.setContainerQueryText" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"containerQuery":{}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1956,7 +1957,7 @@ func TestCSSSetContainerQueryConditionText(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.setContainerQueryConditionText" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"containerQuery":{}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1977,7 +1978,7 @@ func TestCSSSetSupportsText(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.setSupportsText" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"supports":{"text":"","active":false}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -1998,7 +1999,7 @@ func TestCSSSetNavigationText(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.setNavigationText" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"navigation":{"text":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2019,7 +2020,7 @@ func TestCSSSetScopeText(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.setScopeText" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"scope":{"text":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2040,7 +2041,7 @@ func TestCSSSetRuleSelector(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.setRuleSelector" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"selectorList":{"selectors":[],"text":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2082,7 +2083,7 @@ func TestCSSSetStyleTexts(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.setStyleTexts" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"styles":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2122,7 +2123,7 @@ func TestCSSStopRuleUsageTracking(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.stopRuleUsageTracking" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"ruleUsage":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2143,7 +2144,7 @@ func TestCSSTakeCoverageDelta(t *testing.T) {
 	if got := request.ProtoReq(); got != "CSS.takeCoverageDelta" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"coverage":[],"timestamp":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2257,7 +2258,7 @@ func TestCacheStorageRequestCacheNames(t *testing.T) {
 	if got := request.ProtoReq(); got != "CacheStorage.requestCacheNames" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"caches":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2278,7 +2279,7 @@ func TestCacheStorageRequestCachedResponse(t *testing.T) {
 	if got := request.ProtoReq(); got != "CacheStorage.requestCachedResponse" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"response":{"body":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2299,7 +2300,7 @@ func TestCacheStorageRequestEntries(t *testing.T) {
 	if got := request.ProtoReq(); got != "CacheStorage.requestEntries" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"cacheDataEntries":[],"returnCount":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2446,7 +2447,7 @@ func TestCrashReportContextGetEntries(t *testing.T) {
 	if got := request.ProtoReq(); got != "CrashReportContext.getEntries" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"entries":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2467,7 +2468,7 @@ func TestDOMCollectClassNamesFromSubtree(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.collectClassNamesFromSubtree" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"classNames":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2488,7 +2489,7 @@ func TestDOMCopyTo(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.copyTo" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodeId":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2509,7 +2510,7 @@ func TestDOMDescribeNode(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.describeNode" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"node":{"nodeId":0,"backendNodeId":0,"nodeType":0,"nodeName":"","localName":"","nodeValue":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2625,7 +2626,7 @@ func TestDOMGetAttributes(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.getAttributes" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"attributes":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2646,7 +2647,7 @@ func TestDOMGetBoxModel(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.getBoxModel" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"model":{"content":[],"padding":[],"border":[],"margin":[],"width":0,"height":0}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2667,7 +2668,7 @@ func TestDOMGetContentQuads(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.getContentQuads" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"quads":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2688,7 +2689,7 @@ func TestDOMGetDocument(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.getDocument" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"root":{"nodeId":0,"backendNodeId":0,"nodeType":0,"nodeName":"","localName":"","nodeValue":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2709,7 +2710,7 @@ func TestDOMGetFlattenedDocument(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.getFlattenedDocument" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodes":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2730,7 +2731,7 @@ func TestDOMGetNodesForSubtreeByStyle(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.getNodesForSubtreeByStyle" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodeIds":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2751,7 +2752,7 @@ func TestDOMGetNodeForLocation(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.getNodeForLocation" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"backendNodeId":0,"frameId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2772,7 +2773,7 @@ func TestDOMGetOuterHTML(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.getOuterHTML" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"outerHTML":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2793,7 +2794,7 @@ func TestDOMGetRelayoutBoundary(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.getRelayoutBoundary" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodeId":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2814,7 +2815,7 @@ func TestDOMGetSearchResults(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.getSearchResults" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodeIds":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2911,7 +2912,7 @@ func TestDOMMoveTo(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.moveTo" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodeId":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2932,7 +2933,7 @@ func TestDOMPerformSearch(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.performSearch" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"searchId":"","resultCount":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2953,7 +2954,7 @@ func TestDOMPushNodeByPathToFrontend(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.pushNodeByPathToFrontend" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodeId":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2974,7 +2975,7 @@ func TestDOMPushNodesByBackendIDsToFrontend(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.pushNodesByBackendIdsToFrontend" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodeIds":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -2995,7 +2996,7 @@ func TestDOMQuerySelector(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.querySelector" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodeId":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -3016,7 +3017,7 @@ func TestDOMQuerySelectorAll(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.querySelectorAll" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodeIds":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -3037,7 +3038,7 @@ func TestDOMGetTopLayerElements(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.getTopLayerElements" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodeIds":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -3058,7 +3059,7 @@ func TestDOMGetElementByRelation(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.getElementByRelation" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodeId":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -3155,7 +3156,7 @@ func TestDOMRequestNode(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.requestNode" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodeId":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -3176,7 +3177,7 @@ func TestDOMResolveNode(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.resolveNode" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"object":{"type":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -3294,7 +3295,7 @@ func TestDOMGetFileInfo(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.getFileInfo" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"path":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -3315,7 +3316,7 @@ func TestDOMGetDetachedDomNodes(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.getDetachedDomNodes" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"detachedNodes":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -3355,7 +3356,7 @@ func TestDOMSetNodeName(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.setNodeName" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodeId":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -3433,7 +3434,7 @@ func TestDOMGetFrameOwner(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.getFrameOwner" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"backendNodeId":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -3475,7 +3476,7 @@ func TestDOMGetQueryingDescendantsForContainer(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.getQueryingDescendantsForContainer" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodeIds":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -3496,7 +3497,7 @@ func TestDOMGetAnchorElement(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.getAnchorElement" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodeId":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -3517,7 +3518,7 @@ func TestDOMForceShowPopover(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOM.forceShowPopover" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"nodeIds":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -3652,7 +3653,7 @@ func TestDOMDebuggerGetEventListeners(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOMDebugger.getEventListeners" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"listeners":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -3882,7 +3883,7 @@ func TestDOMSnapshotGetSnapshot(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOMSnapshot.getSnapshot" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"domNodes":[],"layoutTreeNodes":[],"computedStyles":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -3903,7 +3904,7 @@ func TestDOMSnapshotCaptureSnapshot(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOMSnapshot.captureSnapshot" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"documents":[],"strings":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -3981,7 +3982,7 @@ func TestDOMStorageGetDOMStorageItems(t *testing.T) {
 	if got := request.ProtoReq(); got != "DOMStorage.getDOMStorageItems" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"entries":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -4203,7 +4204,7 @@ func TestEmulationCanEmulate(t *testing.T) {
 	if got := request.ProtoReq(); got != "Emulation.canEmulate" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"result":false}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -4604,7 +4605,7 @@ func TestEmulationGetOverriddenSensorInformation(t *testing.T) {
 	if got := request.ProtoReq(); got != "Emulation.getOverriddenSensorInformation" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"requestedSamplingFrequency":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -4815,7 +4816,7 @@ func TestEmulationSetVirtualTimePolicy(t *testing.T) {
 	if got := request.ProtoReq(); got != "Emulation.setVirtualTimePolicy" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"virtualTimeTicksBase":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -5007,7 +5008,7 @@ func TestEmulationGetScreenInfos(t *testing.T) {
 	if got := request.ProtoReq(); got != "Emulation.getScreenInfos" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"screenInfos":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -5028,7 +5029,7 @@ func TestEmulationAddScreen(t *testing.T) {
 	if got := request.ProtoReq(); got != "Emulation.addScreen" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"screenInfo":{"left":0,"top":0,"width":0,"height":0,"availLeft":0,"availTop":0,"availWidth":0,"availHeight":0,"devicePixelRatio":0,"orientation":{"type":"","angle":0},"colorDepth":0,"isExtended":false,"isInternal":false,"isPrimary":false,"label":"","id":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -5049,7 +5050,7 @@ func TestEmulationUpdateScreen(t *testing.T) {
 	if got := request.ProtoReq(); got != "Emulation.updateScreen" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"screenInfo":{"left":0,"top":0,"width":0,"height":0,"availLeft":0,"availTop":0,"availWidth":0,"availHeight":0,"devicePixelRatio":0,"orientation":{"type":"","angle":0},"colorDepth":0,"isExtended":false,"isInternal":false,"isPrimary":false,"label":"","id":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -5196,7 +5197,7 @@ func TestExtensionsLoadUnpacked(t *testing.T) {
 	if got := request.ProtoReq(); got != "Extensions.loadUnpacked" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"id":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -5217,7 +5218,7 @@ func TestExtensionsGetExtensions(t *testing.T) {
 	if got := request.ProtoReq(); got != "Extensions.getExtensions" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"extensions":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -5257,7 +5258,7 @@ func TestExtensionsGetStorageItems(t *testing.T) {
 	if got := request.ProtoReq(); got != "Extensions.getStorageItems" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"data":{}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -5613,7 +5614,7 @@ func TestFetchGetResponseBody(t *testing.T) {
 	if got := request.ProtoReq(); got != "Fetch.getResponseBody" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"body":"","base64Encoded":false}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -5634,7 +5635,7 @@ func TestFetchTakeResponseBodyAsStream(t *testing.T) {
 	if got := request.ProtoReq(); got != "Fetch.takeResponseBodyAsStream" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"stream":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -5667,7 +5668,7 @@ func TestFileSystemGetDirectory(t *testing.T) {
 	if got := request.ProtoReq(); got != "FileSystem.getDirectory" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"directory":{"name":"","nestedDirectories":[],"nestedFiles":[]}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -5688,7 +5689,7 @@ func TestHeadlessExperimentalBeginFrame(t *testing.T) {
 	if got := request.ProtoReq(); got != "HeadlessExperimental.beginFrame" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"hasDamage":false}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -5766,7 +5767,7 @@ func TestIORead(t *testing.T) {
 	if got := request.ProtoReq(); got != "IO.read" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"data":"","eof":false}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -5787,7 +5788,7 @@ func TestIOResolveBlob(t *testing.T) {
 	if got := request.ProtoReq(); got != "IO.resolveBlob" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"uuid":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -5903,7 +5904,7 @@ func TestIndexedDBRequestData(t *testing.T) {
 	if got := request.ProtoReq(); got != "IndexedDB.requestData" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"objectStoreDataEntries":[],"hasMore":false}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -5924,7 +5925,7 @@ func TestIndexedDBGetMetadata(t *testing.T) {
 	if got := request.ProtoReq(); got != "IndexedDB.getMetadata" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"entriesCount":0,"keyGeneratorValue":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -5945,7 +5946,7 @@ func TestIndexedDBRequestDatabase(t *testing.T) {
 	if got := request.ProtoReq(); got != "IndexedDB.requestDatabase" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"databaseWithObjectStores":{"name":"","version":0,"objectStores":[]}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -5966,7 +5967,7 @@ func TestIndexedDBRequestDatabaseNames(t *testing.T) {
 	if got := request.ProtoReq(); got != "IndexedDB.requestDatabaseNames" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"databaseNames":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -6302,7 +6303,7 @@ func TestLayerTreeCompositingReasons(t *testing.T) {
 	if got := request.ProtoReq(); got != "LayerTree.compositingReasons" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"compositingReasons":[],"compositingReasonIds":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -6361,7 +6362,7 @@ func TestLayerTreeLoadSnapshot(t *testing.T) {
 	if got := request.ProtoReq(); got != "LayerTree.loadSnapshot" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"snapshotId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -6382,7 +6383,7 @@ func TestLayerTreeMakeSnapshot(t *testing.T) {
 	if got := request.ProtoReq(); got != "LayerTree.makeSnapshot" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"snapshotId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -6403,7 +6404,7 @@ func TestLayerTreeProfileSnapshot(t *testing.T) {
 	if got := request.ProtoReq(); got != "LayerTree.profileSnapshot" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"timings":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -6443,7 +6444,7 @@ func TestLayerTreeReplaySnapshot(t *testing.T) {
 	if got := request.ProtoReq(); got != "LayerTree.replaySnapshot" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"dataURL":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -6464,7 +6465,7 @@ func TestLayerTreeSnapshotCommandLog(t *testing.T) {
 	if got := request.ProtoReq(); got != "LayerTree.snapshotCommandLog" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"commandLog":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -6666,7 +6667,7 @@ func TestMemoryGetDOMCounters(t *testing.T) {
 	if got := request.ProtoReq(); got != "Memory.getDOMCounters" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"documents":0,"nodes":0,"jsEventListeners":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -6687,7 +6688,7 @@ func TestMemoryGetDOMCountersForLeakDetection(t *testing.T) {
 	if got := request.ProtoReq(); got != "Memory.getDOMCountersForLeakDetection" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"counters":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -6822,7 +6823,7 @@ func TestMemoryGetAllTimeSamplingProfile(t *testing.T) {
 	if got := request.ProtoReq(); got != "Memory.getAllTimeSamplingProfile" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"profile":{"samples":[],"modules":[]}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -6843,7 +6844,7 @@ func TestMemoryGetBrowserSamplingProfile(t *testing.T) {
 	if got := request.ProtoReq(); got != "Memory.getBrowserSamplingProfile" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"profile":{"samples":[],"modules":[]}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -6864,7 +6865,7 @@ func TestMemoryGetSamplingProfile(t *testing.T) {
 	if got := request.ProtoReq(); got != "Memory.getSamplingProfile" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"profile":{"samples":[],"modules":[]}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -6923,7 +6924,7 @@ func TestNetworkCanClearBrowserCache(t *testing.T) {
 	if got := request.ProtoReq(); got != "Network.canClearBrowserCache" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"result":false}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -6944,7 +6945,7 @@ func TestNetworkCanClearBrowserCookies(t *testing.T) {
 	if got := request.ProtoReq(); got != "Network.canClearBrowserCookies" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"result":false}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -6965,7 +6966,7 @@ func TestNetworkCanEmulateNetworkConditions(t *testing.T) {
 	if got := request.ProtoReq(); got != "Network.canEmulateNetworkConditions" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"result":false}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -7100,7 +7101,7 @@ func TestNetworkEmulateNetworkConditionsByRule(t *testing.T) {
 	if got := request.ProtoReq(); got != "Network.emulateNetworkConditionsByRule" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"ruleIds":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -7178,7 +7179,7 @@ func TestNetworkGetAllCookies(t *testing.T) {
 	if got := request.ProtoReq(); got != "Network.getAllCookies" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"cookies":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -7199,7 +7200,7 @@ func TestNetworkGetCertificate(t *testing.T) {
 	if got := request.ProtoReq(); got != "Network.getCertificate" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"tableNames":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -7220,7 +7221,7 @@ func TestNetworkGetCookies(t *testing.T) {
 	if got := request.ProtoReq(); got != "Network.getCookies" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"cookies":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -7241,7 +7242,7 @@ func TestNetworkGetResponseBody(t *testing.T) {
 	if got := request.ProtoReq(); got != "Network.getResponseBody" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"body":"","base64Encoded":false}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -7262,7 +7263,7 @@ func TestNetworkGetRequestPostData(t *testing.T) {
 	if got := request.ProtoReq(); got != "Network.getRequestPostData" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"postData":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -7283,7 +7284,7 @@ func TestNetworkGetResponseBodyForInterception(t *testing.T) {
 	if got := request.ProtoReq(); got != "Network.getResponseBodyForInterception" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"body":"","base64Encoded":false}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -7304,7 +7305,7 @@ func TestNetworkTakeResponseBodyForInterceptionAsStream(t *testing.T) {
 	if got := request.ProtoReq(); got != "Network.takeResponseBodyForInterceptionAsStream" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"stream":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -7344,7 +7345,7 @@ func TestNetworkSearchInResponseBody(t *testing.T) {
 	if got := request.ProtoReq(); got != "Network.searchInResponseBody" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"result":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -7538,7 +7539,7 @@ func TestNetworkStreamResourceContent(t *testing.T) {
 	if got := request.ProtoReq(); got != "Network.streamResourceContent" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"bufferedData":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -7559,7 +7560,7 @@ func TestNetworkGetSecurityIsolationStatus(t *testing.T) {
 	if got := request.ProtoReq(); got != "Network.getSecurityIsolationStatus" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"status":{}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -7637,7 +7638,7 @@ func TestNetworkFetchSchemefulSite(t *testing.T) {
 	if got := request.ProtoReq(); got != "Network.fetchSchemefulSite" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"schemefulSite":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -7658,7 +7659,7 @@ func TestNetworkLoadNetworkResource(t *testing.T) {
 	if got := request.ProtoReq(); got != "Network.loadNetworkResource" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"resource":{"success":false}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -8000,7 +8001,7 @@ func TestOverlayGetHighlightObjectForTest(t *testing.T) {
 	if got := request.ProtoReq(); got != "Overlay.getHighlightObjectForTest" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"highlight":{}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -8021,7 +8022,7 @@ func TestOverlayGetGridHighlightObjectsForTest(t *testing.T) {
 	if got := request.ProtoReq(); got != "Overlay.getGridHighlightObjectsForTest" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"highlights":{}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -8042,7 +8043,7 @@ func TestOverlayGetSourceOrderHighlightObjectForTest(t *testing.T) {
 	if got := request.ProtoReq(); got != "Overlay.getSourceOrderHighlightObjectForTest" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"highlight":{}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -8593,7 +8594,7 @@ func TestPWAGetOsAppState(t *testing.T) {
 	if got := request.ProtoReq(); got != "PWA.getOsAppState" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"badgeCount":0,"fileHandlers":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -8652,7 +8653,7 @@ func TestPWALaunch(t *testing.T) {
 	if got := request.ProtoReq(); got != "PWA.launch" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"targetId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -8673,7 +8674,7 @@ func TestPWALaunchFilesInApp(t *testing.T) {
 	if got := request.ProtoReq(); got != "PWA.launchFilesInApp" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"targetIds":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -8732,7 +8733,7 @@ func TestPageAddScriptToEvaluateOnLoad(t *testing.T) {
 	if got := request.ProtoReq(); got != "Page.addScriptToEvaluateOnLoad" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"identifier":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -8753,7 +8754,7 @@ func TestPageAddScriptToEvaluateOnNewDocument(t *testing.T) {
 	if got := request.ProtoReq(); got != "Page.addScriptToEvaluateOnNewDocument" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"identifier":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -8793,7 +8794,7 @@ func TestPageCaptureScreenshot(t *testing.T) {
 	if got := request.ProtoReq(); got != "Page.captureScreenshot" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"data":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -8814,7 +8815,7 @@ func TestPageCaptureSnapshot(t *testing.T) {
 	if got := request.ProtoReq(); got != "Page.captureSnapshot" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"data":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -8892,7 +8893,7 @@ func TestPageCreateIsolatedWorld(t *testing.T) {
 	if got := request.ProtoReq(); got != "Page.createIsolatedWorld" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"executionContextId":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -8970,7 +8971,7 @@ func TestPageGetAppManifest(t *testing.T) {
 	if got := request.ProtoReq(); got != "Page.getAppManifest" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"url":"","errors":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -8991,7 +8992,7 @@ func TestPageGetInstallabilityErrors(t *testing.T) {
 	if got := request.ProtoReq(); got != "Page.getInstallabilityErrors" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"installabilityErrors":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -9075,7 +9076,7 @@ func TestPageGetFrameTree(t *testing.T) {
 	if got := request.ProtoReq(); got != "Page.getFrameTree" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"frameTree":{"frame":{"id":"","loaderId":"","url":"","securityOrigin":"","mimeType":""}}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -9096,7 +9097,7 @@ func TestPageGetLayoutMetrics(t *testing.T) {
 	if got := request.ProtoReq(); got != "Page.getLayoutMetrics" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"cssLayoutViewport":{"pageX":0,"pageY":0,"clientWidth":0,"clientHeight":0},"cssVisualViewport":{"offsetX":0,"offsetY":0,"pageX":0,"pageY":0,"clientWidth":0,"clientHeight":0,"scale":0},"cssContentSize":{"x":0,"y":0,"width":0,"height":0}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -9117,7 +9118,7 @@ func TestPageGetNavigationHistory(t *testing.T) {
 	if got := request.ProtoReq(); got != "Page.getNavigationHistory" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"currentIndex":0,"entries":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -9157,7 +9158,7 @@ func TestPageGetResourceContent(t *testing.T) {
 	if got := request.ProtoReq(); got != "Page.getResourceContent" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"content":"","base64Encoded":false}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -9178,7 +9179,7 @@ func TestPageGetResourceTree(t *testing.T) {
 	if got := request.ProtoReq(); got != "Page.getResourceTree" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"frameTree":{"frame":{"id":"","loaderId":"","url":"","securityOrigin":"","mimeType":""},"resources":[]}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -9218,7 +9219,7 @@ func TestPageNavigate(t *testing.T) {
 	if got := request.ProtoReq(); got != "Page.navigate" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"frameId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -9258,7 +9259,7 @@ func TestPagePrintToPDF(t *testing.T) {
 	if got := request.ProtoReq(); got != "Page.printToPDF" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"data":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -9355,7 +9356,7 @@ func TestPageSearchInResource(t *testing.T) {
 	if got := request.ProtoReq(); got != "Page.searchInResource" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"result":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -9414,7 +9415,7 @@ func TestPageGetPermissionsPolicyState(t *testing.T) {
 	if got := request.ProtoReq(); got != "Page.getPermissionsPolicyState" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"states":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -9435,7 +9436,7 @@ func TestPageGetOriginTrials(t *testing.T) {
 	if got := request.ProtoReq(); got != "Page.getOriginTrials" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"originTrials":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -9912,7 +9913,7 @@ func TestPageGetAnnotatedPageContent(t *testing.T) {
 	if got := request.ProtoReq(); got != "Page.getAnnotatedPageContent" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"content":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -10158,7 +10159,7 @@ func TestPerformanceGetMetrics(t *testing.T) {
 	if got := request.ProtoReq(); got != "Performance.getMetrics" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"metrics":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -10955,7 +10956,7 @@ func TestStorageGetStorageKeyForFrame(t *testing.T) {
 	if got := request.ProtoReq(); got != "Storage.getStorageKeyForFrame" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"storageKey":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -10976,7 +10977,7 @@ func TestStorageGetStorageKey(t *testing.T) {
 	if got := request.ProtoReq(); got != "Storage.getStorageKey" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"storageKey":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -11035,7 +11036,7 @@ func TestStorageGetCookies(t *testing.T) {
 	if got := request.ProtoReq(); got != "Storage.getCookies" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"cookies":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -11094,7 +11095,7 @@ func TestStorageGetUsageAndQuota(t *testing.T) {
 	if got := request.ProtoReq(); got != "Storage.getUsageAndQuota" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"usage":0,"quota":0,"overrideActive":false,"usageBreakdown":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -11286,7 +11287,7 @@ func TestStorageGetTrustTokens(t *testing.T) {
 	if got := request.ProtoReq(); got != "Storage.getTrustTokens" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"tokens":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -11307,7 +11308,7 @@ func TestStorageClearTrustTokens(t *testing.T) {
 	if got := request.ProtoReq(); got != "Storage.clearTrustTokens" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"didDeleteTokens":false}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -11328,7 +11329,7 @@ func TestStorageGetSharedStorageMetadata(t *testing.T) {
 	if got := request.ProtoReq(); got != "Storage.getSharedStorageMetadata" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"metadata":{"creationTime":0,"length":0,"remainingBudget":0,"bytesUsed":0}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -11349,7 +11350,7 @@ func TestStorageGetSharedStorageEntries(t *testing.T) {
 	if got := request.ProtoReq(); got != "Storage.getSharedStorageEntries" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"entries":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -11503,7 +11504,7 @@ func TestStorageRunBounceTrackingMitigations(t *testing.T) {
 	if got := request.ProtoReq(); got != "Storage.runBounceTrackingMitigations" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"deletedSites":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -11524,7 +11525,7 @@ func TestStorageGetRelatedWebsiteSets(t *testing.T) {
 	if got := request.ProtoReq(); got != "Storage.getRelatedWebsiteSets" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"sets":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -11593,7 +11594,7 @@ func TestSystemInfoGetInfo(t *testing.T) {
 	if got := request.ProtoReq(); got != "SystemInfo.getInfo" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"gpu":{"devices":[],"driverBugWorkarounds":[],"videoDecoding":[],"videoEncoding":[]},"modelName":"","modelVersion":"","commandLine":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -11614,7 +11615,7 @@ func TestSystemInfoGetFeatureState(t *testing.T) {
 	if got := request.ProtoReq(); got != "SystemInfo.getFeatureState" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"featureEnabled":false}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -11635,7 +11636,7 @@ func TestSystemInfoGetProcessInfo(t *testing.T) {
 	if got := request.ProtoReq(); got != "SystemInfo.getProcessInfo" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"processInfo":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -11675,7 +11676,7 @@ func TestTargetAttachToTarget(t *testing.T) {
 	if got := request.ProtoReq(); got != "Target.attachToTarget" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"sessionId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -11696,7 +11697,7 @@ func TestTargetAttachToBrowserTarget(t *testing.T) {
 	if got := request.ProtoReq(); got != "Target.attachToBrowserTarget" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"sessionId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -11757,7 +11758,7 @@ func TestTargetCreateBrowserContext(t *testing.T) {
 	if got := request.ProtoReq(); got != "Target.createBrowserContext" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"browserContextId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -11778,7 +11779,7 @@ func TestTargetGetBrowserContexts(t *testing.T) {
 	if got := request.ProtoReq(); got != "Target.getBrowserContexts" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"browserContextIds":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -11799,7 +11800,7 @@ func TestTargetCreateTarget(t *testing.T) {
 	if got := request.ProtoReq(); got != "Target.createTarget" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"targetId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -11858,7 +11859,7 @@ func TestTargetGetTargetInfo(t *testing.T) {
 	if got := request.ProtoReq(); got != "Target.getTargetInfo" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"targetInfo":{"targetId":"","type":"","title":"","url":"","attached":false}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -11879,7 +11880,7 @@ func TestTargetGetTargets(t *testing.T) {
 	if got := request.ProtoReq(); got != "Target.getTargets" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"targetInfos":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -12016,7 +12017,7 @@ func TestTargetOpenDevTools(t *testing.T) {
 	if got := request.ProtoReq(); got != "Target.openDevTools" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"targetId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -12142,7 +12143,7 @@ func TestTracingGetCategories(t *testing.T) {
 	if got := request.ProtoReq(); got != "Tracing.getCategories" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"categories":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -12163,7 +12164,7 @@ func TestTracingGetTrackEventDescriptor(t *testing.T) {
 	if got := request.ProtoReq(); got != "Tracing.getTrackEventDescriptor" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"descriptor":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -12203,7 +12204,7 @@ func TestTracingRequestMemoryDump(t *testing.T) {
 	if got := request.ProtoReq(); got != "Tracing.requestMemoryDump" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"dumpGuid":"","success":false}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -12299,7 +12300,7 @@ func TestWebAudioGetRealtimeData(t *testing.T) {
 	if got := request.ProtoReq(); got != "WebAudio.getRealtimeData" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"realtimeData":{"currentTime":0,"renderCapacity":0,"callbackIntervalMean":0,"callbackIntervalVariance":0}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -12436,7 +12437,7 @@ func TestWebAuthnAddVirtualAuthenticator(t *testing.T) {
 	if got := request.ProtoReq(); got != "WebAuthn.addVirtualAuthenticator" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"authenticatorId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -12514,7 +12515,7 @@ func TestWebAuthnGetCredential(t *testing.T) {
 	if got := request.ProtoReq(); got != "WebAuthn.getCredential" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"credential":{"credentialId":"","isResidentCredential":false,"privateKey":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -12535,7 +12536,7 @@ func TestWebAuthnGetCredentials(t *testing.T) {
 	if got := request.ProtoReq(); got != "WebAuthn.getCredentials" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"credentials":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -12713,7 +12714,7 @@ func TestWebMCPInvokeTool(t *testing.T) {
 	if got := request.ProtoReq(); got != "WebMCP.invokeTool" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"invocationId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -12899,7 +12900,7 @@ func TestDebuggerEvaluateOnCallFrame(t *testing.T) {
 	if got := request.ProtoReq(); got != "Debugger.evaluateOnCallFrame" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"result":{"type":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -12920,7 +12921,7 @@ func TestDebuggerGetPossibleBreakpoints(t *testing.T) {
 	if got := request.ProtoReq(); got != "Debugger.getPossibleBreakpoints" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"locations":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -12941,7 +12942,7 @@ func TestDebuggerGetScriptSource(t *testing.T) {
 	if got := request.ProtoReq(); got != "Debugger.getScriptSource" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"scriptSource":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -12962,7 +12963,7 @@ func TestDebuggerDisassembleWasmModule(t *testing.T) {
 	if got := request.ProtoReq(); got != "Debugger.disassembleWasmModule" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"totalNumberOfLines":0,"functionBodyOffsets":[],"chunk":{"lines":[],"bytecodeOffsets":[]}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -12983,7 +12984,7 @@ func TestDebuggerNextWasmDisassemblyChunk(t *testing.T) {
 	if got := request.ProtoReq(); got != "Debugger.nextWasmDisassemblyChunk" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"chunk":{"lines":[],"bytecodeOffsets":[]}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -13004,7 +13005,7 @@ func TestDebuggerGetWasmBytecode(t *testing.T) {
 	if got := request.ProtoReq(); got != "Debugger.getWasmBytecode" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"bytecode":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -13025,7 +13026,7 @@ func TestDebuggerGetStackTrace(t *testing.T) {
 	if got := request.ProtoReq(); got != "Debugger.getStackTrace" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"stackTrace":{"callFrames":[]}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -13143,7 +13144,7 @@ func TestDebuggerSearchInContent(t *testing.T) {
 	if got := request.ProtoReq(); got != "Debugger.searchInContent" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"result":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -13240,7 +13241,7 @@ func TestDebuggerSetBreakpoint(t *testing.T) {
 	if got := request.ProtoReq(); got != "Debugger.setBreakpoint" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"breakpointId":"","actualLocation":{"scriptId":"","lineNumber":0}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -13261,7 +13262,7 @@ func TestDebuggerSetInstrumentationBreakpoint(t *testing.T) {
 	if got := request.ProtoReq(); got != "Debugger.setInstrumentationBreakpoint" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"breakpointId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -13282,7 +13283,7 @@ func TestDebuggerSetBreakpointByURL(t *testing.T) {
 	if got := request.ProtoReq(); got != "Debugger.setBreakpointByUrl" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"breakpointId":"","locations":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -13303,7 +13304,7 @@ func TestDebuggerSetBreakpointOnFunctionCall(t *testing.T) {
 	if got := request.ProtoReq(); got != "Debugger.setBreakpointOnFunctionCall" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"breakpointId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -13603,7 +13604,7 @@ func TestHeapProfilerGetHeapObjectID(t *testing.T) {
 	if got := request.ProtoReq(); got != "HeapProfiler.getHeapObjectId" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"heapSnapshotObjectId":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -13624,7 +13625,7 @@ func TestHeapProfilerGetObjectByHeapObjectID(t *testing.T) {
 	if got := request.ProtoReq(); got != "HeapProfiler.getObjectByHeapObjectId" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"result":{"type":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -13645,7 +13646,7 @@ func TestHeapProfilerGetSamplingProfile(t *testing.T) {
 	if got := request.ProtoReq(); got != "HeapProfiler.getSamplingProfile" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"profile":{"head":{"callFrame":{"functionName":"","scriptId":"","url":"","lineNumber":0,"columnNumber":0},"selfSize":0,"id":0,"children":[]},"samples":[]}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -13704,7 +13705,7 @@ func TestHeapProfilerStopSampling(t *testing.T) {
 	if got := request.ProtoReq(); got != "HeapProfiler.stopSampling" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"profile":{"head":{"callFrame":{"functionName":"","scriptId":"","url":"","lineNumber":0,"columnNumber":0},"selfSize":0,"id":0,"children":[]},"samples":[]}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -13831,7 +13832,7 @@ func TestProfilerGetBestEffortCoverage(t *testing.T) {
 	if got := request.ProtoReq(); got != "Profiler.getBestEffortCoverage" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"result":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -13890,7 +13891,7 @@ func TestProfilerStartPreciseCoverage(t *testing.T) {
 	if got := request.ProtoReq(); got != "Profiler.startPreciseCoverage" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"timestamp":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -13911,7 +13912,7 @@ func TestProfilerStop(t *testing.T) {
 	if got := request.ProtoReq(); got != "Profiler.stop" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"profile":{"nodes":[],"startTime":0,"endTime":0}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -13951,7 +13952,7 @@ func TestProfilerTakePreciseCoverage(t *testing.T) {
 	if got := request.ProtoReq(); got != "Profiler.takePreciseCoverage" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"result":[],"timestamp":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -13990,7 +13991,7 @@ func TestRuntimeAwaitPromise(t *testing.T) {
 	if got := request.ProtoReq(); got != "Runtime.awaitPromise" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"result":{"type":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -14011,7 +14012,7 @@ func TestRuntimeCallFunctionOn(t *testing.T) {
 	if got := request.ProtoReq(); got != "Runtime.callFunctionOn" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"result":{"type":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -14110,7 +14111,7 @@ func TestRuntimeEvaluate(t *testing.T) {
 	if got := request.ProtoReq(); got != "Runtime.evaluate" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"result":{"type":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -14131,7 +14132,7 @@ func TestRuntimeGetIsolateID(t *testing.T) {
 	if got := request.ProtoReq(); got != "Runtime.getIsolateId" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"id":""}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -14152,7 +14153,7 @@ func TestRuntimeGetHeapUsage(t *testing.T) {
 	if got := request.ProtoReq(); got != "Runtime.getHeapUsage" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"usedSize":0,"totalSize":0}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -14173,7 +14174,7 @@ func TestRuntimeGetProperties(t *testing.T) {
 	if got := request.ProtoReq(); got != "Runtime.getProperties" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"result":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -14194,7 +14195,7 @@ func TestRuntimeGlobalLexicalScopeNames(t *testing.T) {
 	if got := request.ProtoReq(); got != "Runtime.globalLexicalScopeNames" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"names":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -14215,7 +14216,7 @@ func TestRuntimeQueryObjects(t *testing.T) {
 	if got := request.ProtoReq(); got != "Runtime.queryObjects" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"objects":{"type":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -14293,7 +14294,7 @@ func TestRuntimeRunScript(t *testing.T) {
 	if got := request.ProtoReq(); got != "Runtime.runScript" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"result":{"type":""}}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)
@@ -14497,7 +14498,7 @@ func TestSchemaGetDomains(t *testing.T) {
 	if got := request.ProtoReq(); got != "Schema.getDomains" {
 		t.Fatalf("request method = %q", got)
 	}
-	c := &Client{}
+	c := &Client{ret: json.RawMessage(`{"domains":[]}`)}
 	result, err := request.Call(c)
 	if err != nil {
 		t.Fatal(err)

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/rah-0/rod/lib/launcher"
@@ -23,6 +24,9 @@ const (
 
 type GeneratorOptions struct {
 	SchemaPath string
+	// CompatPath is the protocol schema of an older browser whose missing
+	// members are recorded in schema-compatibility.json.
+	CompatPath string
 	OutputDir  string
 	Bin        string
 	NoSandbox  bool
@@ -81,7 +85,11 @@ func generate(ctx context.Context, options GeneratorOptions, output io.Writer) e
 	if err != nil {
 		return err
 	}
-	files, err := render(source.Data)
+	compat, older, err := compatibilityInputs(options)
+	if err != nil {
+		return err
+	}
+	files, err := render(source.Data, compat, older...)
 	if err != nil {
 		return err
 	}
@@ -104,6 +112,36 @@ func generate(ctx context.Context, options GeneratorOptions, output io.Writer) e
 	}
 	fmt.Fprintf(output, "Generated protocol bindings in %s.\n", options.OutputDir)
 	return nil
+}
+
+// compatibilityInputs reads the compatibility record and the previous schema
+// from the output directory, and the older schema that options selects. The
+// previous schema lets generation record the members that the new schema adds.
+func compatibilityInputs(options GeneratorOptions) (compatibility, [][]byte, error) {
+	var compat compatibility
+	var older [][]byte
+	record, err := os.ReadFile(filepath.Join(options.OutputDir, compatibilityOutput))
+	if err == nil {
+		if err := json.Unmarshal(record, &compat); err != nil {
+			return compat, nil, fmt.Errorf("decode %s: %w", compatibilityOutput, err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return compat, nil, err
+	}
+	previous, err := os.ReadFile(filepath.Join(options.OutputDir, schemaOutput))
+	if err == nil {
+		older = append(older, previous)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return compat, nil, err
+	}
+	if options.CompatPath != "" {
+		data, err := os.ReadFile(options.CompatPath)
+		if err != nil {
+			return compat, nil, err
+		}
+		older = append(older, data)
+	}
+	return compat, older, nil
 }
 
 // Canonical JSON makes hashes independent of endpoint whitespace and object key order.

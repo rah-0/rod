@@ -36,6 +36,10 @@ type Element struct {
 	sleeper func() utils.Sleeper
 
 	page *Page
+
+	// jsCtxID is the window of the execution context that owns the Object handle;
+	// empty when unknown. Results of calls on Object belong to the same context.
+	jsCtxID proto.RuntimeRemoteObjectID
 }
 
 // GetSessionID interface.
@@ -174,10 +178,11 @@ func (el *Element) Interactable() (pt *proto.Point, err error) {
 		return
 	}
 
-	elAtPoint, err := el.page.Context(el.ctx).ElementFromPoint(
-		int(pt.X)+scroll.Value.Get("x").Int(),
-		int(pt.Y)+scroll.Value.Get("y").Int(),
-	)
+	page := el.page.Context(el.ctx)
+	node, err := proto.DOMGetNodeForLocation{
+		X: int(pt.X) + scroll.Value.Get("x").Int(),
+		Y: int(pt.Y) + scroll.Value.Get("y").Int(),
+	}.Call(page)
 	if err != nil {
 		if errors.Is(err, cdp.ErrNodeNotFoundAtPos) {
 			err = &InvisibleShapeError{el}
@@ -185,12 +190,21 @@ func (el *Element) Interactable() (pt *proto.Point, err error) {
 		return
 	}
 
-	isParent, err := el.ContainsElement(elAtPoint)
-	if err == nil && !isParent {
-		err = &CoveredError{elAtPoint}
+	// Containment needs only a handle; only a covering node becomes an Element.
+	// Chrome reports the parent of a text node at the location, never the text.
+	hit, err := resolveNode(page, proto.DOMResolveNode{BackendNodeID: node.BackendNodeID})
+	if err != nil {
 		return
 	}
-	err = errors.Join(err, el.page.Context(el.ctx).releaseObject(elAtPoint.Object))
+	contains, err := el.Evaluate(evalHelper(js.ContainsElement, hit))
+	if err == nil && !contains.Value.Bool() {
+		var covering *Element
+		if covering, err = page.ElementFromObject(hit); err == nil {
+			err = &CoveredError{covering}
+			return
+		}
+	}
+	err = errors.Join(err, page.releaseObject(hit))
 	return
 }
 
@@ -301,7 +315,7 @@ func (el *Element) InputTime(t time.Time) error {
 		return err
 	}
 
-	defer el.tryTrace(TraceTypeInput, "input "+t.String())()
+	defer el.tryTrace(TraceTypeInput, "input time (value redacted)")()
 
 	_, err = el.Evaluate(evalHelper(js.InputTime, t.UnixNano()/1e6).ByUser())
 	return err
@@ -325,7 +339,7 @@ func (el *Element) InputColor(color string) error {
 		return err
 	}
 
-	defer el.tryTrace(TraceTypeInput, "input "+color)()
+	defer el.tryTrace(TraceTypeInput, "input color (value redacted)")()
 
 	_, err = el.Evaluate(evalHelper(js.InputColor, color))
 	return err
@@ -459,6 +473,9 @@ func (el *Element) Describe(depth int, pierce bool) (*proto.DOMNode, error) {
 	if err != nil {
 		return nil, err
 	}
+	if val.Node == nil {
+		return nil, missingField("DOMDescribeNodeResult", "node")
+	}
 	return val.Node, nil
 }
 
@@ -473,14 +490,17 @@ func (el *Element) ShadowRoot() (*Element, error) {
 	if len(node.ShadowRoots) == 0 {
 		return nil, &NoShadowRootError{el}
 	}
-	id := node.ShadowRoots[0].BackendNodeID
+	root := node.ShadowRoots[0]
+	if root == nil {
+		return nil, missingField("DOMDescribeNodeResult", "node.shadowRoots[0]")
+	}
 
-	shadowNode, err := proto.DOMResolveNode{BackendNodeID: id}.Call(el)
+	obj, err := resolveNode(el, proto.DOMResolveNode{BackendNodeID: root.BackendNodeID})
 	if err != nil {
 		return nil, err
 	}
 
-	return el.page.Context(el.ctx).ElementFromObject(shadowNode.Object)
+	return el.page.Context(el.ctx).ElementFromObject(obj)
 }
 
 // Frame creates a page view for this iframe, attaching its renderer session when
@@ -699,6 +719,8 @@ func (el *Element) WaitInvisible() error {
 // CanvasToImage get image data of a canvas.
 // The default format is image/png.
 // The default quality is 0.92.
+// A canvas without pixels yields empty data. A toDataURL result that is not a
+// valid data URL returns an error wrapping [ErrInvalidDataURL].
 // doc: https://developer.mozilla.org/en-US/docs/Web/API/HTMLCanvasElement/toDataURL
 func (el *Element) CanvasToImage(format string, quality float64) ([]byte, error) {
 	res, err := el.Eval(`(format, quality) => this.toDataURL(format, quality)`, format, quality)
@@ -706,8 +728,7 @@ func (el *Element) CanvasToImage(format string, quality float64) ([]byte, error)
 		return nil, err
 	}
 
-	_, bin := parseDataURI(res.Value.Str())
-	return bin, nil
+	return decodeDataURL(res.Value.Str())
 }
 
 // Resource returns the "src" content of current element. Such as the jpg of <img src="a.jpg">.
@@ -753,7 +774,7 @@ func (el *Element) Screenshot(format proto.PageCaptureScreenshotFormat, quality 
 	}
 	viewport := metrics.CSSVisualViewport
 	if viewport == nil {
-		return nil, errors.New("failed to get CSS visual viewport")
+		return nil, missingField("PageGetLayoutMetricsResult", "cssVisualViewport")
 	}
 	zoom := 1.0
 	if viewport.Zoom != nil {
@@ -781,6 +802,12 @@ func (el *Element) Remove() error {
 		return err
 	}
 	return el.Release()
+}
+
+// GetDecoding returns the [Browser.Decoding] of the element's browser. It
+// implements [proto.Decodable].
+func (el *Element) GetDecoding() proto.Decoding {
+	return el.page.GetDecoding()
 }
 
 // Call implements the [proto.Client].

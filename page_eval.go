@@ -3,10 +3,13 @@
 package rod
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +29,117 @@ var ErrFrameContextChanged = errors.New("iframe context changed; acquire a new v
 type jsHelperCache struct {
 	sync.Mutex
 	contexts map[proto.RuntimeRemoteObjectID]map[string]proto.RuntimeRemoteObjectID
+
+	// last is the context most recently matched by an object lookup.
+	last proto.RuntimeRemoteObjectID
+
+	// frames maps each same-process frame to the window its views last resolved.
+	frames map[proto.PageFrameID]proto.RuntimeRemoteObjectID
+
+	// installs maps a context to a channel that closes when the helper install
+	// running in it ends.
+	installs map[proto.RuntimeRemoteObjectID]chan struct{}
+}
+
+// lockInstall waits until no helper install runs in the context, then starts
+// one. The caller calls unlock when the install ends.
+func (c *jsHelperCache) lockInstall(ctx context.Context, id proto.RuntimeRemoteObjectID) (unlock func(), err error) {
+	for {
+		c.Lock()
+		running, busy := c.installs[id]
+		if !busy {
+			done := make(chan struct{})
+			if c.installs == nil {
+				c.installs = map[proto.RuntimeRemoteObjectID]chan struct{}{}
+			}
+			c.installs[id] = done
+			c.Unlock()
+			return func() {
+				c.Lock()
+				delete(c.installs, id)
+				c.Unlock()
+				close(done)
+			}, nil
+		}
+		c.Unlock()
+		select {
+		case <-running:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// candidates lists the cached contexts not yet checked: preferred first, then
+// the last match, then the rest by ID. The caller holds the lock.
+func (c *jsHelperCache) candidates(checked map[proto.RuntimeRemoteObjectID]bool, preferred proto.RuntimeRemoteObjectID) []proto.RuntimeRemoteObjectID {
+	rank := func(id proto.RuntimeRemoteObjectID) int {
+		switch id {
+		case preferred:
+			return 0
+		case c.last:
+			return 1
+		}
+		return 2
+	}
+	var list []proto.RuntimeRemoteObjectID
+	for id := range c.contexts {
+		if !checked[id] {
+			list = append(list, id)
+		}
+	}
+	slices.SortFunc(list, func(a, b proto.RuntimeRemoteObjectID) int {
+		return cmp.Or(cmp.Compare(rank(a), rank(b)), cmp.Compare(a, b))
+	})
+	return list
+}
+
+// use records a match and reports whether the context is still cached.
+func (c *jsHelperCache) use(id proto.RuntimeRemoteObjectID) bool {
+	c.Lock()
+	defer c.Unlock()
+	if _, ok := c.contexts[id]; !ok {
+		return false
+	}
+	c.last = id
+	return true
+}
+
+// has reports whether the context is cached.
+func (c *jsHelperCache) has(id proto.RuntimeRemoteObjectID) bool {
+	c.Lock()
+	defer c.Unlock()
+	_, ok := c.contexts[id]
+	return ok
+}
+
+// remove uncaches a context and the frames that resolved to it. The caller
+// holds the lock.
+func (c *jsHelperCache) remove(id proto.RuntimeRemoteObjectID) {
+	delete(c.contexts, id)
+	maps.DeleteFunc(c.frames, func(_ proto.PageFrameID, window proto.RuntimeRemoteObjectID) bool {
+		return window == id
+	})
+}
+
+// frameWindow returns the window the frame's views last resolved; empty when unknown.
+func (c *jsHelperCache) frameWindow(frameID proto.PageFrameID) proto.RuntimeRemoteObjectID {
+	c.Lock()
+	defer c.Unlock()
+	return c.frames[frameID]
+}
+
+// setFrameWindow records the window of the frame while that context is cached.
+func (c *jsHelperCache) setFrameWindow(frameID proto.PageFrameID, id proto.RuntimeRemoteObjectID) {
+	c.Lock()
+	defer c.Unlock()
+	if _, ok := c.contexts[id]; !ok {
+		return
+	}
+	if c.frames == nil {
+		c.frames = map[proto.PageFrameID]proto.RuntimeRemoteObjectID{}
+	}
+	c.frames[frameID] = id
 }
 
 // EvalOptions for Page.Evaluate.
@@ -162,12 +276,23 @@ func (p *Page) Evaluate(opts *EvalOptions) (res *proto.RuntimeRemoteObject, err 
 }
 
 func (p *Page) evaluate(opts *EvalOptions) (*proto.RuntimeRemoteObject, error) {
-	args, err := p.formatArgs(opts)
+	// The helper arguments and a call on the page window use one resolution of
+	// the window, so a concurrent reset cannot place them in different contexts.
+	var jsCtxID proto.RuntimeRemoteObjectID
+	if opts.ThisObj == nil || slices.ContainsFunc(opts.JSArgs, isJSHelper) {
+		var err error
+		jsCtxID, err = p.getJSCtxID()
+		if err != nil {
+			return nil, err
+		}
+	}
+	args, err := p.formatArgs(opts, jsCtxID)
 	if err != nil {
 		return nil, err
 	}
 
 	req := proto.RuntimeCallFunctionOn{
+		ObjectID:            jsCtxID,
 		AwaitPromise:        new(opts.AwaitPromise),
 		ReturnByValue:       new(opts.ByValue),
 		UserGesture:         new(opts.UserGesture),
@@ -175,12 +300,7 @@ func (p *Page) evaluate(opts *EvalOptions) (*proto.RuntimeRemoteObject, error) {
 		Arguments:           args,
 	}
 
-	if opts.ThisObj == nil {
-		req.ObjectID, err = p.getJSCtxID()
-		if err != nil {
-			return nil, err
-		}
-	} else {
+	if opts.ThisObj != nil {
 		req.ObjectID = opts.ThisObj.ObjectID
 	}
 
@@ -192,6 +312,9 @@ func (p *Page) evaluate(opts *EvalOptions) (*proto.RuntimeRemoteObject, error) {
 	if res.ExceptionDetails != nil {
 		return nil, &EvalError{res.ExceptionDetails}
 	}
+	if res.Result == nil {
+		return nil, missingField("RuntimeCallFunctionOnResult", "result")
+	}
 
 	return res.Result, nil
 }
@@ -199,16 +322,33 @@ func (p *Page) evaluate(opts *EvalOptions) (*proto.RuntimeRemoteObject, error) {
 // Expose fn to the page's window object with the name. The exposure survives reloads.
 // Go errors and results that cannot be JSON-encoded reject the JavaScript promise
 // with an error message. Replies are delivered in the frame that called the function.
+// If fn or the encoding of its result panics, or fn ends its goroutine with
+// runtime.Goexit, such as through a failing Must helper, the promise rejects with
+// the message "exposed function failed" and later calls are still handled. The
+// page does not receive the panic value.
+// A non-nil onError receives the errors of calls that fn did not return: a
+// *TryError holding the panic value, ErrExposedFunctionExited for runtime.Goexit,
+// and an error wrapping the encoding error of a result that cannot be JSON-encoded.
+// onError runs on the goroutine that calls fn, after the call's reply is queued,
+// so later calls wait for it. A panic in onError is not recovered.
+// Calls run fn one at a time in the order the page made them, and replies reach
+// the page in that order. fn can start the next call before the page receives the
+// previous reply. Replies that wait for the page are delivered in batches, so
+// several promises can resolve in the same task. Calls that fn has not handled
+// and replies that the page has not received, including fn's encoded results,
+// stay in this process's memory until then, so a page that keeps making calls
+// faster than it receives the replies increases memory use.
 // Call the idempotent stop function to remove the binding and reload script.
 // Cleanup has its own bounded context. A Go callback already running is not interrupted.
-func (p *Page) Expose(name string, fn func(jsonvalue.Value) (any, error)) (stop func() error, err error) {
+func (p *Page) Expose(name string, fn func(jsonvalue.Value) (any, error), onError func(error)) (stop func() error, err error) {
 	releaseRuntime, err := p.browser.Context(p.ctx).acquireDomain(p.SessionID, proto.RuntimeEnable{})
 	if err != nil {
 		return nil, err
 	}
 	bind := "_" + utils.RandString(8)
 	events, cancel := p.WithCancel()
-	messages := events.Event()
+	bindingMethod := (proto.RuntimeBindingCalled{}).ProtoEvent()
+	messages := p.event.SubscribeFilter(events.ctx, func(msg *Message) bool { return msg.Method == bindingMethod })
 	restoreRuntime := func() error {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(p.ctx), 5*time.Second)
 		defer cancel()
@@ -242,45 +382,15 @@ func (p *Page) Expose(name string, fn func(jsonvalue.Value) (any, error)) (stop 
 		}
 	}()
 
+	// A separate sender delivers replies in call order, so a slow reply round
+	// trip does not hold later calls. Replies that queue meanwhile share the
+	// next round trip.
+	replies := &exposeReplies{wake: make(chan struct{}, 1)}
+	go replies.send(events)
+
 	// Subscribe before installing a callable function in the document.
-	go func() {
-		defer cancel()
-		for message := range messages {
-			var e proto.RuntimeBindingCalled
-			if !message.Load(&e) || e.Name != bind {
-				continue
-			}
-			var payload struct {
-				Request  jsonvalue.Value `json:"req"`
-				Callback string          `json:"cb"`
-			}
-			if json.Unmarshal([]byte(e.Payload), &payload) != nil || !strings.HasPrefix(payload.Callback, bind+"_cb") {
-				continue
-			}
-			result, callErr := fn(payload.Request)
-			data, marshalErr := json.Marshal(result)
-			if marshalErr != nil {
-				data = []byte("null")
-				callErr = errors.Join(callErr, fmt.Errorf("encode exposed function response: %w", marshalErr))
-			}
-			var errorMessage *string
-			if callErr != nil {
-				errorMessage = new(callErr.Error())
-			}
-			_, _ = proto.RuntimeCallFunctionOn{
-				ExecutionContextID: e.ExecutionContextID,
-				FunctionDeclaration: `function(callback, result, error) {
-				const resolve = globalThis[callback];
-				if (typeof resolve === "function") resolve(result, error);
-			}`,
-				Arguments: []*proto.RuntimeCallArgument{
-					{Value: jsonvalue.New(payload.Callback)},
-					{Value: jsonvalue.New(data)},
-					{Value: jsonvalue.New(errorMessage)},
-				},
-			}.Call(events)
-		}
-	}()
+	handler := &exposeHandler{bind: bind, fn: fn, onError: onError, messages: messages, replies: replies, cancel: cancel, decoding: p.GetDecoding()}
+	go handler.serve(nil)
 
 	bindingAdded = true
 	if err = (proto.RuntimeAddBinding{Name: bind}).Call(p); err != nil {
@@ -294,11 +404,224 @@ func (p *Page) Expose(name string, fn func(jsonvalue.Value) (any, error)) (stop 
 	if err != nil {
 		return nil, err
 	}
+	if lenientMissing(p.GetDecoding(), script.Identifier) {
+		// Without the identifier, stop could not remove the script.
+		return nil, missingField("PageAddScriptToEvaluateOnNewDocumentResult", "identifier")
+	}
 	scriptID = script.Identifier
 	return cleanup, nil
 }
 
-func (p *Page) formatArgs(opts *EvalOptions) ([]*proto.RuntimeCallArgument, error) {
+// ErrExposedFunctionExited means an exposed function ended its goroutine with
+// runtime.Goexit, such as through a WithPanic fail function, instead of returning.
+var ErrExposedFunctionExited = errors.New("rod: exposed function exited without returning")
+
+// exposeFailure rejects a call whose function did not return. The page gets no
+// details of the failure.
+const exposeFailure = "exposed function failed"
+
+// exposeHandler runs an exposed function for each binding call, one at a time
+// in the order the page made the calls, and queues the replies.
+type exposeHandler struct {
+	bind     string
+	fn       func(jsonvalue.Value) (any, error)
+	onError  func(error)
+	messages <-chan *Message
+	replies  *exposeReplies
+	cancel   context.CancelFunc
+	decoding proto.Decoding
+}
+
+// serve reports exited, when it is not nil, and then handles binding calls
+// until the subscription ends. If fn or onError ends the goroutine with
+// runtime.Goexit, serve rejects the call being handled and continues on a new
+// goroutine.
+func (h *exposeHandler) serve(exited error) {
+	var contextID proto.RuntimeExecutionContextID
+	var callback string
+	handling, returned := false, false
+	defer func() {
+		if returned {
+			h.cancel()
+			return
+		}
+		// runtime.Goexit skips Try's recover but still runs deferred calls.
+		var err error
+		if handling {
+			h.reply(contextID, callback, nil, new(exposeFailure))
+			err = ErrExposedFunctionExited
+		}
+		go h.serve(err)
+	}()
+	h.report(exited)
+	for message := range h.messages {
+		// An undecodable binding call names no callback to answer, and one
+		// without an execution context, which lenient decoding leaves zero,
+		// names no context to answer in; skip them.
+		var e proto.RuntimeBindingCalled
+		if ok, _ := message.Load(&e); !ok || e.Name != h.bind || lenientMissing(h.decoding, e.ExecutionContextID) {
+			continue
+		}
+		var payload struct {
+			Request  jsonvalue.Value `json:"req"`
+			Callback string          `json:"cb"`
+		}
+		if json.Unmarshal([]byte(e.Payload), &payload) != nil || !exposeCallback(h.bind, payload.Callback) {
+			continue
+		}
+		contextID, callback, handling = e.ExecutionContextID, payload.Callback, true
+		result, errorMessage, err := exposeCall(h.fn, payload.Request)
+		handling = false
+		h.reply(contextID, callback, result, errorMessage)
+		h.report(err)
+	}
+	returned = true
+}
+
+// reply queues the [callback, result, error] reply of a call. A nil result is
+// null.
+func (h *exposeHandler) reply(contextID proto.RuntimeExecutionContextID, callback string, result json.RawMessage, errorMessage *string) {
+	data, err := json.Marshal([]any{callback, result, errorMessage})
+	if err != nil {
+		return // Unreachable: every part is a string, null or encoded JSON.
+	}
+	h.replies.push(exposeReply{contextID: contextID, data: data})
+}
+
+func (h *exposeHandler) report(err error) {
+	if err != nil && h.onError != nil {
+		h.onError(err)
+	}
+}
+
+// exposeCall runs fn for one call and returns its encoded result and the error
+// message for the page. A result that cannot be encoded rejects the call and
+// returns the encoding error. A panic in fn, or while encoding its result or
+// error, rejects the call with exposeFailure and returns a *TryError.
+func exposeCall(fn func(jsonvalue.Value) (any, error), request jsonvalue.Value) (result json.RawMessage, errorMessage *string, err error) {
+	panicErr := Try(func() {
+		value, callErr := fn(request)
+		var encodeErr error
+		if result, encodeErr = json.Marshal(value); encodeErr != nil {
+			result = nil
+			err = fmt.Errorf("encode exposed function response: %w", encodeErr)
+			callErr = errors.Join(callErr, err)
+		}
+		if callErr != nil {
+			errorMessage = new(callErr.Error())
+		}
+	})
+	if panicErr != nil {
+		return nil, new(exposeFailure), panicErr
+	}
+	return result, errorMessage, err
+}
+
+// exposeReplyBatchBytes bounds the encoded replies in one Runtime.callFunctionOn,
+// well below the browser's limit for a protocol message. A larger reply is sent
+// alone.
+const exposeReplyBatchBytes = 32 << 20
+
+// exposeReplyJS resolves a batch of [callback, result, error] replies in order.
+// A page callback that throws does not prevent the later replies.
+const exposeReplyJS = `function(replies) {
+	for (let i = 0; i < replies.length; i++) {
+		try {
+			const resolve = globalThis[replies[i][0]];
+			if (typeof resolve === "function") resolve(replies[i][1], replies[i][2]);
+		} catch {}
+	}
+}`
+
+// exposeCallback reports whether callback has the form that the page-side
+// function of binding creates: the binding, "_cb" and a decimal counter.
+func exposeCallback(binding, callback string) bool {
+	counter, ok := strings.CutPrefix(callback, binding+"_cb")
+	if !ok || counter == "" || len(counter) > 20 {
+		return false
+	}
+	for _, c := range []byte(counter) {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// exposeReply is one encoded [callback, result, error] reply of an exposed
+// function.
+type exposeReply struct {
+	contextID proto.RuntimeExecutionContextID
+	data      json.RawMessage
+}
+
+// exposeReplies is the ordered, lossless queue between an exposed function and
+// the goroutine that delivers its replies.
+type exposeReplies struct {
+	mu    sync.Mutex
+	queue []exposeReply
+	wake  chan struct{}
+}
+
+func (r *exposeReplies) push(reply exposeReply) {
+	r.mu.Lock()
+	r.queue = append(r.queue, reply)
+	r.mu.Unlock()
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
+}
+
+// send delivers the queued replies until p's context ends. Replies that queue
+// while a delivery is in flight go out together in the next one.
+func (r *exposeReplies) send(p *Page) {
+	for {
+		select {
+		case <-p.ctx.Done():
+			return
+		case <-r.wake:
+		}
+		r.mu.Lock()
+		queue := r.queue
+		r.queue = nil
+		r.mu.Unlock()
+		for len(queue) > 0 && p.ctx.Err() == nil {
+			n := exposeReplyBatchLen(queue)
+			batch := make([]json.RawMessage, n)
+			for i, reply := range queue[:n] {
+				batch[i] = reply.data
+			}
+			_, _ = proto.RuntimeCallFunctionOn{
+				ExecutionContextID:  queue[0].contextID,
+				FunctionDeclaration: exposeReplyJS,
+				Arguments:           []*proto.RuntimeCallArgument{{Value: jsonvalue.New(batch)}},
+			}.Call(p)
+			// Release the delivered replies before the next round trip.
+			clear(queue[:n])
+			queue = queue[n:]
+		}
+	}
+}
+
+// exposeReplyBatchLen returns how many leading replies go in one delivery: the
+// first, and then those for the same execution context that keep the batch
+// within exposeReplyBatchBytes.
+func exposeReplyBatchLen(queue []exposeReply) int {
+	size := len(queue[0].data)
+	n := 1
+	for ; n < len(queue) && queue[n].contextID == queue[0].contextID; n++ {
+		size += len(queue[n].data) + 1 // One comma separates each reply.
+		if size > exposeReplyBatchBytes {
+			break
+		}
+	}
+	return n
+}
+
+// formatArgs converts the arguments of opts. Helpers are installed in the
+// context of the window jsCtxID.
+func (p *Page) formatArgs(opts *EvalOptions, jsCtxID proto.RuntimeRemoteObjectID) ([]*proto.RuntimeCallArgument, error) {
 	formatted := []*proto.RuntimeCallArgument{}
 	for _, arg := range opts.JSArgs {
 		if obj, ok := arg.(*proto.RuntimeRemoteObject); ok { // remote object
@@ -310,7 +633,7 @@ func (p *Page) formatArgs(opts *EvalOptions) ([]*proto.RuntimeCallArgument, erro
 				})
 			}
 		} else if obj, ok := arg.(*js.Function); ok { // js helper
-			id, err := p.ensureJSHelper(obj)
+			id, err := p.ensureJSHelper(jsCtxID, obj)
 			if err != nil {
 				return nil, err
 			}
@@ -323,59 +646,84 @@ func (p *Page) formatArgs(opts *EvalOptions) ([]*proto.RuntimeCallArgument, erro
 	return formatted, nil
 }
 
-// Check the doc of EvalHelper.
-func (p *Page) ensureJSHelper(fn *js.Function) (proto.RuntimeRemoteObjectID, error) {
-	jsCtxID, err := p.getJSCtxID()
+// isJSHelper reports whether an argument is a helper that formatArgs installs.
+func isJSHelper(arg any) bool {
+	_, ok := arg.(*js.Function)
+	return ok
+}
+
+// ensureJSHelper returns the handle of fn in the context of the window jsCtxID.
+// Missing helpers are installed with their dependencies into the functions
+// object of that context. Installs in one context run one at a time, so every
+// helper of a context uses the same functions object.
+func (p *Page) ensureJSHelper(jsCtxID proto.RuntimeRemoteObjectID, fn *js.Function) (proto.RuntimeRemoteObjectID, error) {
+	if id, has := p.getHelper(jsCtxID, fn.Name); has {
+		return id, nil
+	}
+
+	unlock, err := p.helpers.lockInstall(p.ctx, jsCtxID)
 	if err != nil {
 		return "", err
 	}
+	defer unlock()
 
-	fnID, has := p.getHelper(jsCtxID, js.Functions.Name)
+	functions, has := p.getHelper(jsCtxID, js.Functions.Name)
 	if !has {
-		res, err := proto.RuntimeCallFunctionOn{
+		functions, err = p.createHelper(jsCtxID, js.Functions.Name, proto.RuntimeCallFunctionOn{
 			ObjectID:            jsCtxID,
 			FunctionDeclaration: js.Functions.Definition,
-		}.Call(p)
+		})
 		if err != nil {
 			return "", err
 		}
-		fnID = res.Result.ObjectID
-		if !p.setHelper(jsCtxID, js.Functions.Name, fnID) {
-			return "", cdp.ErrCtxNotFound
-		}
 	}
+	return p.installJSHelper(jsCtxID, functions, fn)
+}
 
-	id, has := p.getHelper(jsCtxID, fn.Name)
-	if !has {
-		for _, dep := range fn.Dependencies {
-			_, err := p.ensureJSHelper(dep)
-			if err != nil {
-				return "", err
-			}
-		}
-
-		res, err := proto.RuntimeCallFunctionOn{
-			ObjectID:  jsCtxID,
-			Arguments: []*proto.RuntimeCallArgument{{ObjectID: fnID}},
-
-			FunctionDeclaration: fmt.Sprintf(
-				// we only need the object id, but the cdp will return the whole function string.
-				// So we override the toString to reduce the overhead.
-				"functions => { const f = functions.%s = %s; f.toString = () => 'fn'; return f }",
-				fn.Name, fn.Definition,
-			),
-		}.Call(p)
-		if err != nil {
+// installJSHelper installs fn and its dependencies into the functions object
+// of the context unless they are cached. The caller holds the install lock.
+func (p *Page) installJSHelper(jsCtxID, functions proto.RuntimeRemoteObjectID, fn *js.Function) (proto.RuntimeRemoteObjectID, error) {
+	if id, has := p.getHelper(jsCtxID, fn.Name); has {
+		return id, nil
+	}
+	for _, dep := range fn.Dependencies {
+		if _, err := p.installJSHelper(jsCtxID, functions, dep); err != nil {
 			return "", err
 		}
-
-		id = res.Result.ObjectID
-		if !p.setHelper(jsCtxID, fn.Name, id) {
-			return "", cdp.ErrCtxNotFound
-		}
 	}
+	return p.createHelper(jsCtxID, fn.Name, proto.RuntimeCallFunctionOn{
+		ObjectID:  jsCtxID,
+		Arguments: []*proto.RuntimeCallArgument{{ObjectID: functions}},
 
-	return id, nil
+		FunctionDeclaration: fmt.Sprintf(
+			// we only need the object id, but the cdp will return the whole function string.
+			// So we override the toString to reduce the overhead.
+			"functions => { const f = functions.%s = %s; f.toString = () => 'fn'; return f }",
+			fn.Name, fn.Definition,
+		),
+	})
+}
+
+// createHelper runs req, which returns a helper object, and caches the handle
+// under name while the context is cached.
+func (p *Page) createHelper(jsCtxID proto.RuntimeRemoteObjectID, name string, req proto.RuntimeCallFunctionOn) (proto.RuntimeRemoteObjectID, error) {
+	res, err := req.Call(p)
+	if err != nil {
+		return "", err
+	}
+	if res.ExceptionDetails != nil {
+		return "", &EvalError{res.ExceptionDetails}
+	}
+	if res.Result == nil {
+		return "", missingField("RuntimeCallFunctionOnResult", "result")
+	}
+	if res.Result.ObjectID == "" {
+		return "", fmt.Errorf("failed to create the js helper %s", name)
+	}
+	if !p.setHelper(jsCtxID, name, res.Result.ObjectID) {
+		return "", cdp.ErrCtxNotFound
+	}
+	return res.Result.ObjectID, nil
 }
 
 func (p *Page) getHelper(jsCtxID proto.RuntimeRemoteObjectID, name string) (proto.RuntimeRemoteObjectID, bool) {
@@ -410,12 +758,19 @@ func (p *Page) getJSCtxID() (proto.RuntimeRemoteObjectID, error) {
 		if err != nil {
 			return "", err
 		}
+		if obj.Result == nil {
+			return "", missingField("RuntimeEvaluateResult", "result")
+		}
+		if obj.Result.ObjectID == "" {
+			return "", errors.New("failed to get the window of the page")
+		}
 
 		*p.jsCtxID = obj.Result.ObjectID
 		p.helpers.Lock()
 		p.helpers.contexts = map[proto.RuntimeRemoteObjectID]map[string]proto.RuntimeRemoteObjectID{
 			*p.jsCtxID: {},
 		}
+		p.helpers.frames = nil
 		p.helpers.Unlock()
 		return *p.jsCtxID, nil
 	}
@@ -428,16 +783,20 @@ func (p *Page) getJSCtxID() (proto.RuntimeRemoteObjectID, error) {
 		return "", fmt.Errorf("%w: %s", ErrFrameContextChanged, p.FrameID)
 	}
 
-	obj, err := proto.DOMResolveNode{BackendNodeID: node.ContentDocument.BackendNodeID}.Call(p)
+	obj, err := resolveNode(p, proto.DOMResolveNode{BackendNodeID: node.ContentDocument.BackendNodeID})
 	if err != nil {
 		return "", p.frameContextError(err)
 	}
+	if obj.ObjectID == "" {
+		return "", fmt.Errorf("failed to resolve the document of frame %s", p.FrameID)
+	}
 
-	id, err := p.jsCtxIDByObjectID(obj.Object.ObjectID)
-	err = errors.Join(err, p.releaseObject(obj.Object))
+	id, err := p.jsCtxIDByObjectID(obj.ObjectID, p.helpers.frameWindow(p.FrameID))
+	err = errors.Join(err, p.releaseObject(obj))
 	if err != nil {
 		return "", err
 	}
+	p.helpers.setFrameWindow(p.FrameID, id)
 	*p.jsCtxID = id
 	return id, nil
 }
@@ -450,81 +809,100 @@ func (p *Page) frameContextError(err error) error {
 	return err
 }
 
+// currentJSCtxID returns the page's window without resolving it; empty when unset.
+// A reset uncaches the window, and resolution returns only cached or new windows,
+// so two equal reads mean the page used that window throughout.
+func (p *Page) currentJSCtxID() proto.RuntimeRemoteObjectID {
+	p.jsCtxLock.Lock()
+	defer p.jsCtxLock.Unlock()
+	return *p.jsCtxID
+}
+
 func (p *Page) unsetJSCtxID() {
 	p.jsCtxLock.Lock()
 	defer p.jsCtxLock.Unlock()
 
 	p.helpers.Lock()
-	delete(p.helpers.contexts, *p.jsCtxID)
+	p.helpers.remove(*p.jsCtxID)
 	p.helpers.Unlock()
 	*p.jsCtxID = ""
 }
 
-func (p *Page) jsCtxIDByObjectID(id proto.RuntimeRemoteObjectID) (_ proto.RuntimeRemoteObjectID, err error) {
-	res, err := proto.RuntimeCallFunctionOn{
-		ObjectID:            id,
-		FunctionDeclaration: `() => window`,
-	}.Call(p)
-	if err != nil {
-		return "", err
-	}
-	// CDP assigns a new handle every time window is returned, even in the same
-	// execution context. Compare the actual objects before retaining a context.
-	keep := false
+// isOtherJSContext reports Chrome's rejection of a call argument whose handle
+// belongs to an execution context other than the call target's.
+func isOtherJSContext(err error) bool {
+	protocolErr, ok := errors.AsType[*cdp.Error](err)
+	return ok && protocolErr.Code == -32000 &&
+		protocolErr.Message == "Argument should belong to the same JavaScript world as target object"
+}
+
+// jsCtxIDByObjectID returns the cached window of the execution context that owns
+// the object handle, checking the preferred context first. Chrome resolves a call
+// argument only within the target's own context, so each cached window costs one
+// call and no handle. An unknown context caches a window of its own.
+func (p *Page) jsCtxIDByObjectID(objID, preferred proto.RuntimeRemoteObjectID) (_ proto.RuntimeRemoteObjectID, err error) {
+	var window *proto.RuntimeRemoteObject
 	defer func() {
-		if !keep {
-			err = errors.Join(err, p.releaseObject(res.Result))
+		if window != nil {
+			err = errors.Join(err, p.releaseObject(window))
 		}
 	}()
 	checked := map[proto.RuntimeRemoteObjectID]bool{}
 	for {
 		p.helpers.Lock()
-		var candidates []proto.RuntimeRemoteObjectID
-		for cached := range p.helpers.contexts {
-			if !checked[cached] {
-				candidates = append(candidates, cached)
-			}
-		}
-		if len(candidates) == 0 {
+		candidates := p.helpers.candidates(checked, preferred)
+		if len(candidates) == 0 && window != nil {
+			// No other lookup cached this context while the window was created.
 			if p.helpers.contexts == nil {
 				p.helpers.contexts = map[proto.RuntimeRemoteObjectID]map[string]proto.RuntimeRemoteObjectID{}
 			}
-			id = res.Result.ObjectID
+			id := window.ObjectID
 			p.helpers.contexts[id] = map[string]proto.RuntimeRemoteObjectID{}
+			p.helpers.last = id
 			p.helpers.Unlock()
-			keep = true
+			window = nil
 			return id, nil
 		}
 		p.helpers.Unlock()
-		for _, cached := range candidates {
-			checked[cached] = true
-			match, err := (proto.RuntimeCallFunctionOn{
-				ObjectID: cached, FunctionDeclaration: `function(other) { return this === other }`,
-				Arguments:     []*proto.RuntimeCallArgument{{ObjectID: res.Result.ObjectID}},
-				ReturnByValue: new(true),
-			}).Call(p)
+		if len(candidates) == 0 {
+			res, err := proto.RuntimeCallFunctionOn{
+				ObjectID:            objID,
+				FunctionDeclaration: `() => window`,
+			}.Call(p)
 			if err != nil {
-				if errors.Is(err, cdp.ErrObjNotFound) || errors.Is(err, cdp.ErrCtxNotFound) {
-					p.helpers.Lock()
-					delete(p.helpers.contexts, cached)
-					p.helpers.Unlock()
-					continue
-				}
-				// CDP rejects arguments from another execution context before the
-				// function runs. Those windows need separate helper caches.
-				if protocolErr, ok := errors.AsType[*cdp.Error](err); ok && protocolErr.Code == -32000 &&
-					protocolErr.Message == "Argument should belong to the same JavaScript world as target object" {
-					continue
-				}
 				return "", err
 			}
-			if match.Result.Value.Bool() {
-				p.helpers.Lock()
-				_, valid := p.helpers.contexts[cached]
-				p.helpers.Unlock()
-				if valid {
+			if res.Result == nil {
+				return "", missingField("RuntimeCallFunctionOnResult", "result")
+			}
+			if res.Result.ObjectID == "" {
+				return "", fmt.Errorf("failed to get the window of remote object %s", objID)
+			}
+			window = res.Result
+			continue
+		}
+		for _, cached := range candidates {
+			checked[cached] = true
+			_, err := proto.RuntimeCallFunctionOn{
+				ObjectID:            cached,
+				FunctionDeclaration: `function() {}`,
+				Arguments:           []*proto.RuntimeCallArgument{{ObjectID: objID}},
+				ReturnByValue:       new(true),
+			}.Call(p)
+			switch {
+			case err == nil:
+				if p.helpers.use(cached) {
 					return cached, nil
 				}
+			case errors.Is(err, cdp.ErrCtxNotFound):
+				p.helpers.Lock()
+				p.helpers.remove(cached)
+				p.helpers.Unlock()
+			case isOtherJSContext(err), errors.Is(err, cdp.ErrObjNotFound):
+				// The object belongs to another context, or a caller released this
+				// window. Creating the object's window reports a missing object.
+			default:
+				return "", err
 			}
 		}
 	}

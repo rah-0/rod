@@ -212,11 +212,12 @@ func FuzzWebSocketFrame(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, frame []byte) {
-		// Advertised lengths must never cause allocation before payload arrives.
+		// Advertised lengths above the message limit must be rejected before
+		// their payload is allocated.
 		if len(frame) > 4096 {
 			return
 		}
-		ws := &WebSocket{r: bufio.NewReader(bytes.NewReader(frame))}
+		ws := &WebSocket{r: bufio.NewReader(bytes.NewReader(frame)), MaxMessageSize: 4096}
 		data, _ := ws.read()
 		if len(data) > 4096 {
 			t.Fatal("frame exceeded fuzz allocation bound")

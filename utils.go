@@ -37,25 +37,64 @@ type Message struct {
 	event any
 }
 
-// Load decodes a matching event into out. E is the concrete protocol event type.
+// lenientEvent is the event of a [Message] that Load decodes with
+// [proto.DecodeLenient]. It holds the last decoded event, or nil. Keeping the
+// mode in the event field instead of a new field keeps each message in a
+// smaller allocation size class.
+type lenientEvent struct{ event any }
+
+// newMessage returns the message of an event that a browser with the given
+// decoding received.
+func newMessage(session proto.TargetSessionID, method string, data json.RawMessage, decoding proto.Decoding) *Message {
+	msg := &Message{SessionID: session, Method: method, data: data}
+	if decoding == proto.DecodeLenient {
+		msg.event = lenientEvent{}
+	}
+	return msg
+}
+
+// Load decodes a matching event into out and reports whether out holds it.
+// E is the concrete protocol event type. A message for another method returns
+// false and a nil error. When the method matches but the parameters cannot be
+// decoded as E, Load returns false and the decoding error, leaving out unchanged.
+// Parameters are decoded with the [Browser.Decoding] of the browser that
+// received the event, [proto.DecodeStrict] by default, which returns an error
+// that wraps [*proto.MissingFieldError] for an event that lacks a field the
+// protocol requires.
 // Subscribers loading the same type share a cached decode and receive a shallow
 // copy. Treat referenced data, such as slices and nested pointers, as read-only.
-func (msg *Message) Load[E proto.Event](out *E) bool {
+func (msg *Message) Load[E proto.Event](out *E) (bool, error) {
 	if msg.Method != (*out).ProtoEvent() {
-		return false
+		return false, nil
 	}
 
 	msg.lock.Lock()
 	defer msg.lock.Unlock()
-	if cached, ok := msg.event.(E); ok {
-		*out = cached
-	} else {
-		var decoded E
-		utils.E(json.Unmarshal(msg.data, &decoded))
-		msg.event = decoded
-		*out = decoded
+	cached := msg.event
+	marked, lenient := cached.(lenientEvent)
+	if lenient {
+		cached = marked.event
 	}
-	return true
+	if event, ok := cached.(E); ok {
+		*out = event
+		return true, nil
+	}
+	decoding := proto.DecodeStrict
+	if lenient {
+		decoding = proto.DecodeLenient
+	}
+	var decoded E
+	if err := decoding.Unmarshal(msg.data, &decoded); err != nil {
+		return false, fmt.Errorf("rod: decode %s event: %w", msg.Method, err)
+	}
+	// Loading another type replaces the cached event but keeps the mode.
+	if lenient {
+		msg.event = lenientEvent{decoded}
+	} else {
+		msg.event = decoded
+	}
+	*out = decoded
+	return true, nil
 }
 
 // DefaultLogger for rod.
@@ -126,14 +165,30 @@ func (p Pool[T]) Cleanup(iteratee func(*T)) {
 
 var _ io.ReadCloser = &StreamReader{}
 
+// pdfChunkSize is the StreamReader.ChunkSize of readers returned by Page.PDF.
+const pdfChunkSize = 4 << 20
+
 // StreamReader for browser data stream.
 type StreamReader struct {
-	// Offset, when non-nil, is advanced by the number of bytes received from CDP.
+	// Offset, when non-nil, is the stream position of the next byte Read returns.
+	// Read advances it by the number of bytes returned. Assigning Offset or
+	// changing its value before a Read discards buffered data and reads from there.
 	Offset *int
+
+	// ChunkSize is the minimum number of bytes each IO.read requests. Read
+	// requests the larger of ChunkSize and len(p) and keeps data beyond p for
+	// later reads, saving round trips for small buffers. The browser answers at
+	// once for complete data, such as PDF output or a blob, but for a response
+	// body still loading, such as a Fetch.takeResponseBodyAsStream stream, only
+	// when the requested size arrives or the body ends. Each response encodes up
+	// to the requested size as base64 in one CDP message. Zero requests len(p).
+	ChunkSize int
 
 	c      proto.Client
 	handle proto.IOStreamHandle
-	buf    bytes.Buffer
+	buf    []byte // received data not yet returned by Read
+	pos    int    // stream position of buf[0]
+	synced *int   // Offset whose value matches pos
 	eof    bool
 }
 
@@ -149,37 +204,62 @@ func (sr *StreamReader) Read(p []byte) (n int, err error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	if sr.buf.Len() > 0 {
-		return sr.buf.Read(p)
+	if sr.Offset != nil && (sr.Offset != sr.synced || *sr.Offset != sr.pos) {
+		sr.buf, sr.pos, sr.eof = nil, *sr.Offset, false
 	}
-	if sr.eof {
-		return 0, io.EOF
-	}
-	res, err := proto.IORead{
-		Handle: sr.handle,
-		Offset: sr.Offset,
-		Size:   new(len(p)),
-	}.Call(sr.c)
-	if err != nil {
-		return 0, err
-	}
-
-	bin := []byte(res.Data)
-	if res.Base64Encoded {
-		bin, err = base64.StdEncoding.DecodeString(res.Data)
-		if err != nil {
+	sr.synced = sr.Offset
+	if len(sr.buf) == 0 && !sr.eof {
+		if err := sr.fill(max(len(p), sr.ChunkSize)); err != nil {
 			return 0, err
 		}
 	}
-	if sr.Offset != nil {
-		*sr.Offset += len(bin)
-	}
-	sr.eof = res.EOF
-	_, _ = sr.buf.Write(bin)
-	if sr.buf.Len() == 0 && !sr.eof {
+	if len(sr.buf) == 0 {
+		if sr.eof {
+			return 0, io.EOF
+		}
 		return 0, nil
 	}
-	return sr.buf.Read(p)
+	n = copy(p, sr.buf)
+	sr.buf = sr.buf[n:]
+	if len(sr.buf) == 0 {
+		sr.buf = nil
+	}
+	sr.pos += n
+	if sr.Offset != nil {
+		*sr.Offset = sr.pos
+	}
+	return n, nil
+}
+
+// fill replaces the empty buffer with up to size bytes of the stream.
+func (sr *StreamReader) fill(size int) error {
+	req := proto.IORead{Handle: sr.handle, Size: new(size)}
+	if sr.Offset != nil {
+		req.Offset = new(sr.pos)
+	}
+	res, err := req.Call(sr.c)
+	if err != nil {
+		return err
+	}
+
+	var bin []byte
+	if res.Base64Encoded {
+		bin, err = base64.StdEncoding.DecodeString(res.Data)
+		if err != nil {
+			return err
+		}
+	} else {
+		bin = []byte(res.Data)
+	}
+	if len(bin) == 0 && !res.EOF {
+		// Lenient decoding leaves a result without data and eof empty and
+		// false, and reading on would never reach the end.
+		if c, ok := sr.c.(proto.Decodable); ok && c.GetDecoding() == proto.DecodeLenient {
+			return missingField("IOReadResult", "eof")
+		}
+	}
+	sr.buf, sr.eof = bin, res.EOF
+	return nil
 }
 
 // Close the stream, discard any temporary backing storage.
@@ -263,16 +343,4 @@ func mustToJSONForDev(value any) string {
 	utils.E(enc.Encode(value))
 
 	return buf.String()
-}
-
-// https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/Data_URIs
-var regDataURI = regexp.MustCompile(`\Adata:(.+?)?(;base64)?,`)
-
-func parseDataURI(uri string) (string, []byte) {
-	matches := regDataURI.FindStringSubmatch(uri)
-	l := len(matches[0])
-	contentType := matches[1]
-
-	bin, _ := base64.StdEncoding.DecodeString(uri[l:])
-	return contentType, bin
 }

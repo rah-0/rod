@@ -12,4 +12,6 @@ go test ./lib/assets/...
 
 The monitor checks response status and retries polling after request, JSON, or
 rendering failures. Its polling behavior test requires Node.js; target data is
-rendered using DOM text properties.
+rendered using DOM text properties. Monitor pages request the API and
+screenshots with relative URLs, so they stay below the access-token path that
+`Browser.ServeMonitor` returns.

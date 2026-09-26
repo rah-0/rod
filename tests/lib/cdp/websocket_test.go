@@ -2,6 +2,7 @@ package cdp_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,23 @@ func TestWebSocketLargePayload(t *testing.T) {
 	g.Gt(len(res), size) // 2MB
 }
 
+func TestWebSocketMessageSizeLimit(t *testing.T) {
+	g := setup(t)
+
+	ctx := g.Context()
+	client, id := newPageWith(ctx, g, &cdp.WebSocket{MaxMessageSize: 64 * 1024})
+
+	_, err := client.Call(ctx, id, "Runtime.evaluate", map[string]any{
+		"expression":    `"a".repeat(1024 * 1024)`,
+		"returnByValue": true,
+	})
+	g.True(errors.Is(err, cdp.ErrWebSocketMessageTooLarge))
+
+	// The oversized response terminates the connection for every caller.
+	_, err = client.Call(ctx, "", "Browser.getVersion", nil)
+	g.True(errors.Is(err, cdp.ErrWebSocketMessageTooLarge))
+}
+
 func ConcurrentCall(t *testing.T) {
 	t.Helper()
 
@@ -53,6 +71,10 @@ func ConcurrentCall(t *testing.T) {
 }
 
 func newPage(ctx context.Context, g testutil.G) (*cdp.Client, string) {
+	return newPageWith(ctx, g, &cdp.WebSocket{})
+}
+
+func newPageWith(ctx context.Context, g testutil.G, ws *cdp.WebSocket) (*cdp.Client, string) {
 	l := launcher.New()
 	g.Cleanup(func() {
 		l.Kill()
@@ -60,7 +82,8 @@ func newPage(ctx context.Context, g testutil.G) (*cdp.Client, string) {
 	})
 	u := l.MustLaunch()
 
-	client := cdp.New().Start(cdp.MustConnectWS(u))
+	g.E(ws.Connect(ctx, u, nil))
+	client := cdp.New().Start(ws)
 
 	go func() {
 		for range client.Event() {

@@ -2,6 +2,7 @@ package cdp
 
 import (
 	"bufio"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -53,6 +54,34 @@ func BenchmarkWebSocketRead(b *testing.B) {
 				}
 				if len(message) != len(payload) {
 					b.Fatalf("message size = %d, want %d", len(message), len(payload))
+				}
+			}
+		})
+	}
+}
+
+type discardConn struct{ frameConn }
+
+func (*discardConn) Write(p []byte) (int, error) { return len(p), nil }
+
+// BenchmarkWebSocketSend measures client frame construction, including masking.
+func BenchmarkWebSocketSend(b *testing.B) {
+	for _, size := range []int{64, 1024, 32 * 1024, 1024 * 1024} {
+		name := strconv.Itoa(size) + "B"
+		if size >= 1024*1024 {
+			name = strconv.Itoa(size/(1024*1024)) + "MiB"
+		} else if size >= 1024 {
+			name = strconv.Itoa(size/1024) + "KiB"
+		}
+		b.Run(name, func(b *testing.B) {
+			payload := []byte(strings.Repeat("x", size))
+			ws := &WebSocket{conn: &discardConn{}}
+			b.SetBytes(int64(size))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if err := ws.Send(payload); err != nil {
+					b.Fatal(err)
 				}
 			}
 		})

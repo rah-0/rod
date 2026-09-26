@@ -1018,10 +1018,10 @@ type RuntimeGetHeapUsageResult struct {
 	// TotalSize Allocated JavaScript heap size in bytes.
 	TotalSize float64 `json:"totalSize"`
 
-	// EmbedderHeapUsedSize Used size in bytes in the embedder's garbage-collected heap.
+	// EmbedderHeapUsedSize (optional in older browsers) Used size in bytes in the embedder's garbage-collected heap.
 	EmbedderHeapUsedSize float64 `json:"embedderHeapUsedSize"`
 
-	// BackingStorageSize Size in bytes of backing storage for array buffers and external strings.
+	// BackingStorageSize (optional in older browsers) Size in bytes of backing storage for array buffers and external strings.
 	BackingStorageSize float64 `json:"backingStorageSize"`
 }
 

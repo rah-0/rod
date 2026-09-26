@@ -3,7 +3,6 @@ package proto
 
 import (
 	"context"
-	"encoding/json"
 	"reflect"
 	"strings"
 )
@@ -48,7 +47,10 @@ func ParseMethodName(method string) (domain, name string) {
 	return arr[0], arr[1]
 }
 
-// call method with request and response containers.
+// call method with request and response containers. The response is decoded
+// with the [Decoding] of c when it is [Decodable], and otherwise with
+// [DecodeStrict], so a result that lacks a required field returns a
+// [*MissingFieldError].
 func call(method string, req, res any, c Client) error {
 	ctx := context.Background()
 	if cta, ok := c.(Contextable); ok {
@@ -67,5 +69,9 @@ func call(method string, req, res any, c Client) error {
 	if res == nil {
 		return nil
 	}
-	return json.Unmarshal(bin, res)
+	mode := DecodeStrict
+	if decodable, ok := c.(Decodable); ok {
+		mode = decodable.GetDecoding()
+	}
+	return mode.Unmarshal(bin, res)
 }

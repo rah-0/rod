@@ -105,7 +105,7 @@ func replaceOutputsWithRename(dir string, files map[string][]byte, rename func(s
 		}
 	}
 	for name, data := range files {
-		if name == schemaOutput || name == provenanceOutput {
+		if name == schemaOutput || name == provenanceOutput || name == compatibilityOutput {
 			path := filepath.Join(dir, name)
 			if parent, err := os.Lstat(filepath.Dir(path)); err == nil && !parent.IsDir() {
 				return fmt.Errorf("refusing non-directory metadata path %s", filepath.Dir(path))

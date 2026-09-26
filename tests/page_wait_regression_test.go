@@ -37,12 +37,14 @@ func TestPageWaitStablePreservesLaterError(t *testing.T) {
 	g := setup(t)
 	p := g.newPage(g.blank()).Timeout(5 * time.Second).MustWaitLoad()
 	defer p.CancelTimeout()
-	injected := errors.New("second DOM snapshot failed")
-	g.mc.stub(2, proto.DOMSnapshotCaptureSnapshot{}, func(StubSend) (jsonvalue.Value, error) {
+	injected := errors.New("DOM stability wait failed")
+	g.stubDOMStableStart(func(send StubSend) (jsonvalue.Value, error) {
+		// Fail after the page starts observing.
+		_, _ = send()
 		return jsonvalue.New(nil), injected
 	})
 	if err := p.WaitStable(100 * time.Millisecond); !errors.Is(err, injected) {
-		t.Fatalf("WaitStable lost the later snapshot error: %v", err)
+		t.Fatalf("WaitStable lost the later DOM wait error: %v", err)
 	}
 }
 

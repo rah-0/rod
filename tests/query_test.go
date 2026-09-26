@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/internal/testutil"
 	"github.com/rah-0/rod/lib/cdp"
 	"github.com/rah-0/rod/lib/defaults"
 	"github.com/rah-0/rod/lib/jsonvalue"
@@ -360,8 +362,12 @@ func TestElementTracing(t *testing.T) {
 		g.browser.Logger(rod.DefaultLogger)
 	}()
 
+	// The query finds its own trace overlay while the overlay is displayed.
 	p := g.page.MustNavigate(g.srcFile("fixtures/click.html"))
-	g.Eq(`rod.element("code") html`, p.MustElement("html").MustElement("code").MustText())
+	overlay := p.MustElement("html").MustElementR("div", `^rod\.elementR\(`)
+	g.Eq(`rod.elementR("div","^rod\\.elementR\\(") html`, overlay.MustText())
+	g.Eq(1, overlay.MustEval(`() => this.querySelectorAll('*').length`).Int())
+	g.Eq("monospace", overlay.MustEval(`() => this.firstElementChild.style.fontFamily`).Str())
 }
 
 func TestPageElementByJS(t *testing.T) {
@@ -395,15 +401,19 @@ func TestPageElementsByJS(t *testing.T) {
 	_, err = p.ElementsByJS(rod.Eval(`() => [document.body]`))
 	g.Err(err)
 
+	// A call on an arbitrary object needs a context lookup, whose failure is returned.
+	document, err := p.Evaluate(rod.Eval(`() => document`).ByObject())
+	g.E(err)
 	injected := errors.New("element context lookup failed")
 	g.mc.setCall(func(ctx context.Context, session, method string, params any) ([]byte, error) {
-		if request, ok := params.(proto.RuntimeCallFunctionOn); ok && request.FunctionDeclaration == `() => window` {
+		if request, ok := params.(proto.RuntimeCallFunctionOn); ok &&
+			request.FunctionDeclaration == `function() {}` && len(request.Arguments) == 1 {
 			return nil, injected
 		}
 		return g.mc.principal.Call(ctx, session, method, params)
 	})
 	defer g.mc.resetCall()
-	_, err = p.Elements("button")
+	_, err = p.ElementsByJS(rod.Eval(`function() { return this.querySelectorAll('button') }`).This(document))
 	if !errors.Is(err, injected) {
 		t.Fatalf("element query error = %v, want context lookup error", err)
 	}
@@ -426,4 +436,45 @@ func TestPageElementMaxRetry(t *testing.T) {
 	s := func() utils.Sleeper { return utils.CountSleeper(5) }
 	_, err := page.Sleeper(s).Element("not-exists")
 	g.Is(err, &utils.MaxSleepCountError{})
+}
+
+func TestPagesOthers(t *testing.T) {
+	g := testutil.New(t)
+
+	list := rod.Pages{}
+	g.Nil(list.First())
+	g.Nil(list.Last())
+
+	list = append(list, &rod.Page{})
+
+	g.NotNil(list.First())
+	g.NotNil(list.Last())
+}
+
+func TestElementsOthers(t *testing.T) {
+	g := testutil.New(t)
+
+	list := rod.Elements{}
+	g.Nil(list.First())
+	g.Nil(list.Last())
+}
+
+func TestDefaultSleeperBackoff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		sleep := rod.DefaultSleeper()
+		previous := 10 * time.Millisecond
+		for range 10 {
+			start := time.Now()
+			if err := sleep(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			got := time.Since(start)
+			low := min(previous*19/10, time.Second)
+			high := min(previous*21/10, time.Second)
+			if got < low || got > high {
+				t.Fatalf("sleep = %s, want between %s and %s", got, low, high)
+			}
+			previous = got
+		}
+	})
 }

@@ -65,7 +65,10 @@ func run(ctx context.Context, output io.Writer) (err error) {
 	}
 
 	// Subscribe before clicking. The helper waits for completion and names the
-	// saved file by its download GUID, independently of SuggestedFilename.
+	// saved file by its download GUID, independently of SuggestedFilename. The
+	// wait rejects a GUID that is not a single file name, so joining it with the
+	// directory cannot reach another path. Use a private directory, such as one
+	// from os.MkdirTemp, so other local users cannot read or replace the file.
 	wait, err := browser.WaitDownload(directory)
 	if err != nil {
 		return err

@@ -14,7 +14,9 @@ import (
 	"runtime"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/rah-0/rod"
@@ -549,7 +551,7 @@ func TestPageWaitDOMStable(t *testing.T) {
 	{
 		g.Panic(func() {
 			p := g.page.MustNavigate(g.srcFile("fixtures/page-wait-stable.html"))
-			g.mc.stubErr(1, proto.DOMSnapshotCaptureSnapshot{})
+			g.stubDOMStableStartErr()
 			p.MustWaitDOMStable()
 		})
 	}
@@ -557,7 +559,7 @@ func TestPageWaitDOMStable(t *testing.T) {
 	{
 		g.Panic(func() {
 			p := g.page.MustNavigate(g.srcFile("fixtures/page-wait-stable.html"))
-			g.mc.stubErr(2, proto.DOMSnapshotCaptureSnapshot{})
+			g.mc.stubErr(1, proto.RuntimeReleaseObject{})
 			p.MustWaitDOMStable()
 		})
 	}
@@ -571,11 +573,11 @@ func TestPageWaitStable(t *testing.T) {
 
 	g.Panic(func() {
 		g.mc.setCall(func(ctx context.Context, sessionID, method string, params any) ([]byte, error) {
-			switch method {
-			case (proto.DOMSnapshotCaptureSnapshot{}).ProtoReq():
+			switch {
+			case isDOMStableStart(params):
 				utils.Sleep(0.3)
 				return nil, errors.New("error")
-			case (proto.RuntimeCallFunctionOn{}).ProtoReq():
+			case isHelperCall(params, "waitLoad"):
 				return nil, errors.New("error")
 			}
 
@@ -587,10 +589,10 @@ func TestPageWaitStable(t *testing.T) {
 	})
 	g.Panic(func() {
 		g.mc.setCall(func(ctx context.Context, sessionID, method string, params any) ([]byte, error) {
-			switch method {
-			case (proto.DOMSnapshotCaptureSnapshot{}).ProtoReq():
+			switch {
+			case isDOMStableStart(params):
 				return nil, errors.New("error")
-			case (proto.RuntimeCallFunctionOn{}).ProtoReq():
+			case isHelperCall(params, "waitLoad"):
 				utils.Sleep(0.3)
 				return nil, errors.New("error")
 			}
@@ -777,12 +779,12 @@ func TestScreenshotFullPage(t *testing.T) {
 		p.MustScreenshotFullPage()
 	})
 
-	g.Panic(func() {
-		g.mc.stub(1, proto.PageGetLayoutMetrics{}, func(_ StubSend) (jsonvalue.Value, error) {
-			return jsonvalue.New(proto.PageGetLayoutMetricsResult{}), nil
-		})
-		p.MustScreenshotFullPage()
+	// Layout metrics without the CSS content size are malformed protocol data.
+	g.mc.stub(1, proto.PageGetLayoutMetrics{}, func(_ StubSend) (jsonvalue.Value, error) {
+		return jsonvalue.New(layoutMetrics(&proto.PageVisualViewport{ClientWidth: 1280, ClientHeight: 800}, nil)), nil
 	})
+	_, err = p.Screenshot(true, nil)
+	expectMissingLayoutMetric(t, err, "cssContentSize")
 }
 
 func TestScrollScreenshot(t *testing.T) {
@@ -823,22 +825,21 @@ func TestScrollScreenshotErrors(t *testing.T) {
 		g.mc.stubErr(1, proto.PageGetLayoutMetrics{})
 		p.MustScrollScreenshot()
 	})
-	g.Panic(func() {
+	// Layout metrics without the CSS content size or viewport are malformed
+	// protocol data.
+	for _, test := range []struct {
+		path    string
+		metrics proto.PageGetLayoutMetricsResult
+	}{
+		{"cssContentSize", layoutMetrics(&proto.PageVisualViewport{ClientWidth: 1280, ClientHeight: 800}, nil)},
+		{"cssVisualViewport", layoutMetrics(nil, &proto.DOMRect{Height: 2000})},
+	} {
 		g.mc.stub(1, proto.PageGetLayoutMetrics{}, func(_ StubSend) (jsonvalue.Value, error) {
-			return jsonvalue.New(proto.PageGetLayoutMetricsResult{
-				CSSVisualViewport: &proto.PageVisualViewport{},
-			}), nil
+			return jsonvalue.New(test.metrics), nil
 		})
-		p.MustScrollScreenshot()
-	})
-	g.Panic(func() {
-		g.mc.stub(1, proto.PageGetLayoutMetrics{}, func(_ StubSend) (jsonvalue.Value, error) {
-			return jsonvalue.New(proto.PageGetLayoutMetricsResult{
-				CSSContentSize: &proto.DOMRect{},
-			}), nil
-		})
-		p.MustScrollScreenshot()
-	})
+		_, err := p.ScrollScreenshot(nil)
+		expectMissingLayoutMetric(t, err, test.path)
+	}
 	g.Panic(func() {
 		// mock error for scroll
 		g.mc.stubErr(1, proto.InputDispatchMouseEvent{})
@@ -851,7 +852,7 @@ func TestScrollScreenshotErrors(t *testing.T) {
 	})
 	g.Panic(func() {
 		// mock error for WaitStable
-		g.mc.stubErr(1, proto.DOMSnapshotCaptureSnapshot{})
+		g.stubDOMStableStartErr()
 		p.MustScrollScreenshot()
 	})
 
@@ -1149,4 +1150,195 @@ func TestPageResetNavigationHistory(t *testing.T) {
 	g.E(err)
 	g.NotNil(finalHistory)
 	g.Eq(len(finalHistory.Entries), expectedInitialHistoryLength)
+}
+
+func TestPageHandleDialogWaitErrors(t *testing.T) {
+	for _, phase := range []string{"setup", "cancellation", "success", "must"} {
+		t.Run(phase, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				setupErr := errors.New("Page.enable failed")
+				var enabled atomic.Int32
+				var disabled atomic.Int32
+				events := make(chan *cdp.Event)
+				browser := rod.New().Context(t.Context()).Client(&callTestClient{events: events, call: func(_ context.Context, method string, _ any) ([]byte, error) {
+					if method == "Page.enable" {
+						enabled.Add(1)
+						if phase == "setup" || phase == "must" {
+							return nil, setupErr
+						}
+					}
+					if method == "Page.disable" {
+						disabled.Add(1)
+					}
+					if method == "Page.handleJavaScriptDialog" && disabled.Load() != 1 {
+						t.Error("dialog handling retained a redundant Page lease")
+					}
+					return []byte(`{}`), nil
+				}})
+				connectTestBrowser(t, browser)
+				page := browser.PageFromSession("session").Context(ctx).WithPanic(func(value any) { panic(value) })
+				if phase == "must" {
+					wait, _ := page.MustHandleDialog()
+					defer func() {
+						err, ok := recover().(error)
+						if !ok || !errors.Is(err, setupErr) {
+							t.Fatalf("Must wait panic = %v", err)
+						}
+					}()
+					wait()
+					return
+				}
+				wait, handle := page.HandleDialog()
+				if phase == "cancellation" {
+					cancel()
+				}
+				if phase == "success" {
+					sendEvent(events, "Page.javascriptDialogOpening", "session", `{"message":"hello","url":"","type":"","hasBrowserHandler":false}`)
+				}
+				event, err := wait()
+				switch phase {
+				case "setup":
+					if event != nil || !errors.Is(err, setupErr) {
+						t.Fatalf("wait = %+v, %v", event, err)
+					}
+				case "cancellation":
+					if event != nil || !errors.Is(err, context.Canceled) {
+						t.Fatalf("wait = %+v, %v", event, err)
+					}
+				case "success":
+					if err != nil || event == nil || event.Message != "hello" {
+						t.Fatalf("wait = %+v, %v", event, err)
+					}
+					if err := handle(&proto.PageHandleJavaScriptDialog{Accept: true}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if enabled.Load() != 1 || disabled.Load() != 1 {
+					t.Fatalf("Page transitions: %d enables, %d disables", enabled.Load(), disabled.Load())
+				}
+			})
+		})
+	}
+}
+
+func TestPageHandleFileDialogLifecycle(t *testing.T) {
+	for _, phase := range []string{"interception setup", "event setup", "cancellation", "unused cancellation", "restore", "restore timeout", "set files", "success", "already enabled"} {
+		t.Run(phase, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				sentinel := errors.New("protocol failed")
+				var restores, uploads atomic.Int32
+				events := make(chan *cdp.Event)
+				browser := rod.New().Context(t.Context()).Client(&callTestClient{events: events, call: func(callCtx context.Context, method string, params any) ([]byte, error) {
+					switch method {
+					case "Page.setInterceptFileChooserDialog":
+						request := params.(proto.PageSetInterceptFileChooserDialog)
+						if request.Enabled {
+							if phase == "interception setup" {
+								return nil, sentinel
+							}
+						} else {
+							restores.Add(1)
+							if callCtx.Err() != nil {
+								t.Error("restore reused an expired context")
+							}
+							if _, bounded := callCtx.Deadline(); !bounded {
+								t.Error("restore has no deadline")
+							}
+							if phase == "restore" {
+								return nil, sentinel
+							}
+							if phase == "restore timeout" {
+								<-callCtx.Done()
+								return nil, callCtx.Err()
+							}
+						}
+					case "Page.enable":
+						if phase == "event setup" {
+							return nil, sentinel
+						}
+					case "DOM.setFileInputFiles":
+						uploads.Add(1)
+						if params.(proto.DOMSetFileInputFiles).BackendNodeID != 42 {
+							t.Error("upload used an unconfirmed chooser event")
+						}
+						if phase == "set files" {
+							return nil, sentinel
+						}
+					}
+					return []byte(`{}`), nil
+				}})
+				connectTestBrowser(t, browser)
+				page := browser.Context(ctx).PageFromSession("session")
+				if phase == "already enabled" {
+					if err := (proto.PageSetInterceptFileChooserDialog{Enabled: true}).Call(page); err != nil {
+						t.Fatal(err)
+					}
+				}
+				setFiles, err := page.HandleFileDialog()
+				if phase == "interception setup" {
+					if setFiles != nil || !errors.Is(err, sentinel) || restores.Load() != 1 {
+						t.Fatalf("setup = %v, restores = %d", err, restores.Load())
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if phase == "cancellation" || phase == "unused cancellation" {
+					cancel()
+					synctest.Wait()
+				}
+				if phase == "unused cancellation" {
+					if restores.Load() != 1 || uploads.Load() != 0 {
+						t.Fatalf("unused wait: restores=%d uploads=%d", restores.Load(), uploads.Load())
+					}
+					return
+				}
+				if phase != "event setup" && phase != "cancellation" {
+					sendEvent(events, "Page.fileChooserOpened", "session", `{"backendNodeId":42,"mode":""}`)
+				}
+				err = setFiles(nil)
+				switch phase {
+				case "event setup", "restore", "set files":
+					if !errors.Is(err, sentinel) {
+						t.Fatal(err)
+					}
+				case "cancellation":
+					if !errors.Is(err, context.Canceled) {
+						t.Fatal(err)
+					}
+				case "restore timeout":
+					if !errors.Is(err, context.DeadlineExceeded) {
+						t.Fatal(err)
+					}
+				default:
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				wantUploads := int32(1)
+				if phase == "event setup" || phase == "cancellation" {
+					wantUploads = 0
+				}
+				if uploads.Load() != wantUploads {
+					t.Fatalf("uploads = %d, want %d", uploads.Load(), wantUploads)
+				}
+				wantRestores := int32(1)
+				if phase == "already enabled" {
+					wantRestores = 0
+				}
+				if restores.Load() != wantRestores {
+					t.Fatalf("restores = %d, want %d", restores.Load(), wantRestores)
+				}
+				var state proto.PageSetInterceptFileChooserDialog
+				if phase == "already enabled" && (!page.LoadState(&state) || !state.Enabled) {
+					t.Fatal("existing interception was disabled")
+				}
+			})
+		})
+	}
 }

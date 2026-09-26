@@ -41,6 +41,7 @@ go get github.com/rah-0/rod
 
 See the [API reference](https://pkg.go.dev/github.com/rah-0/rod).
 For versioned migration notes, see [Breaking changes](doc/BREAKING.md).
+For the threat model, secure defaults, and their opt-outs, see [Security](doc/SECURITY.md).
 
 ## Events
 
@@ -137,13 +138,15 @@ Environments that require disabling sandboxing for protocol capture can use
 `ROD_PROTOCOL_NO_SANDBOX=1 bash scripts/check.sh browser`.
 
 The test runner runs packages and test cases sequentially (`-p=1 -parallel=1`).
-Public API browser integration tests mirror the source layout in [tests/](tests/README.md).
-Unit tests, command tests, generated tests, and Go documentation examples stay
-beside their packages. The suite in `tests/` reuses one browser, retires it after
-a failed test, and bounds graceful shutdown before killing owned processes and
-removing profiles. Integration and e2e browser cases stay sequential even with a
-higher `-parallel` setting. The cleanup benchmark also runs one browser lifecycle
-at a time.
+Tests of the root package that use only its exported API, including browser-free
+tests with fake protocol clients, and the browser integration tests of `lib/cdp`
+and `lib/launcher` mirror the source layout in [tests/](tests/README.md). Tests
+that need unexported identifiers, the other `lib` tests, command tests,
+generated tests, and Go documentation examples stay beside their packages. The
+suite in `tests/` reuses one browser, retires it after a failed test, and bounds
+graceful shutdown before killing owned processes and removing profiles.
+Integration and e2e browser cases stay sequential even with a higher `-parallel`
+setting. The cleanup benchmark also runs one browser lifecycle at a time.
 
 Executable documentation examples run separately with `bash scripts/check.sh live`.
 Tests store screenshots, PDFs, and failed-test CDP logs in `t.ArtifactDir()`.

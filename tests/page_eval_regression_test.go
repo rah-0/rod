@@ -44,7 +44,7 @@ func TestExposeFrameResponsesAndQuotedNames(t *testing.T) {
 			return nil, errors.New("callback rejected")
 		}
 		return value.Str(), nil
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestExposeSetupRollback(t *testing.T) {
 		return g.mc.principal.Call(ctx, session, method, params)
 	})
 	defer g.mc.resetCall()
-	stop, err := p.Expose("rollback", func(jsonvalue.Value) (any, error) { return nil, nil })
+	stop, err := p.Expose("rollback", func(jsonvalue.Value) (any, error) { return nil, nil }, nil)
 	if !errors.Is(err, injected) || stop != nil || binding == "" || removed != binding {
 		t.Fatalf("setup rollback: binding=%q removed=%q stop=%v error=%v", binding, removed, stop != nil, err)
 	}
@@ -104,7 +104,7 @@ func TestExposeRuntimeSetupFailure(t *testing.T) {
 	g.mc.stub(1, proto.RuntimeEnable{}, func(StubSend) (jsonvalue.Value, error) {
 		return jsonvalue.New(nil), injected
 	})
-	stop, err := p.Expose("unavailable", func(jsonvalue.Value) (any, error) { return nil, nil })
+	stop, err := p.Expose("unavailable", func(jsonvalue.Value) (any, error) { return nil, nil }, nil)
 	if !errors.Is(err, injected) || stop != nil {
 		t.Fatalf("runtime setup failure: stop=%v error=%v", stop != nil, err)
 	}
@@ -318,7 +318,7 @@ func TestExposeUnsupportedResultRejects(t *testing.T) {
 	stop, err := p.Expose("unsupported", func(jsonvalue.Value) (any, error) {
 		calls.Add(1)
 		return func() {}, nil
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

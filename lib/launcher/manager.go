@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -15,7 +16,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/rah-0/rod/lib/cdp"
 	"github.com/rah-0/rod/lib/defaults"
@@ -47,6 +50,9 @@ func MustNewManaged(ctx context.Context, serviceURL, authToken string) *Launcher
 // Plain HTTP and WebSocket URLs are accepted only for loopback hosts; use HTTPS or WSS remotely.
 // ctx covers the initial HTTP request and response decoding, and remains the
 // launcher context for Client. Supply a deadline when initialization must be bounded.
+// The launcher holds the manager's settings, including the executable,
+// environment, and working directory on the manager's host. Use it with Client
+// or MustClient; Launch, MustLaunch, and LaunchNew reject it with ErrManagedLaunch.
 func NewManaged(ctx context.Context, serviceURL, authToken string) (_ *Launcher, err error) {
 	if serviceURL == "" {
 		serviceURL = "ws://127.0.0.1:7317"
@@ -93,8 +99,19 @@ func NewManaged(ctx context.Context, serviceURL, authToken string) (_ *Launcher,
 		return nil, fmt.Errorf("launcher manager returned HTTP status %d", res.StatusCode)
 	}
 
-	return l, json.NewDecoder(res.Body).Decode(l)
+	data, err := io.ReadAll(io.LimitReader(res.Body, maxManagerResponse+1))
+	if err != nil {
+		return nil, fmt.Errorf("read launcher manager defaults: %w", err)
+	}
+	if len(data) > maxManagerResponse {
+		return nil, fmt.Errorf("read launcher manager defaults: response exceeds %d bytes", maxManagerResponse)
+	}
+	return l, json.Unmarshal(data, l)
 }
+
+// maxManagerResponse bounds the manager's default launch settings. Managers
+// return a few kilobytes of launch options.
+const maxManagerResponse = 1 << 20
 
 // JSON serialization.
 func (l *Launcher) JSON() []byte {
@@ -370,14 +387,16 @@ func (m *Manager) validateLaunchOptions(l *Launcher, w http.ResponseWriter) {
 	for f, values := range l.Flags {
 		if f == flags.Arguments {
 			for _, value := range values {
-				if strings.HasPrefix(value, "-") || strings.HasPrefix(value, "/") {
+				if managerArgumentIsSwitch(value) {
 					rejectManagerLaunch(w, "[rod-manager] command-line switches must use named launch options")
 				}
 			}
 			continue
 		}
 
-		if f.NormalizeFlag() != f || strings.Contains(string(f), "=") {
+		// Chromium lowercases switch names on Windows. Canonical names keep
+		// each option distinct from the restricted names on every platform.
+		if !managerOptionName.MatchString(string(f)) {
 			rejectManagerLaunch(w, "[rod-manager] invalid launch option name")
 		}
 		if restrictedManagerFlag(f) {
@@ -400,28 +419,107 @@ func managerLoopbackHost(host string) bool {
 	return net.ParseIP(host).IsLoopback()
 }
 
+// managerArgumentIsSwitch reports whether Chromium could parse the positional
+// argument value as a switch. Chromium trims ASCII whitespace on POSIX and
+// Unicode whitespace on Windows from each argument before it looks for a
+// switch prefix, and Windows also accepts "/" as a prefix. Skipping all spaces
+// and non-graphic characters covers both sets with a margin.
+func managerArgumentIsSwitch(value string) bool {
+	value = strings.TrimLeftFunc(value, func(r rune) bool {
+		return unicode.IsSpace(r) || !unicode.IsGraphic(r)
+	})
+	return strings.HasPrefix(value, "-") || strings.HasPrefix(value, "/")
+}
+
+// managerOptionName matches a canonical Chromium switch name.
+var managerOptionName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// restrictedManagerFlags lists remote launch options not covered by the rules
+// in restrictedManagerFlag. Token holders already control the browser through
+// DevTools; these restrictions are defense in depth.
+var restrictedManagerFlags = map[flags.Flag]bool{
+	// Extensions and apps loaded from host paths.
+	"disable-extensions-except":          true,
+	"install-isolated-web-app-from-file": true,
+	"load-and-launch-app":                true,
+	"load-apps":                          true,
+	"load-component-extension":           true,
+	"load-extension":                     true,
+	"pack-extension":                     true,
+	"pack-extension-key":                 true,
+
+	// Debuggers, plugins, process roles, and V8 flags, including V8 log files.
+	"js-flags":                true,
+	"nacl-gdb":                true,
+	"nacl-gdb-script":         true,
+	"register-pepper-plugins": true,
+	"type":                    true,
+
+	// Chromium on Windows reads the rest of the command line as one argument,
+	// dropping the switches that follow, including the manager-owned profile.
+	"single-argument": true,
+
+	// DevTools access that bypasses the manager.
+	"allow-unsafe-devtools-remote-file-loading": true,
+	"custom-devtools-frontend":                  true,
+	"remote-allow-origins":                      true,
+
+	// Host files written by the browser.
+	"dump-browser-histograms": true,
+	"enable-logging":          true,
+	"export-ukm-logs-to-file": true,
+	"export-uma-logs-to-file": true,
+	"focus-result-file":       true,
+	"list-apps":               true,
+	"log-file":                true,
+	"log-net-log":             true,
+	"ozone-dump-file":         true,
+	"print-to-pdf":            true,
+	"profiling-file":          true,
+	"screenshot":              true,
+	"ssl-key-log-file":        true,
+	"webrtc-event-logging":    true,
+
+	// Host credentials sent to remote servers.
+	"auth-negotiate-delegate-allowlist": true,
+	"auth-negotiate-delegate-whitelist": true,
+	"auth-server-allowlist":             true,
+	"auth-server-whitelist":             true,
+}
+
+// restrictedManagerFlag reports whether remote clients are denied f, a
+// canonical option name.
 func restrictedManagerFlag(f flags.Flag) bool {
-	switch f {
-	case flags.Env,
-		flags.WorkingDir,
-		flags.XVFB,
-		"browser-subprocess-path",
-		"disable-extensions-except",
-		"gpu-launcher",
-		"gssapi-library-name",
-		"load-component-extension",
-		"load-extension",
-		"nacl-loader-cmd-prefix",
-		"plugin-launcher",
-		"ppapi-plugin-launcher",
-		"register-pepper-plugins",
-		"renderer-cmd-prefix",
-		"utility-cmd-prefix",
-		"zygote-cmd-prefix":
-		return true
-	default:
+	name := string(f)
+	if strings.HasPrefix(name, "rod-") {
+		// Launcher settings are server-owned, except the validated executable
+		// and preferences written inside the managed profile.
+		return f != flags.Bin && f != flags.Preferences
+	}
+	if f == flags.UserDataDir || f == flags.RemoteDebuggingPort || f == flags.ProfileDir {
+		// The manager replaces the profile path and debugging port before
+		// launch, and validates profile-directory as a name inside its profile.
 		return false
 	}
+	if restrictedManagerFlags[f] {
+		return true
+	}
+	// Debugger endpoints and trace outputs, including renamed or added switches.
+	for _, prefix := range []string{"remote-debugging-", "trace-", "enable-tracing"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	// These words name host programs, libraries, and locations, as in
+	// renderer-cmd-prefix, gpu-launcher, gssapi-library-name,
+	// browser-subprocess-path, disk-cache-dir, and ipc-dump-directory.
+	for word := range strings.SplitSeq(name, "-") {
+		switch word {
+		case "dir", "directory", "launcher", "library", "path", "prefix":
+			return true
+		}
+	}
+	return false
 }
 
 func rejectManagerLaunch(w http.ResponseWriter, message string) {

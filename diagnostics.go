@@ -9,13 +9,16 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rah-0/rod/lib/proto"
 )
 
-// ErrDiagnosticsIncomplete means the protocol boundary or cleanup could not finish.
-// The returned snapshot still contains the diagnostics collected so far.
+// ErrDiagnosticsIncomplete means an event could not be decoded or lacked an
+// object that the diagnostics use, or the protocol boundary or cleanup could
+// not finish. The returned snapshot still contains the diagnostics collected
+// so far.
 var ErrDiagnosticsIncomplete = errors.New("rod: incomplete page diagnostics")
 
 // ErrDiagnosticsOptions means a diagnostics limit is negative.
@@ -107,6 +110,10 @@ type PageDiagnostics struct {
 	failureIDs [][sha256.Size]byte
 	complete   bool
 	err        error
+	// undecodable records that a skipped event was already reported.
+	undecodable bool
+	// boundary admits Runtime binding calls once Stop installs its marker.
+	boundary atomic.Bool
 }
 
 // StartDiagnostics subscribes before enabling Runtime and Network, and returns
@@ -138,7 +145,11 @@ func (p *Page) StartDiagnostics(options DiagnosticsOptions) (*PageDiagnostics, e
 		worldName: fmt.Sprintf("__rod_diagnostics_%x", sha256.Sum256([]byte(p.FrameID))),
 		requests:  make(map[[sha256.Size]byte]diagnosticRequest),
 	}
-	messages := p.browser.event.Subscribe(ctx)
+	bindingMethod := (proto.RuntimeBindingCalled{}).ProtoEvent()
+	messages := p.browser.event.SubscribeFilter(ctx, func(msg *Message) bool {
+		return msg.SessionID == p.SessionID &&
+			(diagnosticEvent(msg.Method) || (msg.Method == bindingMethod && d.boundary.Load()))
+	})
 	var releases []func(context.Context) error
 	cleanup := func() error {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(p.ctx), options.StopTimeout)
@@ -160,20 +171,11 @@ func (p *Page) StartDiagnostics(options DiagnosticsOptions) (*PageDiagnostics, e
 	go func() {
 		defer close(d.done)
 		for msg := range messages {
-			if msg.SessionID != p.SessionID {
-				continue
+			if msg.Method != bindingMethod {
+				d.collect(msg)
+			} else if d.reachBoundary(msg) {
+				break
 			}
-			if msg.Method == (proto.RuntimeBindingCalled{}).ProtoEvent() {
-				var event proto.RuntimeBindingCalled
-				msg.Load(&event)
-				if event.Name == d.marker && event.Payload == d.marker {
-					d.mu.Lock()
-					d.complete = true
-					d.mu.Unlock()
-					break
-				}
-			}
-			d.collect(msg)
 		}
 		cancel()
 		cleanupErr := cleanup()
@@ -207,7 +209,10 @@ func (d *PageDiagnostics) Snapshot() DiagnosticsSnapshot {
 // in an isolated world, then releases its subscriptions and domain ownership.
 // This protocol boundary does not wait for future timers, promises or requests.
 // Cancellation or target closure returns the retained data and an error matching
-// ErrDiagnosticsIncomplete. Draining and cleanup each have a StopTimeout budget.
+// ErrDiagnosticsIncomplete, as does an event that was skipped because it could
+// not be decoded or lacked an object that the diagnostics use, such as the
+// exception details that [proto.DecodeLenient] can leave missing. Draining and
+// cleanup each have a StopTimeout budget.
 func (d *PageDiagnostics) Stop() (DiagnosticsSnapshot, error) {
 	d.stopOnce.Do(func() {
 		select {
@@ -218,9 +223,15 @@ func (d *PageDiagnostics) Stop() (DiagnosticsSnapshot, error) {
 		ctx, cancel := context.WithTimeout(d.page.ctx, d.options.StopTimeout)
 		defer cancel()
 		world, err := proto.PageCreateIsolatedWorld{FrameID: d.page.FrameID, WorldName: d.worldName}.Call(d.client(ctx))
+		if err == nil && lenientMissing(d.page.GetDecoding(), world.ExecutionContextID) {
+			// Lenient decoding leaves a missing ID zero, and Runtime.evaluate
+			// without a context would run the boundary in the main world.
+			err = missingField("PageCreateIsolatedWorldResult", "executionContextId")
+		}
 		bindingAttempted := false
 		if err == nil {
 			bindingAttempted = true
+			d.boundary.Store(true)
 			err = proto.RuntimeAddBinding{Name: d.marker, ExecutionContextName: d.worldName}.Call(d.client(ctx))
 		}
 		if err == nil {

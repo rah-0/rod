@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"slices"
 	"sync"
 	"time"
 
@@ -162,8 +163,17 @@ func (p *Page) ElementX(xPath string) (*Element, error) {
 // If sleeper is nil, no retry will be performed.
 // By default, it will retry until the js function doesn't return null.
 // To customize the retry logic, check the examples of Page.Sleeper.
+// A non-null result that is not a DOM node is released before
+// [ExpectElementError] is returned; the error describes the value.
 func (p *Page) ElementByJS(opts *EvalOptions) (*Element, error) {
+	return p.elementByJS(opts, "")
+}
+
+// elementByJS implements ElementByJS; thisCtx is the window owning opts.ThisObj,
+// or empty when unknown.
+func (p *Page) elementByJS(opts *EvalOptions, thisCtx proto.RuntimeRemoteObjectID) (*Element, error) {
 	var res *proto.RuntimeRemoteObject
+	var pid proto.RuntimeRemoteObjectID
 	var err error
 
 	removeTrace := func() {}
@@ -172,6 +182,10 @@ func (p *Page) ElementByJS(opts *EvalOptions) (*Element, error) {
 		removeTrace()
 		removeTrace = remove
 
+		pid, err = p.queryJSCtxID(opts)
+		if err != nil {
+			return true, err
+		}
 		res, err = p.Evaluate(opts.ByObject())
 		if err != nil {
 			return true, err
@@ -189,10 +203,47 @@ func (p *Page) ElementByJS(opts *EvalOptions) (*Element, error) {
 	}
 
 	if res.Subtype != proto.RuntimeRemoteObjectSubtypeNode {
-		return nil, &ExpectElementError{res}
+		err = &ExpectElementError{res}
+		if cleanupErr := p.releaseObject(res); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
+		return nil, err
 	}
 
-	return p.ElementFromObject(res)
+	el, err := p.elementFromCall(res, opts, thisCtx, pid)
+	if err != nil {
+		return nil, errors.Join(err, p.releaseObject(res))
+	}
+	return el, nil
+}
+
+// queryJSCtxID resolves the window that a call without opts.ThisObj runs on, so
+// the owner of its results is known. Evaluate retries a missing context itself.
+func (p *Page) queryJSCtxID(opts *EvalOptions) (proto.RuntimeRemoteObjectID, error) {
+	if opts.ThisObj != nil {
+		return "", nil
+	}
+	id, err := p.getJSCtxID()
+	if errors.Is(err, cdp.ErrCtxNotFound) {
+		return "", nil
+	}
+	return id, err
+}
+
+// elementFromCall wraps a node returned by a call with opts. A call returns
+// handles owned by its target's execution context, so no lookup is needed when
+// that context is known and cached: thisCtx for a call on opts.ThisObj, or pid
+// when the page kept that window during the call.
+func (p *Page) elementFromCall(obj *proto.RuntimeRemoteObject, opts *EvalOptions, thisCtx, pid proto.RuntimeRemoteObjectID) (*Element, error) {
+	current := p.currentJSCtxID()
+	owner := thisCtx
+	if opts.ThisObj == nil && pid == current {
+		owner = pid
+	}
+	if owner != "" && p.helpers.has(owner) {
+		return p.elementInJSCtx(obj, current, owner), nil
+	}
+	return p.ElementFromObject(obj)
 }
 
 // Elements returns all elements that match the css selector.
@@ -206,27 +257,46 @@ func (p *Page) ElementsX(xpath string) (Elements, error) {
 }
 
 // ElementsByJS returns the elements from the return value of the js.
-func (p *Page) ElementsByJS(opts *EvalOptions) (elements Elements, err error) {
+// Handles that are not returned in an element are released, including the
+// result when [ExpectElementsError] is returned; the error describes the value.
+func (p *Page) ElementsByJS(opts *EvalOptions) (Elements, error) {
+	return p.elementsByJS(opts, "")
+}
+
+// elementsByJS implements ElementsByJS; thisCtx is the window owning
+// opts.ThisObj, or empty when unknown.
+func (p *Page) elementsByJS(opts *EvalOptions, thisCtx proto.RuntimeRemoteObjectID) (elements Elements, err error) {
+	pid, err := p.queryJSCtxID(opts)
+	if err != nil {
+		return nil, err
+	}
 	res, err := p.Evaluate(opts.ByObject())
 	if err != nil {
 		return nil, err
 	}
 
+	unowned := []*proto.RuntimeRemoteObject{res}
+	defer func() {
+		if cleanupErr := p.releaseObjects(unowned); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
+	}()
+
 	if res.Subtype != proto.RuntimeRemoteObjectSubtypeArray {
 		return nil, &ExpectElementsError{res}
 	}
-
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(p.ctx), 5*time.Second)
-		defer cancel()
-		err = errors.Join(err, p.Context(ctx).Release(res))
-	}()
 
 	list, err := proto.RuntimeGetProperties{
 		ObjectID:      res.ObjectID,
 		OwnProperties: new(true),
 	}.Call(p)
 	if err != nil {
+		return nil, err
+	}
+	// Every object in the response is a new handle, including the prototype.
+	// Only the members returned in elements are kept.
+	unowned = append(unowned, propertyHandles(list)...)
+	if err := requireEntries(list.Result, "RuntimeGetPropertiesResult", "result"); err != nil {
 		return nil, err
 	}
 
@@ -236,14 +306,18 @@ func (p *Page) ElementsByJS(opts *EvalOptions) (elements Elements, err error) {
 			continue
 		}
 		val := obj.Value
+		if val == nil {
+			// An accessor has no value; its getter describes the member.
+			val = obj.Get
+		}
 
-		if val.Subtype != proto.RuntimeRemoteObjectSubtypeNode {
+		if val == nil || val.Subtype != proto.RuntimeRemoteObjectSubtypeNode {
 			return nil, &ExpectElementsError{val}
 		}
 
 		var el *Element
 		if len(elemList) == 0 {
-			el, err = p.ElementFromObject(val)
+			el, err = p.elementFromCall(val, opts, thisCtx, pid)
 			if err != nil {
 				return nil, err
 			}
@@ -258,7 +332,55 @@ func (p *Page) ElementsByJS(opts *EvalOptions) (elements Elements, err error) {
 		elemList = append(elemList, el)
 	}
 
-	return elemList, err
+	kept := make(map[*proto.RuntimeRemoteObject]bool, len(elemList))
+	for _, el := range elemList {
+		kept[el.Object] = true
+	}
+	unowned = slices.DeleteFunc(unowned, func(obj *proto.RuntimeRemoteObject) bool { return kept[obj] })
+	return elemList, nil
+}
+
+// propertyHandles lists the object handles in a Runtime.getProperties response.
+func propertyHandles(list *proto.RuntimeGetPropertiesResult) []*proto.RuntimeRemoteObject {
+	var handles []*proto.RuntimeRemoteObject
+	for _, prop := range list.Result {
+		if prop != nil {
+			handles = append(handles, prop.Value, prop.Get, prop.Set, prop.Symbol)
+		}
+	}
+	for _, prop := range list.InternalProperties {
+		if prop != nil {
+			handles = append(handles, prop.Value)
+		}
+	}
+	for _, prop := range list.PrivateProperties {
+		if prop != nil {
+			handles = append(handles, prop.Value, prop.Get, prop.Set)
+		}
+	}
+	return slices.DeleteFunc(handles, func(obj *proto.RuntimeRemoteObject) bool {
+		return obj == nil || obj.ObjectID == ""
+	})
+}
+
+// releaseObjects releases handles concurrently, each with the bounded cleanup
+// of releaseObject, so a few handles cost about one round trip.
+func (p *Page) releaseObjects(objs []*proto.RuntimeRemoteObject) error {
+	errs := make([]error, len(objs))
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, 16)
+	for i, obj := range objs {
+		if obj == nil || obj.ObjectID == "" {
+			continue
+		}
+		slots <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-slots }()
+			errs[i] = p.releaseObject(obj)
+		})
+	}
+	wg.Wait()
+	return errors.Join(errs...)
 }
 
 // Search for the given query in the DOM tree until the result count is not zero, before that it will keep retrying.
@@ -289,6 +411,11 @@ func (p *Page) Search(query string) (*SearchResult, error) {
 		if err != nil {
 			return true, err
 		}
+		if lenientMissing(p.GetDecoding(), res.SearchID) {
+			// Results of an empty search ID fail like a search that is not
+			// ready, so the search would retry until its context ends.
+			return true, missingField("DOMPerformSearchResult", "searchId")
+		}
 
 		sr.DOMPerformSearchResult = res
 
@@ -308,6 +435,12 @@ func (p *Page) Search(query string) (*SearchResult, error) {
 				return false, nil
 			}
 			return true, err
+		}
+		if result.NodeIDs == nil {
+			return true, missingField("DOMGetSearchResultsResult", "nodeIds")
+		}
+		if len(result.NodeIDs) == 0 { // inconsistent with ResultCount; search again
+			return false, nil
 		}
 
 		id := result.NodeIDs[0]
@@ -361,6 +494,9 @@ func (s *SearchResult) Get(i, l int) (Elements, error) {
 	}.Call(s.page)
 	if err != nil {
 		return nil, err
+	}
+	if result.NodeIDs == nil {
+		return nil, missingField("DOMGetSearchResultsResult", "nodeIds")
 	}
 
 	list := Elements{}
@@ -532,7 +668,7 @@ func (el *Element) ElementX(xPath string) (*Element, error) {
 
 // ElementByJS returns the element from the return value of the js.
 func (el *Element) ElementByJS(opts *EvalOptions) (*Element, error) {
-	e, err := el.page.Context(el.ctx).Sleeper(NotFoundSleeper).ElementByJS(opts.This(el.Object))
+	e, err := el.page.Context(el.ctx).Sleeper(NotFoundSleeper).elementByJS(opts.This(el.Object), el.jsCtxID)
 	if err != nil {
 		return nil, err
 	}
@@ -571,5 +707,5 @@ func (el *Element) ElementsX(xpath string) (Elements, error) {
 
 // ElementsByJS returns the elements from the return value of the js.
 func (el *Element) ElementsByJS(opts *EvalOptions) (Elements, error) {
-	return el.page.Context(el.ctx).ElementsByJS(opts.This(el.Object))
+	return el.page.Context(el.ctx).elementsByJS(opts.This(el.Object), el.jsCtxID)
 }

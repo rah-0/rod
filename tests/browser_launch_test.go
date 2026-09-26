@@ -1,4 +1,4 @@
-package rod
+package rod_test
 
 import (
 	"context"
@@ -16,9 +16,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"testing/synctest"
 	"time"
 
+	"github.com/rah-0/rod"
 	"github.com/rah-0/rod/lib/cdp"
 	"github.com/rah-0/rod/lib/launcher"
 	"github.com/rah-0/rod/lib/launcher/flags"
@@ -124,7 +124,7 @@ func TestConfiguredBrowserLaunchFailures(t *testing.T) {
 				if name == "cancel startup" {
 					l.Logger(launchCallbackWriter{write: func([]byte) { cancel() }})
 				}
-				browser := New().ControlURL("").Context(ctx)
+				browser := rod.New().ControlURL("").Context(ctx)
 				err := browser.Launch(l)
 				if err == nil {
 					t.Fatal("fixture unexpectedly connected")
@@ -176,9 +176,9 @@ type launchCallbackWriter struct{ write func([]byte) }
 func (w launchCallbackWriter) Write(p []byte) (int, error) { w.write(p); return len(p), nil }
 
 func TestConfiguredBrowserLaunchConflicts(t *testing.T) {
-	for _, browser := range []*Browser{New().ControlURL("ws://127.0.0.1:1"), New().ControlURL("").Client(&browserLifecycleClient{}), func() *Browser { b := New().ControlURL(""); b.BrowserContextID = "incognito"; return b }()} {
+	for _, browser := range []*rod.Browser{rod.New().ControlURL("ws://127.0.0.1:1"), rod.New().ControlURL("").Client(&eventTestClient{}), func() *rod.Browser { b := rod.New().ControlURL(""); b.BrowserContextID = "incognito"; return b }()} {
 		l := launcher.New().Bin(filepath.Join(t.TempDir(), "missing"))
-		if err := browser.Launch(l); !errors.Is(err, ErrLaunchConflict) {
+		if err := browser.Launch(l); !errors.Is(err, rod.ErrLaunchConflict) {
 			t.Fatal(err)
 		}
 		// Reject configuration before consuming or mutating the launcher.
@@ -186,7 +186,7 @@ func TestConfiguredBrowserLaunchConflicts(t *testing.T) {
 			t.Fatalf("conflict consumed launcher: %v", err)
 		}
 	}
-	if err := New().ControlURL("").Launch(nil); !errors.Is(err, ErrLaunchConflict) {
+	if err := rod.New().ControlURL("").Launch(nil); !errors.Is(err, rod.ErrLaunchConflict) {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +196,7 @@ func TestConfiguredBrowserLaunchConflicts(t *testing.T) {
 	endpoint, _ := url.Parse(server.URL)
 	port, _ := strconv.Atoi(endpoint.Port())
 	l := launcher.New().Bin("unused").RemoteDebuggingPort(port)
-	if err := New().ControlURL("").Launch(l); !errors.Is(err, launcher.ErrDebuggingPortInUse) {
+	if err := rod.New().ControlURL("").Launch(l); !errors.Is(err, launcher.ErrDebuggingPortInUse) {
 		t.Fatalf("occupied port = %v", err)
 	}
 	if l.PID() != 0 {
@@ -209,7 +209,7 @@ func TestConfiguredBrowserLaunchConflicts(t *testing.T) {
 	if _, err := used.Launch(); err != nil {
 		t.Fatal(err)
 	}
-	if err := New().ControlURL("").Launch(used); !errors.Is(err, launcher.ErrAlreadyLaunched) {
+	if err := rod.New().ControlURL("").Launch(used); !errors.Is(err, launcher.ErrAlreadyLaunched) {
 		t.Fatalf("used launcher = %v", err)
 	}
 }
@@ -230,11 +230,16 @@ func TestConfiguredBrowserLaunch(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			browser := New().ControlURL("")
+			browser := rod.New().ControlURL("")
 			if err := browser.Launch(l); err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(browser.process.shutdown)
+			t.Cleanup(func() {
+				l.Kill()
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = l.CleanupContext(ctx)
+			})
 			result, err := proto.BrowserGetBrowserCommandLine{}.Call(browser)
 			if err != nil {
 				t.Fatal(err)
@@ -277,32 +282,10 @@ func TestConfiguredBrowserLaunch(t *testing.T) {
 	}
 }
 
-func TestConfiguredBrowserCleanupBudget(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		b := New().Client(&browserLifecycleClient{call: func(context.Context, string) ([]byte, error) { return nil, nil }})
-		done := make(chan struct{})
-		b.process = &localBrowserProcess{done: done}
-		start := time.Now()
-		if err := b.CloseWithTimeout(time.Second); !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatal(err)
-		}
-		if elapsed := time.Since(start); elapsed != time.Second {
-			t.Fatalf("cleanup exceeded budget: %v", elapsed)
-		}
-		close(done)
-		if err := b.CloseWithTimeout(time.Second); err != nil {
-			t.Fatal(err)
-		}
-		if err := b.CloseWithTimeout(0); !errors.Is(err, ErrCleanupTimeout) {
-			t.Fatal(err)
-		}
-	})
-}
-
 func TestConfiguredBrowserOutputLimit(t *testing.T) {
 	for _, limit := range []int{0, 8} {
 		l := ownedLaunchFixture(t, "exit", "").OutputTail(limit)
-		err := New().ControlURL("").Launch(l)
+		err := rod.New().ControlURL("").Launch(l)
 		if !errors.Is(err, launcher.ErrDevToolsUnavailable) {
 			t.Fatalf("lost launch cause: %v", err)
 		}
@@ -366,7 +349,7 @@ func TestConfiguredBrowserDiscoveryFailureClosesTransport(t *testing.T) {
 	}))
 	defer server.Close()
 	l := ownedLaunchFixture(t, "endpoint", server.URL)
-	if err := New().ControlURL("").Launch(l); err == nil || !strings.Contains(err.Error(), "fixture discovery failure") {
+	if err := rod.New().ControlURL("").Launch(l); err == nil || !strings.Contains(err.Error(), "fixture discovery failure") {
 		t.Fatalf("discovery = %v", err)
 	}
 	if err := <-closed; err != nil {

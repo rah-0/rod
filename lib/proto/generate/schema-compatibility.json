@@ -1,0 +1,23 @@
+{
+  "members": [
+    "Audits.AffectedRequest.url",
+    "CSS.CSSContainerQuery.conditionText",
+    "CSS.CSSPositionTryRule.active",
+    "CSS.getComputedStyleForNodeResult.extraFields",
+    "Debugger.scriptFailedToParse.buildId",
+    "Debugger.scriptParsed.buildId",
+    "Network.ClientSecurityState.localNetworkAccessRequestPolicy",
+    "Network.SignedExchangeInfo.hasExtraInfo",
+    "Network.getRequestPostDataResult.base64Encoded",
+    "Page.javascriptDialogClosed.frameId",
+    "Page.javascriptDialogOpening.frameId",
+    "Page.navigatedWithinDocument.navigationType",
+    "Preload.prefetchStatusUpdated.pipelineId",
+    "Preload.prerenderStatusUpdated.pipelineId",
+    "Runtime.getHeapUsageResult.backingStorageSize",
+    "Runtime.getHeapUsageResult.embedderHeapUsedSize",
+    "Storage.sharedStorageAccessed.method",
+    "Storage.sharedStorageAccessed.ownerSite",
+    "Storage.sharedStorageAccessed.scope"
+  ]
+}

@@ -1,11 +1,21 @@
 package rod_test
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/internal/testutil"
 	"github.com/rah-0/rod/lib/cdp"
+	"github.com/rah-0/rod/lib/js"
 	"github.com/rah-0/rod/lib/jsonvalue"
 	"github.com/rah-0/rod/lib/proto"
 	"github.com/rah-0/rod/lib/utils"
@@ -101,7 +111,7 @@ func TestPageExpose(t *testing.T) {
 
 	stop := page.MustExpose("exposedFunc", func(g jsonvalue.Value) (any, error) {
 		return g.Get("k").Str(), nil
-	})
+	}, nil)
 
 	utils.All(func() {
 		res := page.MustEval(`() => exposedFunc({k: 'a'})`)
@@ -123,15 +133,15 @@ func TestPageExpose(t *testing.T) {
 	})
 	g.Panic(func() {
 		g.mc.stubErr(1, proto.RuntimeCallFunctionOn{})
-		page.MustExpose("exposedFunc", nil)
+		page.MustExpose("exposedFunc", nil, nil)
 	})
 	g.Panic(func() {
 		g.mc.stubErr(1, proto.RuntimeAddBinding{})
-		page.MustExpose("exposedFunc2", nil)
+		page.MustExpose("exposedFunc2", nil, nil)
 	})
 	g.Panic(func() {
 		g.mc.stubErr(1, proto.PageAddScriptToEvaluateOnNewDocument{})
-		page.MustExpose("exposedFunc", nil)
+		page.MustExpose("exposedFunc", nil, nil)
 	})
 }
 
@@ -289,4 +299,256 @@ func TestEvalObjectReferenceChainIsTooLong(t *testing.T) {
 
 	val := p.MustEval(`a => a.c.c.c.c.b`, obj)
 	g.Eq(val.Int(), 1)
+}
+
+func TestEvalOptionsString(t *testing.T) {
+	g := testutil.New(t)
+	object := &proto.RuntimeRemoteObject{Description: "button"}
+	g.Eq(rod.Eval(`() => this.parentElement`).This(object).String(), "() => this.parentElement() button")
+}
+
+// helperBrowser models the helper objects in one page window. Each functions
+// object records the helpers installed into it, and a helper call fails like
+// Chrome when a dependency is missing from the functions object the helper was
+// installed with. While hold is set, each install waits until the test releases it.
+type helperBrowser struct {
+	sync.Mutex
+	hold    bool
+	pending []*heldInstall
+	arrived int
+	handles int
+	// functions maps each functions object to the helpers installed into it.
+	functions map[proto.RuntimeRemoteObjectID]map[string]bool
+	helpers   map[proto.RuntimeRemoteObjectID]installedHelper
+	installs  map[string]int
+}
+
+// installedHelper is a helper and the functions object it was installed into.
+type installedHelper struct {
+	name      string
+	functions proto.RuntimeRemoteObjectID
+}
+
+// heldInstall is an install waiting for release. Its name is js.Functions.Name
+// for the creation of a functions object.
+type heldInstall struct {
+	name    string
+	arrival int
+	release chan struct{}
+}
+
+func newHelperBrowser() *helperBrowser {
+	return &helperBrowser{
+		hold:      true,
+		functions: map[proto.RuntimeRemoteObjectID]map[string]bool{},
+		helpers:   map[proto.RuntimeRemoteObjectID]installedHelper{},
+		installs:  map[string]int{},
+	}
+}
+
+var helperBrowserFunctions = map[string]*js.Function{
+	js.Element.Name: js.Element, js.ElementX.Name: js.ElementX, js.Selectable.Name: js.Selectable,
+}
+
+// wait holds an install until the test releases it.
+func (b *helperBrowser) wait(name string) {
+	b.Lock()
+	if !b.hold {
+		b.Unlock()
+		return
+	}
+	b.arrived++
+	held := &heldInstall{name: name, arrival: b.arrived, release: make(chan struct{})}
+	b.pending = append(b.pending, held)
+	b.Unlock()
+	<-held.release
+}
+
+// releaseNext waits until every other goroutine is blocked, then releases the
+// pending install that the order puts first. It reports whether one was pending.
+func (b *helperBrowser) releaseNext(order func(a, b *heldInstall) int) bool {
+	synctest.Wait()
+	b.Lock()
+	defer b.Unlock()
+	if len(b.pending) == 0 {
+		return false
+	}
+	next := slices.MinFunc(b.pending, order)
+	b.pending = slices.DeleteFunc(b.pending, func(held *heldInstall) bool { return held == next })
+	close(next.release)
+	return true
+}
+
+func (b *helperBrowser) handle(name string) proto.RuntimeRemoteObjectID {
+	b.handles++
+	return proto.RuntimeRemoteObjectID(fmt.Sprintf("%s-%d", name, b.handles))
+}
+
+func (b *helperBrowser) Call(_ context.Context, _, method string, params any) ([]byte, error) {
+	switch method {
+	case "Runtime.evaluate":
+		return []byte(`{"result":{"type":"object","objectId":"window"}}`), nil
+	case "Runtime.releaseObject":
+		return []byte(`{}`), nil
+	case "Runtime.callFunctionOn":
+	default:
+		return nil, fmt.Errorf("unexpected request: %s", method)
+	}
+	req := params.(proto.RuntimeCallFunctionOn)
+	if req.FunctionDeclaration == js.Functions.Definition {
+		b.wait(js.Functions.Name)
+		b.Lock()
+		defer b.Unlock()
+		b.installs[js.Functions.Name]++
+		id := b.handle(js.Functions.Name)
+		b.functions[id] = map[string]bool{}
+		return fmt.Appendf(nil, `{"result":{"type":"object","objectId":%q}}`, id), nil
+	}
+	if decl, ok := strings.CutPrefix(req.FunctionDeclaration, "functions => { const f = functions."); ok {
+		name, _, _ := strings.Cut(decl, " ")
+		b.wait(name)
+		b.Lock()
+		defer b.Unlock()
+		functions := b.functions[req.Arguments[0].ObjectID]
+		if functions == nil {
+			return nil, fmt.Errorf("install of %s into unknown object %s", name, req.Arguments[0].ObjectID)
+		}
+		b.installs[name]++
+		functions[name] = true
+		id := b.handle(name)
+		b.helpers[id] = installedHelper{name, req.Arguments[0].ObjectID}
+		return fmt.Appendf(nil, `{"result":{"type":"function","objectId":%q}}`, id), nil
+	}
+
+	// evalHelper passes the helper as the first argument.
+	b.Lock()
+	defer b.Unlock()
+	helper, ok := b.helpers[req.Arguments[0].ObjectID]
+	if !ok {
+		return nil, cdp.ErrObjNotFound
+	}
+	for _, dep := range helperBrowserFunctions[helper.name].Dependencies {
+		if !b.functions[helper.functions][dep.Name] {
+			return fmt.Appendf(nil, `{"result":{"type":"object","subtype":"error","objectId":"error"},`+
+				`"exceptionDetails":{"exceptionId":1,"text":"Uncaught","lineNumber":0,"columnNumber":0,`+
+				`"exception":{"type":"object","subtype":"error","description":"TypeError: functions.%s is not a function"}}}`, dep.Name), nil
+		}
+	}
+	return []byte(`{"result":{"type":"object","subtype":"node","objectId":"node"}}`), nil
+}
+
+func (*helperBrowser) Event() <-chan *cdp.Event { return nil }
+
+// Concurrent first queries in a new window install each helper once, into the
+// functions object that holds its dependencies, whatever order Chrome answers in.
+func TestJSHelperConcurrentInstall(t *testing.T) {
+	isCreation := func(held *heldInstall) bool { return held.name == js.Functions.Name }
+	for _, test := range []struct {
+		name string
+		// order is the order in which Chrome answers the pending installs.
+		order func(a, b *heldInstall) int
+	}{
+		{
+			// Chrome answers dependency installs first, then the newest
+			// functions object, then the oldest helper install. Separate
+			// installs then cache the first query's functions object after the
+			// second query cached the dependency in its own, and cache last the
+			// helper installed into the object without the dependency.
+			name: "reported order",
+			order: func(a, b *heldInstall) int {
+				rank := func(held *heldInstall) int {
+					switch {
+					case held.name == js.Selectable.Name:
+						return 0
+					case isCreation(held):
+						return 1
+					}
+					return 2
+				}
+				if rank(a) != rank(b) {
+					return rank(a) - rank(b)
+				}
+				if isCreation(a) {
+					return b.arrival - a.arrival
+				}
+				return a.arrival - b.arrival
+			},
+		},
+		{
+			// Separate installs cache a functions object without the
+			// dependency last, so a helper installed later fails.
+			name:  "newest first",
+			order: func(a, b *heldInstall) int { return b.arrival - a.arrival },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				browser := newHelperBrowser()
+				page := rod.New().Context(t.Context()).Client(browser).PageFromSession("session")
+				var wg sync.WaitGroup
+				errs := make([]error, 2)
+				for i := range errs {
+					wg.Go(func() {
+						_, errs[i] = page.Element("#who")
+					})
+				}
+				for browser.releaseNext(test.order) {
+				}
+				wg.Wait()
+				if err := errors.Join(errs...); err != nil {
+					t.Fatalf("concurrent first queries: %v", err)
+				}
+
+				browser.Lock()
+				browser.hold = false
+				browser.Unlock()
+				if _, err := page.Element("#who"); err != nil {
+					t.Fatalf("cached helper: %v", err)
+				}
+				// A new helper is installed into the cached functions object.
+				if _, err := page.ElementX("//p"); err != nil {
+					t.Fatalf("helper installed after the race: %v", err)
+				}
+				want := map[string]int{js.Functions.Name: 1, js.Selectable.Name: 1, js.Element.Name: 1, js.ElementX.Name: 1}
+				if !maps.Equal(browser.installs, want) {
+					t.Fatalf("installs = %v, want %v", browser.installs, want)
+				}
+			})
+		})
+	}
+}
+
+// A query waiting for an install in the same context stops waiting when its
+// own context ends, and the install still completes.
+func TestJSHelperInstallWaitCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		browser := newHelperBrowser()
+		page := rod.New().Context(t.Context()).Client(browser).PageFromSession("session")
+		installing := make(chan error, 1)
+		go func() {
+			_, err := page.Element("#who")
+			installing <- err
+		}()
+		ctx, cancel := context.WithCancel(t.Context())
+		waiting := make(chan error, 1)
+		synctest.Wait()
+		go func() {
+			_, err := page.Context(ctx).Element("#who")
+			waiting <- err
+		}()
+		synctest.Wait()
+		cancel()
+		if err := <-waiting; !errors.Is(err, context.Canceled) {
+			t.Fatalf("waiting query = %v", err)
+		}
+		oldest := func(a, b *heldInstall) int { return a.arrival - b.arrival }
+		for browser.releaseNext(oldest) {
+		}
+		if err := <-installing; err != nil {
+			t.Fatal(err)
+		}
+		if browser.installs[js.Functions.Name] != 1 || browser.installs[js.Element.Name] != 1 {
+			t.Fatalf("installs = %v", browser.installs)
+		}
+	})
 }

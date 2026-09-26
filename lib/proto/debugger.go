@@ -1209,7 +1209,7 @@ type DebuggerScriptFailedToParse struct {
 	// Hash Content hash of the script, SHA-256.
 	Hash string `json:"hash"`
 
-	// BuildID For Wasm modules, the content of the `build_id` custom section. For JavaScript the `debugId` magic comment.
+	// BuildID (optional in older browsers) For Wasm modules, the content of the `build_id` custom section. For JavaScript the `debugId` magic comment.
 	BuildID string `json:"buildId"`
 
 	// ExecutionContextAuxData (optional) Embedder-specific auxiliary data likely matching {isDefault: boolean, type: 'default'|'isolated'|'worker', frameId: string}
@@ -1272,7 +1272,7 @@ type DebuggerScriptParsed struct {
 	// Hash Content hash of the script, SHA-256.
 	Hash string `json:"hash"`
 
-	// BuildID For Wasm modules, the content of the `build_id` custom section. For JavaScript the `debugId` magic comment.
+	// BuildID (optional in older browsers) For Wasm modules, the content of the `build_id` custom section. For JavaScript the `debugId` magic comment.
 	BuildID string `json:"buildId"`
 
 	// ExecutionContextAuxData (optional) Embedder-specific auxiliary data likely matching {isDefault: boolean, type: 'default'|'isolated'|'worker', frameId: string}

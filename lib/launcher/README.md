@@ -32,8 +32,9 @@ five seconds) for graceful close, then terminates the owned process and waits
 for exit and temporary profile removal. `Browser.Close` uses a ten-second total
 budget. Cleanup errors, including timeouts and failed profile deletion, are
 returned. A timeout retains ownership so cleanup can be checked again. Custom
-CDP clients must honor request cancellation; interrupted built-in transport
-writes close the connection because a partially written frame is unusable.
+CDP clients must honor request cancellation. An interrupted write on the
+built-in transport closes the connection only when part of the frame was
+written, or on TLS; a write canceled before any byte is sent leaves it usable.
 
 For standalone use, `Launcher.LaunchNew(ctx)` also rejects port reuse. The
 existing `Launcher.Launch` retains its debugging-port attachment behavior.
@@ -58,6 +59,11 @@ side effects. A helper that cannot initialize causes launch to fail. No helper
 binary downloads or additional Go dependencies are needed. Starting Chrome
 yourself with `exec.Command` bypasses this supervision.
 
+Without `UserDataDir`, `New` selects an unpredictable profile path directly inside
+`os.TempDir()`. Launch creates that directory, with owner-only permissions on
+Unix, and fails if anything, including a symlink, already exists at the path.
+Set `TMPDIR` on Unix, or `TMP` on Windows, to choose a different private parent
+directory.
 Newly created launcher-generated temporary profiles are removed automatically
 after process exit, including failed startup. A pre-existing path at the generated
 location remains caller-owned. `Launcher.Cleanup` waits for that removal and is
@@ -121,7 +127,10 @@ for separate login setup and a runnable launch with bounded cleanup.
 `127.0.0.1:7317` by default. Pass the same token explicitly to
 `NewManaged(ctx, serviceURL, token)`. Its context covers the initial HTTP request
 and response decoding, then subsequent connection establishment. Supply a
-deadline to bound initialization.
+deadline to bound initialization. The returned launcher holds the manager's
+settings for its own host, including the executable; connect with `Client` or
+`MustClient`. `Launch`, `MustLaunch`, and `LaunchNew` reject it with
+`ErrManagedLaunch` instead of running the manager's executable locally.
 The command removes the token from its process environment after reading it,
 and the manager strips that variable from every browser child environment. The
 library-level `NewManager` is also locked when given an empty token.
@@ -139,6 +148,42 @@ wrapper, cannot be changed remotely. `Launcher.XVFB` remains available to
 trusted local launchers. Managed clients also cannot choose the profile path or
 debugging port; cleanup is confined to the manager-created profile.
 
+Remote launch option names must be canonical Chromium switch names: lowercase
+ASCII letters, digits, and hyphens, without a leading hyphen. Chromium lowercases
+switch names on Windows, so other spellings could select a restricted switch.
+Positional arguments, such as `Launcher.StartURL`, cannot be switches: the
+manager rejects an argument that starts with `-` or `/` after leading
+whitespace or other non-printing characters, because Chromium trims whitespace
+before it detects a switch.
+As defense in depth, the manager also rejects switches that:
+
+- Start or load host programs, libraries, extensions, or apps, or set process
+  roles and V8 flags, such as `renderer-cmd-prefix`, `gpu-launcher`,
+  `gssapi-library-name`, `load-extension`, `load-and-launch-app`,
+  `install-isolated-web-app-from-file`, `type`, and `js-flags`.
+- Name host files or directories, or make the browser write them, such as
+  `disk-cache-dir`, `crash-dumps-dir`, `enable-logging`, `log-file`,
+  `log-net-log`, `ssl-key-log-file`, `webrtc-event-logging`,
+  `dump-browser-histograms`, `export-uma-logs-to-file`, `print-to-pdf`,
+  `screenshot`, and the `trace-*` and `enable-tracing*` switches.
+- Expose DevTools outside the manager, such as `remote-debugging-address`,
+  `remote-debugging-pipe`, `remote-allow-origins`,
+  `custom-devtools-frontend`, and `allow-unsafe-devtools-remote-file-loading`.
+- Delegate host credentials, such as `auth-server-allowlist` and
+  `auth-negotiate-delegate-allowlist`.
+- Change how Chromium parses the rest of its command line, such as
+  `single-argument`, which on Windows drops the switches that follow it.
+
+Switch names containing the words `dir`, `directory`, `launcher`, `library`,
+`path`, or `prefix`, and names starting with `remote-debugging-`, are rejected,
+except for the manager-owned `user-data-dir` and `remote-debugging-port` and
+the validated `profile-directory`. Internal `rod-*` options other than the
+browser executable and preferences are rejected.
+These rules do not reduce a token holder's DevTools access. Configure trusted
+server-owned settings, including restricted switches, in `Manager.BeforeLaunch`.
+Managed clients send the settings returned by `Manager.Defaults` back to the
+manager, so a restricted switch returned there causes launch requests to fail.
+
 ## Browser discovery
 
 `LookPath` searches installed browser candidates for the current platform,
@@ -149,5 +194,6 @@ configuration or ownership.
 `ResolveURL(ctx, endpoint)` normalizes a browser endpoint and requests
 `/json/version` with a 10-second timeout, including the response body. Its context
 accepts caller cancellation or a shorter deadline. `Launcher.Launch` passes its
-context to discovery. HTTP status, body-read, JSON, and WebSocket URL errors are
-returned to the caller; `MustResolveURL(ctx, endpoint)` panics on errors.
+context to discovery. Response bodies larger than 1 MiB are rejected. HTTP
+status, body-read, JSON, and WebSocket URL errors are returned to the caller;
+`MustResolveURL(ctx, endpoint)` panics on errors.

@@ -470,25 +470,100 @@ func TestManagerRejectsRemoteProcessOptions(t *testing.T) {
 		{"windows argument smuggling", func(l *Launcher) {
 			l.StartURL("/renderer-cmd-prefix=/bin/sh")
 		}},
+		// Chromium trims whitespace from each argument before it detects
+		// switches: ASCII whitespace on POSIX, Unicode whitespace on Windows.
+		{"space argument smuggling", func(l *Launcher) {
+			l.StartURL(" --renderer-cmd-prefix=/bin/sh")
+		}},
+		{"tab argument smuggling", func(l *Launcher) {
+			l.StartURL("\t--renderer-cmd-prefix=/bin/sh")
+		}},
+		{"newline argument smuggling", func(l *Launcher) {
+			l.StartURL("\n--js-flags=--logfile=/tmp/v8.log")
+		}},
+		{"unicode space argument smuggling", func(l *Launcher) {
+			l.StartURL("\u3000/renderer-cmd-prefix=/bin/sh")
+		}},
+		{"no-break space argument smuggling", func(l *Launcher) {
+			l.StartURL("\u00a0-renderer-cmd-prefix=/bin/sh")
+		}},
+		{"format character argument smuggling", func(l *Launcher) {
+			l.StartURL("\ufeff--renderer-cmd-prefix=/bin/sh")
+		}},
+		{"later argument smuggling", func(l *Launcher) {
+			l.Set(flags.Arguments, "about:blank", " --renderer-cmd-prefix=/bin/sh")
+		}},
 		{"option smuggling", func(l *Launcher) {
 			l.Flags["renderer-cmd-prefix=/bin/sh"] = nil
 		}},
 	}
 
 	for _, f := range []flags.Flag{
+		"allow-unsafe-devtools-remote-file-loading",
+		"auth-negotiate-delegate-allowlist",
+		"auth-negotiate-delegate-whitelist",
+		"auth-server-allowlist",
+		"auth-server-whitelist",
 		"browser-subprocess-path",
+		"clear-key-cdm-path-for-testing",
+		"crash-dumps-dir",
+		"custom-devtools-frontend",
 		"disable-extensions-except",
+		"disk-cache-dir",
+		"dump-browser-histograms",
+		"enable-logging",
+		"enable-tracing",
+		"enable-tracing-output",
+		"export-ukm-logs-to-file",
+		"export-uma-logs-to-file",
+		"focus-result-file",
 		"gpu-launcher",
 		"gssapi-library-name",
+		"install-isolated-web-app-from-file",
+		"ipc-dump-directory",
+		"js-flags",
+		"list-apps",
+		"load-and-launch-app",
+		"load-apps",
 		"load-component-extension",
 		"load-extension",
+		"log-file",
+		"log-net-log",
+		"nacl-gdb",
+		"nacl-gdb-script",
 		"nacl-loader-cmd-prefix",
+		"ozone-dump-file",
+		"pack-extension",
+		"pack-extension-key",
 		"plugin-launcher",
+		"ppapi-flash-path",
 		"ppapi-plugin-launcher",
+		"preinstalled-web-apps-dir",
+		"print-to-pdf",
+		"profiling-file",
 		"register-pepper-plugins",
+		"remote-allow-origins",
+		"remote-debugging-address",
+		"remote-debugging-io-pipes",
+		"remote-debugging-pipe",
 		"renderer-cmd-prefix",
+		"rod-unknown",
+		"screenshot",
+		"single-argument",
+		"ssl-key-log-file",
+		"trace-config-file",
+		"trace-shutdown-file",
+		"trace-startup",
+		"trace-startup-file",
+		"trace-to-file",
+		"type",
 		"utility-cmd-prefix",
+		"webrtc-event-logging",
 		"zygote-cmd-prefix",
+		// Chromium lowercases switch names on Windows.
+		"Renderer-Cmd-Prefix",
+		"LOAD-EXTENSION",
+		"Remote-Debugging-Address",
 	} {
 		tests = append(tests, struct {
 			name      string
@@ -530,6 +605,68 @@ func TestManagerRejectsRemoteProcessOptions(t *testing.T) {
 		New().Set("disable-gpu"),
 		httptest.NewRecorder(),
 	)
+}
+
+func TestManagerRequiresCanonicalOptionNames(t *testing.T) {
+	m := NewManager(managerTestToken)
+	validate := func(f flags.Flag, values ...string) (int, bool) {
+		l := New()
+		l.Flags[f] = values
+		w := httptest.NewRecorder()
+		rejected := false
+		func() {
+			defer func() { rejected = recover() != nil }()
+			m.validateLaunchOptions(l, w)
+		}()
+		return w.Code, rejected
+	}
+
+	for _, f := range []flags.Flag{
+		// Chromium on Windows would treat these as server-owned or
+		// restricted switches.
+		"User-Data-Dir",
+		"Remote-Debugging-Port",
+		"Profile-Directory",
+		"Rod-Env",
+		"Js-Flags",
+		"Disk-Cache-Dir",
+		// Other non-canonical spellings.
+		"-renderer-cmd-prefix",
+		"renderer-cmd-prefix=/bin/sh",
+		" renderer-cmd-prefix",
+		"renderer-cmd-prefix ",
+		"renderer_cmd_prefix",
+		"-",
+		"disableİgpu",
+	} {
+		t.Run(string(f), func(t *testing.T) {
+			code, rejected := validate(f, "/bin/sh")
+			if !rejected || code != http.StatusBadRequest {
+				t.Fatalf("option was accepted: status %d", code)
+			}
+		})
+	}
+
+	for f, values := range map[flags.Flag][]string{
+		"disable-gpu":             nil,
+		"enable-features":         {"NetworkService"},
+		"headless":                {"new"},
+		"lang":                    {"en-US"},
+		"no-sandbox":              nil,
+		"proxy-server":            {"127.0.0.1:8080"},
+		"window-size":             {"800", "600"},
+		flags.Arguments:           {"about:blank", "https://example.com/-x", " about:blank"},
+		flags.Preferences:         {`{}`},
+		flags.ProfileDir:          {"Profile 1"},
+		flags.RemoteDebuggingPort: {"9222"},
+		flags.UserDataDir:         {"ignored"},
+	} {
+		t.Run(string(f), func(t *testing.T) {
+			if code, rejected := validate(f, values...); rejected {
+				t.Fatalf("canonical option was rejected: status %d", code)
+			}
+		})
+	}
 }
 
 func TestManagerStripsControlHeaders(t *testing.T) {

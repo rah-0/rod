@@ -2,15 +2,18 @@ package rod_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/rah-0/rod"
+	"github.com/rah-0/rod/lib/cdp"
 	"github.com/rah-0/rod/lib/proto"
 )
 
@@ -232,4 +235,115 @@ func TestPageDiagnosticsBrowserFrameCleanup(t *testing.T) {
 			t.Errorf("temporary binding remained in frame %s: %+v", frameID, result)
 		}
 	}
+}
+
+// diagnosticsTestClient answers the commands that page diagnostics send. It
+// answers the collector's boundary evaluation with the binding call and a
+// later console message.
+type diagnosticsTestClient struct {
+	eventTestClient
+	events chan *cdp.Event
+	marker string
+}
+
+func (c *diagnosticsTestClient) Call(ctx context.Context, session, method string, params any) ([]byte, error) {
+	data, err := c.eventTestClient.Call(ctx, session, method, params)
+	if err != nil {
+		return nil, err
+	}
+	switch method {
+	case "Page.createIsolatedWorld":
+		return []byte(`{"executionContextId":7}`), nil
+	case "Runtime.addBinding":
+		c.marker = params.(proto.RuntimeAddBinding).Name
+	case "Runtime.evaluate":
+		req := params.(proto.RuntimeEvaluate)
+		if strings.Contains(req.Expression, "](") {
+			payload, _ := json.Marshal(proto.RuntimeBindingCalled{Name: c.marker, Payload: c.marker, ExecutionContextID: 7})
+			sendEvent(c.events, "Runtime.bindingCalled", proto.TargetSessionID(session), string(payload))
+			sendEvent(c.events, "Runtime.consoleAPICalled", proto.TargetSessionID(session), `{"type":"log","args":[{"type":"string","value":"after boundary"}],"executionContextId":0,"timestamp":0}`)
+		}
+		return []byte(`{"result":{"type":"boolean","value":true}}`), nil
+	}
+	return data, nil
+}
+
+func (c *diagnosticsTestClient) Event() <-chan *cdp.Event { return c.events }
+
+// newDiagnosticsTestPage returns the page "page" of a browser connected to a
+// new diagnosticsTestClient.
+func newDiagnosticsTestPage(t *testing.T) (*rod.Page, *diagnosticsTestClient) {
+	t.Helper()
+	client := &diagnosticsTestClient{events: make(chan *cdp.Event)}
+	page := connectTestBrowser(t, rod.New().Context(t.Context()).Client(client)).PageFromSession("page")
+	page.FrameID = "frame"
+	return page, client
+}
+
+func TestDiagnosticsSharedDomains(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		page, _ := newDiagnosticsTestPage(t)
+		first, err := page.EnableDomain(&proto.RuntimeEnable{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, err := page.StartDiagnostics(rod.DiagnosticsOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := page.EnableDomain(&proto.NetworkEnable{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := first(); err != nil {
+			t.Fatal(err)
+		}
+		var runtime proto.RuntimeEnable
+		if !page.LoadState(&runtime) {
+			t.Fatal("first owner disabled collector Runtime")
+		}
+		if _, err := d.Stop(); err != nil {
+			t.Fatal(err)
+		}
+		var network proto.NetworkEnable
+		if !page.LoadState(&network) {
+			t.Fatal("collector disabled second owner's Network")
+		}
+		if err := second(); err != nil {
+			t.Fatal(err)
+		}
+		if page.LoadState(&network) || page.LoadState(&runtime) {
+			t.Fatal("last owner did not restore domains")
+		}
+		if err := errors.Join(first(), second()); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// Undecodable events are skipped and reported once instead of crashing the
+// collector goroutine.
+func TestDiagnosticsUndecodableEvent(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		page, client := newDiagnosticsTestPage(t)
+		d, err := page.StartDiagnostics(rod.DiagnosticsOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, method := range []string{"Runtime.consoleAPICalled", "Runtime.exceptionThrown", "Network.loadingFailed", "Runtime.bindingCalled"} {
+			sendEvent(client.events, method, page.SessionID, `{"type":1,"exceptionDetails":1,"requestId":1,"name":1}`)
+		}
+		sendEvent(client.events, "Runtime.consoleAPICalled", page.SessionID, `{"type":"log","args":[{"type":"string","value":"after"}],"executionContextId":0,"timestamp":0}`)
+		snapshot, err := d.Stop()
+		var typeErr *json.UnmarshalTypeError
+		if !errors.Is(err, rod.ErrDiagnosticsIncomplete) || !errors.As(err, &typeErr) {
+			t.Fatalf("stop error = %v", err)
+		}
+		if strings.Count(err.Error(), "rod: decode") != 1 {
+			t.Fatalf("decoding failures were not reported once: %v", err)
+		}
+		if len(snapshot.Console) != 1 || snapshot.Console[0].Text != "after" {
+			t.Fatalf("collection stopped after an undecodable event: %+v", snapshot)
+		}
+	})
 }

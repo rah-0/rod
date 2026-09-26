@@ -28,7 +28,7 @@ type AuditsAffectedRequest struct {
 	// RequestID (optional) The unique request id.
 	RequestID NetworkRequestID `json:"requestId,omitempty"`
 
-	// URL ...
+	// URL (optional in older browsers) ...
 	URL string `json:"url"`
 }
 

@@ -92,7 +92,9 @@ func captureResponse(page *rod.Page, url string, trigger func(*rod.Page) error) 
 				return result, errors.New("page event stream ended before response capture completed")
 			}
 			var paused proto.FetchRequestPaused
-			if !message.Load(&paused) {
+			if ok, loadErr := message.Load(&paused); loadErr != nil {
+				return result, loadErr
+			} else if !ok {
 				continue
 			}
 			var readErr error

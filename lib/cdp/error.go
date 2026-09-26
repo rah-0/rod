@@ -80,6 +80,10 @@ var ErrTransportNotClosable = errors.New("CDP transport does not support Close")
 // ErrWebSocketProtocol indicates invalid or unsupported WebSocket framing.
 var ErrWebSocketProtocol = errors.New("invalid WebSocket protocol")
 
+// ErrWebSocketMessageTooLarge indicates an incoming message larger than
+// WebSocket.MaxMessageSize.
+var ErrWebSocketMessageTooLarge = errors.New("WebSocket message too large")
+
 // ErrWebSocketClosed indicates a peer's WebSocket close frame.
 var ErrWebSocketClosed = errors.New("WebSocket closed by peer")
 

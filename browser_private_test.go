@@ -174,3 +174,25 @@ func (client *browserLifecycleClient) Call(ctx context.Context, _, method string
 }
 
 func (*browserLifecycleClient) Event() <-chan *cdp.Event { return nil }
+
+func TestConfiguredBrowserCleanupBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := New().Client(&browserLifecycleClient{call: func(context.Context, string) ([]byte, error) { return nil, nil }})
+		done := make(chan struct{})
+		b.process = &localBrowserProcess{done: done}
+		start := time.Now()
+		if err := b.CloseWithTimeout(time.Second); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal(err)
+		}
+		if elapsed := time.Since(start); elapsed != time.Second {
+			t.Fatalf("cleanup exceeded budget: %v", elapsed)
+		}
+		close(done)
+		if err := b.CloseWithTimeout(time.Second); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.CloseWithTimeout(0); !errors.Is(err, ErrCleanupTimeout) {
+			t.Fatal(err)
+		}
+	})
+}

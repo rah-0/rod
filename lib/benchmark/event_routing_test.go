@@ -26,7 +26,7 @@ func (*eventBenchmarkClient) Call(ctx context.Context, _, method string, params 
 	case "Target.attachToTarget":
 		request := params.(proto.TargetAttachToTarget)
 		return json.Marshal(proto.TargetAttachToTargetResult{SessionID: proto.TargetSessionID(request.TargetID) + "-session"})
-	case "Target.setDiscoverTargets", "Page.enable", "Network.enable", "Network.disable":
+	case "Target.setDiscoverTargets", "Page.enable", "Network.enable", "Network.disable", "Runtime.enable", "Runtime.disable":
 		return []byte(`{}`), nil
 	default:
 		return nil, fmt.Errorf("unexpected benchmark protocol call: %s", method)
@@ -178,6 +178,60 @@ func BenchmarkEachEventRouting(b *testing.B) {
 				b.ReportMetric(float64(subscribers), "deliveries/op")
 				b.ReportMetric(float64(subscribers+unrelated), "messages/op")
 			})
+		}
+	}
+}
+
+// Decoding cost of events that carry nested protocol objects, including
+// Rod's event dispatch to one EachEvent subscriber.
+func BenchmarkEachEventDecode(b *testing.B) {
+	b.Run("event=Network.requestWillBeSent", func(b *testing.B) {
+		benchmarkEachEventDecode(b, `{"requestId":"1.1","loaderId":"loader","documentURL":"http://127.0.0.1:8080/","request":{"url":"http://127.0.0.1:8080/app.js","method":"GET","headers":{"Accept":"*/*","Referer":"http://127.0.0.1:8080/","User-Agent":"Mozilla/5.0"},"mixedContentType":"none","initialPriority":"High","referrerPolicy":"strict-origin-when-cross-origin"},"timestamp":1,"wallTime":1,"initiator":{"type":"parser","url":"http://127.0.0.1:8080/","lineNumber":3,"columnNumber":10},"redirectHasExtraInfo":false,"type":"Script","frameId":"frame","hasUserGesture":false}`,
+			func(event *proto.NetworkRequestWillBeSent) bool {
+				return event.Request.URL == "http://127.0.0.1:8080/app.js" && event.Initiator.Type == proto.NetworkInitiatorTypeParser
+			})
+	})
+	b.Run("event=Runtime.consoleAPICalled", func(b *testing.B) {
+		benchmarkEachEventDecode(b, `{"type":"log","args":[{"type":"string","value":"rod-benchmark"},{"type":"number","value":1,"description":"1"},{"type":"object","className":"Object","description":"Object","objectId":"1.2.3","preview":{"type":"object","description":"Object","overflow":false,"properties":[{"name":"a","type":"number","value":"1"},{"name":"b","type":"string","value":"x"}]}}],"executionContextId":1,"timestamp":1,"stackTrace":{"callFrames":[{"functionName":"run","scriptId":"5","url":"http://127.0.0.1:8080/app.js","lineNumber":1,"columnNumber":2},{"functionName":"","scriptId":"5","url":"http://127.0.0.1:8080/app.js","lineNumber":9,"columnNumber":0}]}}`,
+			func(event *proto.RuntimeConsoleAPICalled) bool {
+				return len(event.Args) == 3 && event.Args[0].Value.Str() == "rod-benchmark" && len(event.StackTrace.CallFrames) == 2
+			})
+	})
+}
+
+func benchmarkEachEventDecode[E proto.Event](b *testing.B, params string, valid func(*E) bool) {
+	browser, client, cancel := benchmarkEventBrowser(b)
+	ack := make(chan bool, 1)
+	done := make(chan error, 1)
+	var event E
+	session := proto.TargetSessionID("page")
+	wait := browser.PageFromSession(session).EachEvent(rod.On(func(event *E, _ proto.TargetSessionID) bool {
+		select {
+		case ack <- valid(event):
+		case <-browser.GetContext().Done():
+		}
+		return false
+	}))
+	go func() { done <- wait() }()
+	defer func() {
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			b.Errorf("event subscription cleanup: %v", err)
+		}
+	}()
+	message := &cdp.Event{Method: event.ProtoEvent(), SessionID: string(session), Params: json.RawMessage(params)}
+	b.SetBytes(int64(len(params)))
+	b.ReportAllocs()
+	for b.Loop() {
+		client.events <- message
+		select {
+		case valid := <-ack:
+			if !valid {
+				b.Fatal("event content changed during dispatch")
+			}
+		case err := <-done:
+			done <- err
+			b.Fatalf("event subscription ended before delivery: %v", err)
 		}
 	}
 }

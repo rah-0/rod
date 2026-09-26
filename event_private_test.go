@@ -3,14 +3,11 @@ package rod
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"testing/synctest"
 
-	"github.com/rah-0/rod/internal/observable"
-	"github.com/rah-0/rod/lib/cdp"
 	"github.com/rah-0/rod/lib/proto"
 )
 
@@ -28,11 +25,11 @@ func TestTypedEventDispatch(t *testing.T) {
 				return true
 			}),
 		)
-		browser.event.Publish(eventTestMessage("Network.requestWillBeSent", "first", `{"requestId":"one"}`))
-		browser.event.Publish(eventTestMessage("Page.loadEventFired", "ignored", `{}`))
-		browser.event.Publish(eventTestMessage("Network.requestWillBeSent", "second", `{"requestId":"two"}`))
-		browser.event.Publish(eventTestMessage("Network.loadingFinished", "second", `{"requestId":"two"}`))
-		browser.event.Publish(eventTestMessage("Network.requestWillBeSent", "after-stop", `{"requestId":"three"}`))
+		browser.event.Publish(eventTestMessage("Network.requestWillBeSent", "first", `{"requestId":"one","request":{"url":"/one","method":"","headers":{},"initialPriority":"","referrerPolicy":""},"initiator":{"type":"other"},"loaderId":"","documentURL":"","timestamp":0,"wallTime":0}`))
+		browser.event.Publish(eventTestMessage("Page.loadEventFired", "ignored", `{"timestamp":0}`))
+		browser.event.Publish(eventTestMessage("Network.requestWillBeSent", "second", `{"requestId":"two","request":{"url":"/two","method":"","headers":{},"initialPriority":"","referrerPolicy":""},"initiator":{"type":"other"},"loaderId":"","documentURL":"","timestamp":0,"wallTime":0}`))
+		browser.event.Publish(eventTestMessage("Network.loadingFinished", "second", `{"requestId":"two","timestamp":0,"encodedDataLength":0}`))
+		browser.event.Publish(eventTestMessage("Network.requestWillBeSent", "after-stop", `{"requestId":"three","request":{"url":"/three","method":"","headers":{},"initialPriority":"","referrerPolicy":""},"initiator":{"type":"other"},"loaderId":"","documentURL":"","timestamp":0,"wallTime":0}`))
 		wait()
 		synctest.Wait()
 
@@ -49,63 +46,6 @@ func TestTypedEventDispatch(t *testing.T) {
 			t.Fatal("stopped handler retained its subscription")
 		}
 	})
-}
-
-func TestTypedPageEventSessionAndDomainRestore(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		name := "initially-disabled"
-		if enabled {
-			name = "initially-enabled"
-		}
-		t.Run(name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				browser, client := newEventTestBrowser(t)
-				const session proto.TargetSessionID = "page-session"
-				if enabled {
-					restore, err := browser.EnableDomain(session, &proto.NetworkEnable{})
-					if err != nil {
-						t.Fatal(err)
-					}
-					defer func() {
-						if err := restore(); err != nil {
-							t.Fatal(err)
-						}
-					}()
-				}
-				before := len(client.snapshot())
-				page := &Page{browser: browser, ctx: browser.ctx, SessionID: session}
-				var seen []string
-				wait := page.EachEvent(On(func(event *proto.NetworkLoadingFinished, source proto.TargetSessionID) bool {
-					seen = append(seen, string(event.RequestID)+":"+string(source))
-					return true
-				}))
-				browser.event.Publish(eventTestMessage("Network.loadingFinished", "other-page", `{"requestId":"wrong"}`))
-				browser.event.Publish(eventTestMessage("Network.loadingFinished", session, `{"requestId":"matching"}`))
-				wait()
-				synctest.Wait()
-
-				if !slices.Equal(seen, []string{"matching:page-session"}) {
-					t.Fatalf("page dispatched events from the wrong session: %v", seen)
-				}
-				var state proto.NetworkEnable
-				stillEnabled := browser.LoadState(session, &state)
-				if stillEnabled != enabled {
-					t.Fatalf("domain enabled = %t, originally %t", stillEnabled, enabled)
-				}
-				calls := client.snapshot()[before:]
-				if enabled {
-					if len(calls) != 0 {
-						t.Fatalf("already-enabled domain changed: %v", calls)
-					}
-				} else if !slices.Equal(calls, []eventTestCall{
-					{session: string(session), method: "Network.enable"},
-					{session: string(session), method: "Network.disable"},
-				}) {
-					t.Fatalf("domain calls = %v", calls)
-				}
-			})
-		})
-	}
 }
 
 func TestTypedEventCancellation(t *testing.T) {
@@ -128,23 +68,6 @@ func TestTypedEventCancellation(t *testing.T) {
 		synctest.Wait()
 		if browser.event.Len() != 0 {
 			t.Fatal("canceled handler retained its subscription")
-		}
-	})
-}
-
-func TestTypedWaitEvent(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		browser, _ := newEventTestBrowser(t)
-		page := &Page{browser: browser, ctx: browser.ctx, SessionID: "page"}
-		var browserEvent, pageEvent proto.NetworkLoadingFinished
-		waitBrowser := browser.WaitEvent(&browserEvent)
-		waitPage := page.WaitEvent(&pageEvent)
-		browser.event.Publish(eventTestMessage("Network.loadingFinished", "other", `{"requestId":"browser-first"}`))
-		browser.event.Publish(eventTestMessage("Network.loadingFinished", "page", `{"requestId":"page-first"}`))
-		waitBrowser()
-		waitPage()
-		if browserEvent.RequestID != "browser-first" || pageEvent.RequestID != "page-first" {
-			t.Fatalf("wait results: browser=%q, page=%q", browserEvent.RequestID, pageEvent.RequestID)
 		}
 	})
 }
@@ -172,101 +95,27 @@ func TestTypedTargetDestroyedCancelsPage(t *testing.T) {
 	})
 }
 
-var eventTestDecodeCalls atomic.Int64
-
-type eventTestDecoded struct {
-	Value int
-	Label string
-}
-
-func (eventTestDecoded) ProtoEvent() string { return "Test.decoded" }
-
-func (event *eventTestDecoded) UnmarshalJSON(data []byte) error {
-	eventTestDecodeCalls.Add(1)
-	type plain eventTestDecoded
-	return json.Unmarshal(data, (*plain)(event))
-}
-
-type eventTestAlternate eventTestDecoded
-
-func (eventTestAlternate) ProtoEvent() string { return "Test.decoded" }
-
-func TestTypedMessageLoad(t *testing.T) {
-	eventTestDecodeCalls.Store(0)
-	message := eventTestMessage("Test.decoded", "", `{"Value":42}`)
-	initial := eventTestDecoded{Value: 99, Label: "stale"}
-	if !message.Load(&initial) || initial.Value != 42 || initial.Label != "" {
-		t.Fatalf("first decode retained preexisting destination fields: %+v", initial)
-	}
-	initial.Value = 99
-	var wg sync.WaitGroup
-	for range 16 {
-		wg.Go(func() {
-			var event eventTestDecoded
-			if !message.Load(&event) || event.Value != 42 || event.Label != "" {
-				t.Errorf("decoded event = %+v", event)
-			}
-			event.Value = 99
-		})
-	}
-	wg.Wait()
-	if got := eventTestDecodeCalls.Load(); got != 1 {
-		t.Fatalf("same-type subscribers decoded the message %d times", got)
-	}
-	var event eventTestDecoded
-	message.Load(&event)
-	if event.Value != 42 {
-		t.Fatalf("destination mutation changed the cached event: %+v", event)
-	}
-
-	var alternate eventTestAlternate
-	if !message.Load(&alternate) || alternate.Value != 42 {
-		t.Fatalf("alternate concrete event could not decode the original JSON: %+v", alternate)
-	}
-	var unmatched proto.PageLoadEventFired
-	if message.Load(&unmatched) {
-		t.Fatal("unrelated event type matched the message")
-	}
-}
-
-type eventTestCall struct {
-	session string
-	method  string
-}
-
-type eventTestClient struct {
-	mu    sync.Mutex
-	calls []eventTestCall
-}
-
-func (client *eventTestClient) Call(ctx context.Context, session, method string, _ any) ([]byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	client.mu.Lock()
-	client.calls = append(client.calls, eventTestCall{session, method})
-	client.mu.Unlock()
-	return []byte("{}"), nil
-}
-
-func (*eventTestClient) Event() <-chan *cdp.Event { return nil }
-
-func (client *eventTestClient) snapshot() []eventTestCall {
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	return slices.Clone(client.calls)
-}
-
-func newEventTestBrowser(t *testing.T) (*Browser, *eventTestClient) {
-	t.Helper()
-	client := new(eventTestClient)
-	browser := New().Context(t.Context()).Client(client)
-	browser.event = observable.New[*Message](t.Context())
-	return browser, client
-}
-
-func eventTestMessage(method string, session proto.TargetSessionID, data string) *Message {
-	return &Message{Method: method, SessionID: session, data: json.RawMessage(data)}
+func TestTypedEventDecodeErrorEndsWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		browser, client := newEventTestBrowser(t)
+		called := false
+		wait := browser.EachEvent(On(func(*proto.NetworkLoadingFinished, proto.TargetSessionID) bool {
+			called = true
+			return false
+		}))
+		browser.event.Publish(eventTestMessage("Network.loadingFinished", "page", `{"requestId":42}`))
+		var typeErr *json.UnmarshalTypeError
+		if err := wait(); !errors.As(err, &typeErr) || called {
+			t.Fatalf("wait = %v, callback called = %t", err, called)
+		}
+		synctest.Wait()
+		if browser.event.Len() != 0 {
+			t.Fatal("failed wait retained its subscription")
+		}
+		if got := client.snapshot(); !slices.Equal(got, []eventTestCall{{method: "Network.enable"}, {method: "Network.disable"}}) {
+			t.Fatalf("domain calls = %v", got)
+		}
+	})
 }
 
 func TestTypedEventBufferedDuringEnable(t *testing.T) {
@@ -274,10 +123,10 @@ func TestTypedEventBufferedDuringEnable(t *testing.T) {
 		browser, _ := newEventTestBrowser(t)
 		browser.Client(&sessionTestClient{call: func(_ context.Context, _, method string, _ any) ([]byte, error) {
 			if method == "Network.enable" {
-				browser.event.Publish(eventTestMessage("Network.loadingFinished", "other", `{"requestId":"wrong-session"}`))
-				browser.event.Publish(eventTestMessage("Network.loadingFailed", "page", `{"requestId":"wrong-method"}`))
-				browser.event.Publish(eventTestMessage("Network.loadingFinished", "page", `{"requestId":"first"}`))
-				browser.event.Publish(eventTestMessage("Network.loadingFinished", "page", `{"requestId":"second"}`))
+				browser.event.Publish(eventTestMessage("Network.loadingFinished", "other", `{"requestId":"wrong-session","timestamp":0,"encodedDataLength":0}`))
+				browser.event.Publish(eventTestMessage("Network.loadingFailed", "page", `{"requestId":"wrong-method","timestamp":0,"type":"","errorText":""}`))
+				browser.event.Publish(eventTestMessage("Network.loadingFinished", "page", `{"requestId":"first","timestamp":0,"encodedDataLength":0}`))
+				browser.event.Publish(eventTestMessage("Network.loadingFinished", "page", `{"requestId":"second","timestamp":0,"encodedDataLength":0}`))
 			}
 			return []byte(`{}`), nil
 		}})
@@ -325,7 +174,7 @@ func TestTypedUnusedWaitCancellation(t *testing.T) {
 					t.Fatalf("enabled after unused wait cancellation = %t, want %t", enabled, shared)
 				}
 				if shared {
-					browser.event.Publish(eventTestMessage("Fetch.authRequired", "", `{}`))
+					browser.event.Publish(eventTestMessage("Fetch.authRequired", "", `{"requestId":"r","request":{"url":"/","method":"","headers":{},"initialPriority":"","referrerPolicy":""},"authChallenge":{"origin":"http://example.test","scheme":"","realm":""},"frameId":"","resourceType":""}`))
 					other()
 					if browser.LoadState("", &state) {
 						t.Fatal("completed last listener retained Fetch")
@@ -343,4 +192,115 @@ func TestTypedUnusedWaitCancellation(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestEventWaitReportsSetupAndCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		browser, _ := newEventTestBrowser(t)
+		failed := errors.New("enable rejected")
+		client := &sessionTestClient{call: func(_ context.Context, _, method string, _ any) ([]byte, error) {
+			if method == "Network.enable" {
+				return nil, failed
+			}
+			return []byte(`{}`), nil
+		}}
+		browser.Client(client)
+		wait := browser.EachEvent(On(func(*proto.NetworkLoadingFinished, proto.TargetSessionID) bool { return true }))
+		if err := wait(); !errors.Is(err, failed) {
+			t.Fatalf("setup error: %v", err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		wait = browser.Context(ctx).EachEvent(On(func(*proto.TargetTargetCreated, proto.TargetSessionID) bool { return true }))
+		cancel()
+		if err := wait(); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancellation: %v", err)
+		}
+		synctest.Wait()
+		if browser.event.Len() != 0 {
+			t.Fatal("failed event wait retained subscriptions")
+		}
+	})
+}
+
+// requireMissingObject fails unless err reports that typ lacks the object at path.
+func requireMissingObject(t *testing.T, err error, typ, path string) {
+	t.Helper()
+	missing, ok := errors.AsType[*proto.MissingFieldError](err)
+	if !ok || !errors.Is(err, proto.ErrMissingField) || missing.Type != typ || missing.Path != path {
+		t.Fatalf("error = %v, want %s without %s", err, typ, path)
+	}
+}
+
+// Responses and events without objects that the protocol requires fail with
+// proto.ErrMissingField instead of reaching code that dereferences them.
+func TestMissingProtocolObjects(t *testing.T) {
+	respond := func(t *testing.T, method, response string) *Browser {
+		browser, _ := newEventTestBrowser(t)
+		return browser.Client(&sessionTestClient{call: func(_ context.Context, _, called string, _ any) ([]byte, error) {
+			if called == method {
+				return []byte(response), nil
+			}
+			return []byte(`{}`), nil
+		}})
+	}
+	t.Run("Page.Eval", func(t *testing.T) {
+		page := respond(t, "Runtime.callFunctionOn", `{}`).PageFromSession("session")
+		*page.jsCtxID = "window"
+		res, err := page.Eval(`() => 1`)
+		if res != nil {
+			t.Fatalf("result = %+v", res)
+		}
+		requireMissingObject(t, err, "RuntimeCallFunctionOnResult", "result")
+	})
+	t.Run("Page.ObjectToJSON", func(t *testing.T) {
+		page := respond(t, "Runtime.callFunctionOn", `{"result":null}`).PageFromSession("session")
+		_, err := page.ObjectToJSON(&proto.RuntimeRemoteObject{ObjectID: "object"})
+		requireMissingObject(t, err, "RuntimeCallFunctionOnResult", "result")
+	})
+	t.Run("Page.Info", func(t *testing.T) {
+		info, err := respond(t, "Target.getTargetInfo", `{}`).PageFromSession("session").Info()
+		if info != nil {
+			t.Fatalf("info = %+v", info)
+		}
+		requireMissingObject(t, err, "TargetGetTargetInfoResult", "targetInfo")
+	})
+	for response, path := range map[string]string{`{}`: "node", `{"node":{"shadowRoots":[null]}}`: "node.shadowRoots[0]"} {
+		t.Run("Element.ShadowRoot/"+path, func(t *testing.T) {
+			page := respond(t, "DOM.describeNode", response).PageFromSession("session")
+			element := &Element{page: page, ctx: t.Context(), Object: &proto.RuntimeRemoteObject{ObjectID: "element"}}
+			_, err := element.ShadowRoot()
+			requireMissingObject(t, err, "DOMDescribeNodeResult", path)
+		})
+	}
+	t.Run("Browser.Pages", func(t *testing.T) {
+		_, err := respond(t, "Target.getTargets", `{"targetInfos":[{"targetId":"page","type":"other","title":"","url":"","attached":false},null]}`).Pages()
+		requireMissingObject(t, err, "TargetGetTargetsResult", "targetInfos[1]")
+	})
+	t.Run("Page.WaitOpen", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			browser, _ := newEventTestBrowser(t)
+			wait := browser.PageFromSession("session").WaitOpen()
+			browser.event.Publish(eventTestMessage("Target.targetCreated", "", `{}`))
+			page, err := wait()
+			if page != nil {
+				t.Fatal("opened a page from a malformed event")
+			}
+			requireMissingObject(t, err, "TargetTargetCreated", "targetInfo")
+		})
+	})
+	t.Run("Page.Reload", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			browser, _ := newEventTestBrowser(t)
+			browser.Client(&sessionTestClient{call: func(_ context.Context, _, method string, _ any) ([]byte, error) {
+				if method == "Runtime.callFunctionOn" {
+					browser.event.Publish(eventTestMessage("Page.frameNavigated", "session", `{"type":"Navigation"}`))
+					return []byte(`{"result":{"type":"undefined"}}`), nil
+				}
+				return []byte(`{}`), nil
+			}})
+			page := browser.PageFromSession("session")
+			*page.jsCtxID = "window"
+			requireMissingObject(t, page.Reload(), "PageFrameNavigated", "frame")
+		})
+	})
 }

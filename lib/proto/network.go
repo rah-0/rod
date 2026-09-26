@@ -1437,7 +1437,7 @@ type NetworkSignedExchangeInfo struct {
 	// OuterResponse The outer response of signed HTTP exchange which was received from network.
 	OuterResponse *NetworkResponse `json:"outerResponse"`
 
-	// HasExtraInfo Whether network response for the signed exchange was accompanied by
+	// HasExtraInfo (optional in older browsers) Whether network response for the signed exchange was accompanied by
 	// extra headers.
 	HasExtraInfo bool `json:"hasExtraInfo"`
 
@@ -1639,7 +1639,7 @@ type NetworkClientSecurityState struct {
 	// InitiatorIPAddressSpace ...
 	InitiatorIPAddressSpace NetworkIPAddressSpace `json:"initiatorIPAddressSpace"`
 
-	// LocalNetworkAccessRequestPolicy ...
+	// LocalNetworkAccessRequestPolicy (optional in older browsers) ...
 	LocalNetworkAccessRequestPolicy NetworkLocalNetworkAccessRequestPolicy `json:"localNetworkAccessRequestPolicy"`
 }
 
@@ -2849,7 +2849,7 @@ type NetworkGetRequestPostDataResult struct {
 	// PostData Request body string, omitting files from multipart requests
 	PostData string `json:"postData"`
 
-	// Base64Encoded True, if content was sent as base64.
+	// Base64Encoded (optional in older browsers) True, if content was sent as base64.
 	Base64Encoded bool `json:"base64Encoded"`
 }
 

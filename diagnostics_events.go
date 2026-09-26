@@ -2,10 +2,57 @@ package rod
 
 import (
 	"crypto/sha256"
+	"errors"
 	"slices"
 
 	"github.com/rah-0/rod/lib/proto"
 )
+
+// diagnosticEvent reports whether collect records events of method.
+func diagnosticEvent(method string) bool {
+	switch method {
+	case (proto.RuntimeConsoleAPICalled{}).ProtoEvent(),
+		(proto.RuntimeExceptionThrown{}).ProtoEvent(),
+		(proto.RuntimeExceptionRevoked{}).ProtoEvent(),
+		(proto.NetworkRequestWillBeSent{}).ProtoEvent(),
+		(proto.NetworkResponseReceived{}).ProtoEvent(),
+		(proto.NetworkLoadingFinished{}).ProtoEvent(),
+		(proto.NetworkLoadingFailed{}).ProtoEvent():
+		return true
+	}
+	return false
+}
+
+// load decodes msg into out. A decoding failure marks the diagnostics
+// incomplete; the event is skipped. The caller holds d.mu.
+func (d *PageDiagnostics) load[E proto.Event](msg *Message, out *E) bool {
+	ok, err := msg.Load(out)
+	if err != nil {
+		d.incomplete(err)
+	}
+	return ok
+}
+
+// incomplete marks the diagnostics incomplete for an event that is skipped
+// because it could not be decoded or lacks an object that they use. Only the
+// first such error is kept. The caller holds d.mu.
+func (d *PageDiagnostics) incomplete(err error) {
+	if !d.undecodable {
+		d.undecodable = true
+		d.err = errors.Join(d.err, ErrDiagnosticsIncomplete, err)
+	}
+}
+
+// reachBoundary reports whether msg is the binding call Stop uses as its marker.
+func (d *PageDiagnostics) reachBoundary(msg *Message) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var event proto.RuntimeBindingCalled
+	if d.load(msg, &event) && event.Name == d.marker && event.Payload == d.marker {
+		d.complete = true
+	}
+	return d.complete
+}
 
 func (d *PageDiagnostics) collect(msg *Message) {
 	d.mu.Lock()
@@ -13,7 +60,9 @@ func (d *PageDiagnostics) collect(msg *Message) {
 	switch msg.Method {
 	case (proto.RuntimeConsoleAPICalled{}).ProtoEvent():
 		var e proto.RuntimeConsoleAPICalled
-		msg.Load(&e)
+		if !d.load(msg, &e) {
+			return
+		}
 		if len(d.data.Console) >= d.options.MaxRecords {
 			d.data.DroppedConsole++
 			return
@@ -31,8 +80,11 @@ func (d *PageDiagnostics) collect(msg *Message) {
 		d.data.Console = append(d.data.Console, ConsoleMessage{Type: proto.RuntimeConsoleAPICalledType(d.text(string(e.Type))), Text: render.String(), DiagnosticLocation: d.location(e.StackTrace)})
 	case (proto.RuntimeExceptionThrown{}).ProtoEvent():
 		var e proto.RuntimeExceptionThrown
-		msg.Load(&e)
+		if !d.load(msg, &e) {
+			return
+		}
 		if e.ExceptionDetails == nil {
+			d.incomplete(missingEventField(msg.Method, "RuntimeExceptionThrown", "exceptionDetails"))
 			return
 		}
 		if len(d.data.PageErrors) >= d.options.MaxRecords {
@@ -62,15 +114,20 @@ func (d *PageDiagnostics) collect(msg *Message) {
 		d.data.PageErrors = append(d.data.PageErrors, PageError{ExceptionID: x.ExceptionID, Text: render.String(), DiagnosticLocation: location})
 	case (proto.RuntimeExceptionRevoked{}).ProtoEvent():
 		var e proto.RuntimeExceptionRevoked
-		msg.Load(&e)
+		if !d.load(msg, &e) {
+			return
+		}
 		d.data.PageErrors = slices.DeleteFunc(d.data.PageErrors, func(x PageError) bool { return x.ExceptionID == e.ExceptionID })
 	case (proto.NetworkRequestWillBeSent{}).ProtoEvent():
 		var e proto.NetworkRequestWillBeSent
-		msg.Load(&e)
+		if !d.load(msg, &e) {
+			return
+		}
 		if e.RedirectResponse != nil && e.RedirectResponse.Status >= 400 {
 			d.failure(ResourceFailure{RequestID: e.RequestID, URL: d.text(e.RedirectResponse.URL), Type: e.Type, Status: e.RedirectResponse.Status})
 		}
 		if e.Request == nil {
+			d.incomplete(missingEventField(msg.Method, "NetworkRequestWillBeSent", "request"))
 			return
 		}
 		if _, exists := d.requests[sha256.Sum256([]byte(e.RequestID))]; !exists && len(d.requests) >= d.options.MaxRequests {
@@ -80,8 +137,11 @@ func (d *PageDiagnostics) collect(msg *Message) {
 		d.requests[sha256.Sum256([]byte(e.RequestID))] = diagnosticRequest{url: d.text(e.Request.URL), typ: proto.NetworkResourceType(d.text(string(e.Type)))}
 	case (proto.NetworkResponseReceived{}).ProtoEvent():
 		var e proto.NetworkResponseReceived
-		msg.Load(&e)
+		if !d.load(msg, &e) {
+			return
+		}
 		if e.Response == nil {
+			d.incomplete(missingEventField(msg.Method, "NetworkResponseReceived", "response"))
 			return
 		}
 		r, exists := d.requests[sha256.Sum256([]byte(e.RequestID))]
@@ -96,11 +156,15 @@ func (d *PageDiagnostics) collect(msg *Message) {
 		}
 	case (proto.NetworkLoadingFinished{}).ProtoEvent():
 		var e proto.NetworkLoadingFinished
-		msg.Load(&e)
+		if !d.load(msg, &e) {
+			return
+		}
 		delete(d.requests, sha256.Sum256([]byte(e.RequestID)))
 	case (proto.NetworkLoadingFailed{}).ProtoEvent():
 		var e proto.NetworkLoadingFailed
-		msg.Load(&e)
+		if !d.load(msg, &e) {
+			return
+		}
 		r := d.requests[sha256.Sum256([]byte(e.RequestID))]
 		delete(d.requests, sha256.Sum256([]byte(e.RequestID)))
 		if r.failureDropped {

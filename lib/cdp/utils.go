@@ -8,7 +8,9 @@ import (
 	"github.com/rah-0/rod/lib/utils"
 )
 
-// Dialer interface for WebSocket connection.
+// Dialer interface for WebSocket connection. As with net.Dialer, ctx bounds
+// only the dial. WebSocket.Connect can cancel it when Connect returns, and the
+// returned connection must remain usable afterward.
 type Dialer interface {
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
 }

@@ -18,6 +18,8 @@ type queryContextCase struct {
 	name  string
 	query func() (rod.Elements, error)
 	texts []string
+	// checks counts calls testing which cached context owns the first element.
+	checks int64
 }
 
 func TestElementsCollectionContexts(t *testing.T) {
@@ -42,10 +44,17 @@ func TestElementsCollectionContexts(t *testing.T) {
 	if !adopted.Bool() {
 		t.Fatal("fixture did not retain the adopted node's original prototype realm")
 	}
-	var contextLookups atomic.Int64
+	// Every context is already cached: queries must not create window handles, and
+	// only a call on an object of unknown context checks the cached contexts.
+	var windows, checks atomic.Int64
 	g.mc.setCall(func(ctx context.Context, session, method string, params any) ([]byte, error) {
-		if request, ok := params.(proto.RuntimeCallFunctionOn); ok && request.FunctionDeclaration == `() => window` {
-			contextLookups.Add(1)
+		if request, ok := params.(proto.RuntimeCallFunctionOn); ok {
+			switch {
+			case request.FunctionDeclaration == `() => window`:
+				windows.Add(1)
+			case request.FunctionDeclaration == `function() {}` && len(request.Arguments) == 1:
+				checks.Add(1)
+			}
 		}
 		return g.mc.principal.Call(ctx, session, method, params)
 	})
@@ -70,6 +79,8 @@ func TestElementsCollectionContexts(t *testing.T) {
 				return p.ElementsByJS(rod.Eval(`() => document.querySelectorAll('section')`).This(frameWindow))
 			},
 			texts: []string{"Child"},
+			// The page window rejects the frame's handle; the frame window accepts it.
+			checks: 2,
 		},
 		{
 			name: "mixed frame array",
@@ -122,7 +133,7 @@ func TestElementsCollectionContexts(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			before := contextLookups.Load()
+			windowsBefore, checksBefore := windows.Load(), checks.Load()
 			elements, err := test.query()
 			if err != nil {
 				t.Fatal(err)
@@ -130,20 +141,19 @@ func TestElementsCollectionContexts(t *testing.T) {
 			if len(elements) != len(test.texts) {
 				t.Fatalf("element count = %d, want %d", len(elements), len(test.texts))
 			}
-			wantLookups := int64(0)
-			if len(elements) > 0 {
-				wantLookups = 1
+			if count := windows.Load() - windowsBefore; count != 0 {
+				t.Fatalf("created %d window handles for cached contexts", count)
 			}
-			if count := contextLookups.Load() - before; count != wantLookups {
-				t.Fatalf("context lookups = %d for %d elements, want %d", count, len(elements), wantLookups)
+			if count := checks.Load() - checksBefore; count != test.checks {
+				t.Fatalf("context checks = %d for %d elements, want %d", count, len(elements), test.checks)
 			}
 			for i, element := range elements {
 				assertElementCollectionContext(t, element, test.texts[i])
 			}
 		})
 	}
-	t.Run("large collection shares context lookup", func(t *testing.T) {
-		before := contextLookups.Load()
+	t.Run("large collection shares the collection context", func(t *testing.T) {
+		before := windows.Load() + checks.Load()
 		elements, err := p.ElementsByJS(rod.Eval(`() => Array(100).fill(document.querySelector('#main'))`))
 		if err != nil {
 			t.Fatal(err)
@@ -151,8 +161,8 @@ func TestElementsCollectionContexts(t *testing.T) {
 		if len(elements) != 100 {
 			t.Fatalf("element count = %d, want 100", len(elements))
 		}
-		if count := contextLookups.Load() - before; count != 1 {
-			t.Fatalf("context lookups = %d for 100 elements, want 1", count)
+		if count := windows.Load() + checks.Load() - before; count != 0 {
+			t.Fatalf("context lookup calls = %d for 100 elements, want 0", count)
 		}
 		assertElementCollectionContext(t, elements.First(), "Main")
 		assertElementCollectionContext(t, elements.Last(), "Main")

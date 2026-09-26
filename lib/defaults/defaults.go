@@ -3,6 +3,7 @@
 package defaults
 
 import (
+	"errors"
 	"flag"
 	"log"
 	"os"
@@ -62,8 +63,28 @@ var CDP = utils.LoggerQuiet
 var loadOnce sync.Once
 
 // Load applies the optional -rod command-line configuration once.
-// Applications that call flag.Parse or override exported defaults must call Load first.
-// Test binaries can do this in TestMain before calling m.Run.
+//
+// If [flag.CommandLine] has already been parsed, Load uses only the parsed
+// value of a defined -rod flag. Otherwise it defines -rod on [flag.CommandLine]
+// unless the application already has, then reads [os.Args] with the flag
+// package's rules: -rod and --rod take "=value" or the next argument, and
+// reading stops at "--" or at the first non-flag argument. Flags already defined
+// on [flag.CommandLine] follow their definitions; bool flags never consume the
+// next argument. Reading also stops at an undefined flag without "=value",
+// because its value cannot be distinguished from the next argument. Put -rod
+// before such flags, use the -name=value form, or define them before calling Load.
+// Undefined test.* flags never consume the next argument, so -rod given to
+// "go test" also applies to Rod objects created while a test binary
+// initializes its packages, before the testing package defines those flags.
+// Pass -rod to "go test" before any "--".
+//
+// When Load defines -rod, a later [flag.Parse] applies each -rod value it
+// parses, in order, so values after flags defined later also apply. Call Load
+// before flag.Parse, and assign exported defaults after flag.Parse. A test
+// binary accepts -rod only when it is defined before the testing package
+// parses flags: call Load in TestMain before calling m.Run, or create a Rod
+// object during package initialization. Otherwise "go test" reports "flag
+// provided but not defined: -rod".
 func Load() {
 	loadOnce.Do(loadCLI)
 }
@@ -89,60 +110,70 @@ func resetValues() {
 	CDP = utils.LoggerQuiet
 }
 
-var envParsers = map[string]func(string){
-	"trace": func(string) {
+var envParsers = map[string]func(string) error{
+	"trace": func(string) error {
 		Trace = true
+		return nil
 	},
-	"slow": func(v string) {
-		var err error
-		Slow, err = time.ParseDuration(v)
+	"slow": func(v string) error {
+		slow, err := time.ParseDuration(v)
 		if err != nil {
-			msg := "invalid value for \"slow\": " + err.Error() +
-				" (learn format from https://golang.org/pkg/time/#ParseDuration)"
-			panic(msg)
+			return errors.New("invalid value for \"slow\": " + err.Error() +
+				" (learn format from https://golang.org/pkg/time/#ParseDuration)")
 		}
+		Slow = slow
+		return nil
 	},
-	"monitor": func(v string) {
+	"monitor": func(v string) error {
 		Monitor = "127.0.0.1:0"
 		if v != "" {
 			Monitor = v
 		}
+		return nil
 	},
-	"show": func(string) {
+	"show": func(string) error {
 		Show = true
+		return nil
 	},
-	"devtools": func(string) {
+	"devtools": func(string) error {
 		Devtools = true
+		return nil
 	},
-	"dir": func(v string) {
+	"dir": func(v string) error {
 		Dir = v
+		return nil
 	},
-	"port": func(v string) {
+	"port": func(v string) error {
 		Port = v
+		return nil
 	},
-	"bin": func(v string) {
+	"bin": func(v string) error {
 		Bin = v
+		return nil
 	},
-	"proxy": func(v string) {
+	"proxy": func(v string) error {
 		Proxy = v
+		return nil
 	},
-	"url": func(v string) {
+	"url": func(v string) error {
 		URL = v
+		return nil
 	},
-	"cdp": func(_ string) {
+	"cdp": func(string) error {
 		CDP = log.New(log.Writer(), "[cdp] ", log.LstdFlags)
+		return nil
 	},
 }
 
 // ResetWith options and "-rod" command line flag.
-// It resets the defaults, loads the command-line flag, and then applies options.
-// Explicit options override values from the command line.
+// It resets the defaults, loads the command-line flag as described by [Load],
+// and then applies options. Explicit options override values from the command line.
 // If you want to disable the global cli argument flag, set env DISABLE_ROD_FLAG.
 // Values are separated by commas, key and value are separated by "=". For example:
 //
 //	go run main.go -rod=show
 //	go run main.go -rod show,trace,slow=1s,monitor
-//	go run main.go --rod="slow=1s,dir=path/has /space,monitor=:9223"
+//	go run main.go --rod="slow=1s,dir=path/has /space,monitor=127.0.0.1:9223"
 func ResetWith(options string) {
 	Reset()
 	loadCLI()
@@ -150,34 +181,118 @@ func ResetWith(options string) {
 }
 
 func loadCLI() {
-	if _, has := os.LookupEnv("DISABLE_ROD_FLAG"); !has {
-		if !flag.Parsed() && flag.Lookup("rod") == nil {
-			flag.String("rod", "", `Set the default value of options used by rod.`)
-		}
+	if _, has := os.LookupEnv("DISABLE_ROD_FLAG"); has {
+		return
+	}
 
-		parseFlag(os.Args)
+	if flag.Parsed() {
+		// The flag package has already separated flags from other arguments,
+		// including those after "--".
+		if f := flag.Lookup("rod"); f != nil {
+			parse(f.Value.String())
+		}
+		return
+	}
+
+	if flag.Lookup("rod") == nil {
+		flag.Var(&commandLineOption{}, "rod", `Set the default value of options used by rod.`)
+	}
+	for _, options := range commandLineOptions(flag.CommandLine, os.Args[1:]) {
+		parse(options)
 	}
 }
 
-func parseFlag(args []string) {
-	reg := regexp.MustCompile(`^--?rod$`)
-	regEq := regexp.MustCompile(`^--?rod=(.*)$`)
-	opts := ""
-	for i, arg := range args {
-		if reg.MatchString(arg) && i+1 < len(args) {
-			opts = args[i+1]
-		} else if m := regEq.FindStringSubmatch(arg); len(m) == 2 {
-			opts = m[1]
+// commandLineOption is the -rod flag registered by Load. Parsing applies each
+// occurrence; String returns all occurrences, in order, for a later ResetWith.
+type commandLineOption struct {
+	values []string
+}
+
+func (o *commandLineOption) String() string {
+	if o == nil {
+		return ""
+	}
+	return strings.Join(o.values, ",")
+}
+
+func (o *commandLineOption) Set(options string) error {
+	if err := parseOptions(options); err != nil {
+		return err
+	}
+	o.values = append(o.values, options)
+	return nil
+}
+
+// commandLineOptions returns each -rod value in args, following the argument
+// rules of fs.Parse without parsing or modifying fs.
+func commandLineOptions(fs *flag.FlagSet, args []string) []string {
+	var values []string
+	for len(args) > 0 {
+		arg := args[0]
+		if len(arg) < 2 || arg[0] != '-' {
+			break
+		}
+		name := arg[1:]
+		if name[0] == '-' {
+			if len(name) == 1 {
+				break // "--" terminates the flags.
+			}
+			name = name[1:]
+		}
+		if name[0] == '-' || name[0] == '=' {
+			break // fs.Parse rejects this syntax.
+		}
+		args = args[1:]
+		name, value, hasValue := strings.Cut(name, "=")
+
+		if name == "rod" {
+			if !hasValue {
+				if len(args) == 0 {
+					break
+				}
+				value, args = args[0], args[1:]
+			}
+			values = append(values, value)
+			continue
+		}
+
+		f := fs.Lookup(name)
+		if f == nil {
+			if hasValue && name != "help" && name != "h" {
+				continue
+			}
+			if strings.HasPrefix(name, "test.") {
+				// A test binary defines its test.* flags only after package
+				// initialization. The go command passes them as
+				// -test.name=value, except the boolean -test.paniconexit0.
+				continue
+			}
+			// Without a definition, the next argument may be this flag's value.
+			break
+		}
+		if boolean, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && boolean.IsBoolFlag() {
+			continue
+		}
+		if !hasValue {
+			if len(args) == 0 {
+				break
+			}
+			args = args[1:]
 		}
 	}
-
-	parse(opts)
+	return values
 }
 
 // parse options and set them globally.
 func parse(options string) {
+	if err := parseOptions(options); err != nil {
+		panic(err.Error())
+	}
+}
+
+func parseOptions(options string) error {
 	if options == "" {
-		return
+		return nil
 	}
 
 	reg := regexp.MustCompile(`[,\r\n]`)
@@ -191,8 +306,11 @@ func parse(options string) {
 
 		f := envParsers[n]
 		if f == nil {
-			panic("unknown rod env option: " + n)
+			return errors.New("unknown rod env option: " + n)
 		}
-		f(v)
+		if err := f(v); err != nil {
+			return err
+		}
 	}
+	return nil
 }

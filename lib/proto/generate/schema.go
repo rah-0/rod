@@ -68,6 +68,8 @@ type definition struct {
 	returnValue  bool
 	props        []*definition
 	skip         bool
+	// older marks a member that browsers older than the schema omit.
+	older bool
 }
 
 func parse(schema jsonvalue.Value) []*domain {

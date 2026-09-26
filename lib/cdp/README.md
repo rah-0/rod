@@ -11,13 +11,18 @@ For basic usage, check this [file](example_test.go).
 For more info, check the unit tests.
 
 `WebSocket.Connect` uses its context only for connection establishment, including
-TLS and the HTTP upgrade. Failed or canceled handshakes close the connection;
-after success, the caller owns its lifetime and must call `Close` when finished.
+TLS and the HTTP upgrade. `WebSocket.HandshakeTimeout`, 30 seconds by default,
+also bounds establishment; a negative value leaves only the context in effect.
+Connect reads at most 1 MiB of upgrade response. Failed, canceled, or timed-out
+handshakes close the connection; after success, the caller owns its lifetime and
+must call `Close` when finished. The context passed to a custom `Dialer` can
+end when Connect returns, so the dialed connection must not depend on it.
 
 `Client.Call` uses `WebSocket.SendContext` to honor cancellation while waiting
-to write or sending a frame. Cancellation before a write leaves the connection
-usable; an interrupted write closes it because a partial frame cannot safely be
-resumed. Custom transports can implement `SendContext(context.Context, []byte)
+to write or sending a frame. Cancellation before the connection accepts any byte
+of the frame leaves the connection usable. A partially written frame cannot be
+resumed, so that interruption closes the connection; TLS connections close after
+any failed write. Custom transports can implement `SendContext(context.Context, []byte)
 error` for the same behavior; transports that implement only `Send` remain
 responsible for bounding that operation. `Client.Close` closes an underlying
 transport that implements `io.Closer`.
@@ -34,8 +39,11 @@ default to port 80 and secure URLs to port 443. TLS uses normal certificate
 verification.
 
 `Read` reassembles fragmented text, responds to ping, ignores pong, and returns
-`ErrWebSocketClosed` with a `WebSocketCloseError` on peer close. Protocol replies
-have a five-second write deadline. Invalid frames terminate the connection with
+`ErrWebSocketClosed` with a `WebSocketCloseError` on peer close. A message larger
+than `WebSocket.MaxMessageSize`, 256 MiB by default and counting all fragments,
+returns `ErrWebSocketMessageTooLarge` and closes the connection with status 1009;
+`math.MaxInt64` accepts any size. A frame header allocates at most 256 MiB before
+its payload arrives. Protocol replies have a five-second write deadline. Invalid frames terminate the connection with
 an error; binary messages and compression are unsupported. `Send` preserves its
 input bytes.
 

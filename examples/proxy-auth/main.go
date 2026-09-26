@@ -126,8 +126,14 @@ func run(ctx context.Context, output io.Writer) (err error) {
 	}
 
 	// Install authentication before navigation. Join its waiter on every exit.
+	// Only challenges from this proxy receive the credentials.
 	authCtx, stopAuth := context.WithCancel(ctx)
-	handleAuth := browser.Context(authCtx).HandleAuth(username, password)
+	handleAuth := browser.Context(authCtx).HandleAuth(rod.AuthCredentials{
+		Source:   proto.FetchAuthChallengeSourceProxy,
+		Origin:   proxyURL,
+		Username: username,
+		Password: password,
+	})
 	authDone := make(chan error, 1)
 	go func() {
 		defer close(authDone)

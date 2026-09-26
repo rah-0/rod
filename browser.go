@@ -7,10 +7,11 @@ package rod
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,7 @@ import (
 var (
 	_ proto.Client      = &Browser{}
 	_ proto.Contextable = &Browser{}
+	_ proto.Decodable   = &Browser{}
 )
 
 // Browser represents the browser.
@@ -49,6 +51,7 @@ type Browser struct {
 	slowMotion time.Duration // see defaults.slow
 	trace      bool          // see defaults.Trace
 	monitor    string
+	decoding   proto.Decoding
 
 	defaultDevice devices.Device
 
@@ -56,13 +59,11 @@ type Browser struct {
 	client        CDPClient
 	event         *observable.Observable[*Message] // all the browser events from cdp client
 	connectionCtx context.Context
-	targetsLock   chan struct{}
 	stateLock     *sync.Mutex
 	process       *localBrowserProcess
 
-	// stores all the previous cdp call of same type. Browser doesn't have enough API
-	// for us to retrieve all its internal states. This is an workaround to map them to local.
-	// For example you can't use cdp API to get the current position of mouse.
+	// states holds cached pages, session and attachment coordination, download
+	// and drag leases, and the retained commands described by [Browser.LoadState].
 	states *sync.Map
 }
 
@@ -126,7 +127,6 @@ func New() *Browser {
 		monitor:       defaults.Monitor,
 		logger:        DefaultLogger,
 		defaultDevice: devices.LaptopWithMDPIScreen.Landscape(),
-		targetsLock:   make(chan struct{}, 1),
 		stateLock:     &sync.Mutex{},
 		states:        &sync.Map{},
 	}).WithPanic(utils.Panic)
@@ -137,6 +137,11 @@ func (b *Browser) Incognito() (*Browser, error) {
 	res, err := proto.TargetCreateBrowserContext{}.Call(b)
 	if err != nil {
 		return nil, err
+	}
+	if lenientMissing(b.decoding, res.BrowserContextID) {
+		// An empty ID would make the copy act on the default context, and
+		// Close would close the browser instead of disposing a context.
+		return nil, missingField("TargetCreateBrowserContextResult", "browserContextId")
 	}
 
 	incognito := *b
@@ -158,20 +163,64 @@ func (b *Browser) SlowMotion(delay time.Duration) *Browser {
 }
 
 // Trace enables/disables the visual tracing of the input actions on the page.
+// Trace logs and overlays omit typed text, character keys, and time or color
+// input values.
 func (b *Browser) Trace(enable bool) *Browser {
 	b.trace = enable
 	return b
 }
 
 // Monitor address to listen if not empty. Shortcut for [Browser.ServeMonitor].
-// The monitor has no authentication, so keep it on loopback or protect it with
-// a trusted authenticated proxy.
+// [Browser.Connect] logs the monitor URL, which includes its access token, as
+// [TraceTypeMonitor] with the [Browser.Logger]. It then tries to open the URL
+// in the system browser, passing it as a command-line argument that other users
+// of the machine may be able to read. Call [Browser.ServeMonitor] instead to get
+// the URL in code without opening it. Anyone who knows the URL can view the
+// pages, so keep the monitor on loopback or protect it with a trusted
+// authenticated proxy.
 func (b *Browser) Monitor(url string) *Browser {
 	b.monitor = url
 	return b
 }
 
-// Logger overrides the default log functions for tracing.
+// Decoding selects how command results and events are decoded. It applies to
+// the generated Call methods of the browser, its pages, and their elements, to
+// [Message.Load] for the events the browser receives, and to the results and
+// events that Rod decodes itself. The default, [proto.DecodeStrict], rejects a
+// result or event that lacks a field the protocol requires: the method that
+// received it returns an error matching [proto.ErrMissingField].
+//
+// [proto.DecodeLenient] accepts such data, for endpoints that do not send
+// complete protocol data. Missing and null fields then keep their zero value:
+// objects and arrays are nil, a null entry of an array of objects or arrays is
+// nil, and a null entry of another array, such as a node ID, is its zero value.
+// Rod's methods check the objects, arrays and object entries that they use:
+// instead of panicking or returning a nil result, a method whose result or
+// event lacks one returns an error matching [proto.ErrMissingField], a
+// [*proto.MissingFieldError] that names the field as with
+// [proto.DecodeStrict]. They also treat an empty identifier, or execution
+// context ID 0, as missing where they would use it to address a browser
+// context, target, session, search, script or execution context; for example,
+// a page attached without a session ID would send its commands to the browser.
+// Other missing fields keep their zero value, including IDs that events are
+// matched by, and Rod's methods act on it as if the endpoint had sent it.
+// Values that Rod returns or passes on, such as the node from
+// [Element.Describe] and the events that handlers and [Browser.Event]
+// receive, can still hold nil objects and entries, so your own code must check
+// the fields it reads. Use lenient decoding only for an endpoint you trust to
+// send what your code reads. Set it before [Browser.Connect].
+func (b *Browser) Decoding(mode proto.Decoding) *Browser {
+	b.decoding = mode
+	return b
+}
+
+// GetDecoding returns the decoding set by [Browser.Decoding]. It implements
+// [proto.Decodable].
+func (b *Browser) GetDecoding() proto.Decoding {
+	return b.decoding
+}
+
+// Logger overrides the default log functions for tracing and the monitor URL.
 func (b *Browser) Logger(l utils.Logger) *Browser {
 	b.logger = l
 	return b
@@ -239,7 +288,7 @@ func (b *Browser) Connect() error {
 	b.initEvents()
 
 	if b.monitor != "" {
-		launcher.Open(b.ServeMonitor(b.monitor))
+		b.startMonitor()
 	}
 
 	err := proto.TargetSetDiscoverTargets{Discover: true}.Call(b)
@@ -362,6 +411,9 @@ func (b *Browser) Page(opts proto.TargetCreateTarget) (p *Page, err error) {
 	if err != nil {
 		return nil, err
 	}
+	if lenientMissing(b.decoding, target.TargetID) {
+		return nil, missingField("TargetCreateTargetResult", "targetId")
+	}
 	defer func() {
 		// If Navigate or PageFromTarget fails we should close the target to prevent leak
 		if err != nil {
@@ -392,11 +444,17 @@ func (b *Browser) Pages() (Pages, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := requireEntries(list.TargetInfos, "TargetGetTargetsResult", "targetInfos"); err != nil {
+		return nil, err
+	}
 
 	pageList := Pages{}
-	for _, target := range list.TargetInfos {
+	for i, target := range list.TargetInfos {
 		if target.Type != proto.TargetTargetInfoTypePage || (b.BrowserContextID != "" && target.BrowserContextID != b.BrowserContextID) {
 			continue
+		}
+		if lenientMissing(b.decoding, target.TargetID) {
+			return nil, missingField("TargetGetTargetsResult", "targetInfos["+strconv.Itoa(i)+"].targetId")
 		}
 
 		page, err := b.PageFromTarget(target.TargetID)
@@ -444,24 +502,53 @@ func (b *Browser) PageFromSession(sessionID proto.TargetSessionID) *Page {
 	return page.newKeyboard().newMouse().newTouch()
 }
 
+// pageAttachKey marks a target whose attachment is in progress. Its channel
+// closes when that attempt ends.
+type pageAttachKey proto.TargetTargetID
+
 // PageFromTarget attaches once per target and returns a view using this Browser's
 // operation context. Canceling a view does not cancel the shared page session.
+// Concurrent calls for one target wait for a single attachment; if it fails,
+// each waiter tries again. Different targets attach independently.
 func (b *Browser) PageFromTarget(targetID proto.TargetTargetID) (*Page, error) {
-	select {
-	case b.targetsLock <- struct{}{}:
-	case <-b.ctx.Done():
-		return nil, b.ctx.Err()
+	for {
+		if err := b.ctx.Err(); err != nil {
+			return nil, err
+		}
+		// The lookup and claim hold the lock that also guards caching the page.
+		b.stateLock.Lock()
+		if page := b.loadCachedPage(targetID); page != nil {
+			b.stateLock.Unlock()
+			return b.pageView(page), nil
+		}
+		pending, busy := b.states.LoadOrStore(pageAttachKey(targetID), make(chan struct{}))
+		b.stateLock.Unlock()
+		done := pending.(chan struct{})
+		if !busy {
+			return b.attachPage(targetID, done)
+		}
+		select {
+		case <-done:
+		case <-b.ctx.Done():
+			return nil, b.ctx.Err()
+		}
 	}
-	defer func() { <-b.targetsLock }()
-	if err := b.ctx.Err(); err != nil {
-		return nil, err
-	}
-	if page := b.loadCachedPage(targetID); page != nil {
-		return b.pageView(page), nil
-	}
+}
+
+// attachPage creates the shared page of a target. The attachment is cached
+// before done closes, so waiters then find it or retry after a failure.
+func (b *Browser) attachPage(targetID proto.TargetTargetID, done chan struct{}) (*Page, error) {
+	defer func() {
+		b.states.CompareAndDelete(pageAttachKey(targetID), done)
+		close(done)
+	}()
 	session, err := (proto.TargetAttachToTarget{TargetID: targetID, Flatten: new(true)}).Call(b)
 	if err != nil {
 		return nil, err
+	}
+	if lenientMissing(b.decoding, session.SessionID) {
+		// The empty session ID addresses the browser instead of the page.
+		return nil, missingField("TargetAttachToTargetResult", "sessionId")
 	}
 	sessionCtx, cancel := context.WithCancel(b.connectionContext())
 	page := &Page{
@@ -501,7 +588,8 @@ func (b *Browser) pageView(page *Page) *Page {
 
 // EachEvent subscribes to the given handlers across all browser sessions.
 // Handlers run in message order; returning true stops the wait. The returned wait
-// reports domain setup, cancellation, connection termination, and cleanup errors.
+// reports domain setup, event decoding, cancellation, connection termination,
+// and cleanup errors.
 func (b *Browser) EachEvent(handlers ...EventHandler) func() error {
 	return b.eachEvent("", handlers...)
 }
@@ -525,7 +613,7 @@ func (b *Browser) eachEvent(sessionID proto.TargetSessionID, handlers ...EventHa
 
 // eachEventWithSession bounds the wait by sessionCtx independently of the event session filter.
 func (b *Browser) eachEventWithSession(sessionID proto.TargetSessionID, sessionCtx context.Context, handlers ...EventHandler) func() error {
-	callbacks := make(map[string]func(*Message) bool, len(handlers))
+	callbacks := make(map[string]func(*Message) (bool, error), len(handlers))
 	for _, handler := range handlers {
 		if handler.handle == nil {
 			panic("rod: empty event handler; use On")
@@ -588,8 +676,8 @@ func (b *Browser) eachEventWithSession(sessionID proto.TargetSessionID, sessionC
 			return setupErr
 		}
 		for msg := range messages {
-			if callbacks[msg.Method](msg) {
-				return nil
+			if stop, err := callbacks[msg.Method](msg); stop {
+				return err
 			}
 		}
 		if cause := context.Cause(callerCtx); cause != nil {
@@ -608,7 +696,12 @@ func (b *Browser) eachEventWithSession(sessionID proto.TargetSessionID, sessionC
 	}
 }
 
-// Event of the browser.
+// Event subscribes to every browser event until the browser context or the
+// connection ends. The stream is ordered, lossless, and unbounded: events that
+// have not been read are kept in memory. Keep reading, or cancel the context
+// given to [Browser.Context], to release the subscription. Leaving a range loop
+// early without canceling keeps the subscription and its growing backlog until
+// that context or the connection ends.
 func (b *Browser) Event() <-chan *Message {
 	return b.event.Subscribe(b.ctx)
 }
@@ -635,7 +728,8 @@ func (b *Browser) initEvents() {
 				if !ok {
 					return
 				}
-				b.event.Publish(&Message{SessionID: proto.TargetSessionID(e.SessionID), Method: e.Method, data: e.Params})
+				b.releaseDetachedSession(e.Method, e.Params)
+				b.event.Publish(newMessage(proto.TargetSessionID(e.SessionID), e.Method, e.Params, b.decoding))
 			}
 		}
 	}()
@@ -645,6 +739,9 @@ func (b *Browser) pageInfo(id proto.TargetTargetID) (*proto.TargetTargetInfo, er
 	res, err := proto.TargetGetTargetInfo{TargetID: id}.Call(b)
 	if err != nil {
 		return nil, err
+	}
+	if res.TargetInfo == nil {
+		return nil, missingField("TargetGetTargetInfoResult", "targetInfo")
 	}
 	return res.TargetInfo, nil
 }
@@ -670,6 +767,9 @@ func (b *Browser) GetCookies() ([]*proto.NetworkCookie, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := requireEntries(res.Cookies, "StorageGetCookiesResult", "cookies"); err != nil {
+		return nil, err
+	}
 	return res.Cookies, nil
 }
 
@@ -690,6 +790,28 @@ var ErrDownloadInProgress = errors.New("rod: a download wait is already active i
 
 // ErrDownloadCanceled indicates that Chrome canceled the selected download.
 var ErrDownloadCanceled = errors.New("rod: download canceled")
+
+// ErrDownloadGUID indicates that the browser reported a download GUID that is
+// not a single local file name, so it cannot safely name a file in the
+// download directory.
+var ErrDownloadGUID = errors.New("rod: download GUID is not a single local file name")
+
+// A download GUID names the saved file inside the download directory. Reject
+// separators for every OS, and colons, which select Windows drives or streams.
+func validDownloadGUID(guid string) bool {
+	return guid != "." && filepath.IsLocal(guid) && filepath.Base(guid) == guid &&
+		!strings.ContainsAny(guid, "/\\:\x00")
+}
+
+// The download wait decodes only these events.
+func downloadEvent(msg *Message) bool {
+	switch msg.Method {
+	case (proto.TargetTargetCreated{}).ProtoEvent(), (proto.TargetTargetInfoChanged{}).ProtoEvent(),
+		(proto.BrowserDownloadWillBegin{}).ProtoEvent(), (proto.BrowserDownloadProgress{}).ProtoEvent():
+		return true
+	}
+	return false
+}
 
 type downloadWaitKey proto.BrowserBrowserContextID
 
@@ -716,10 +838,15 @@ func (events *downloadEvents) unlock() { <-events.gate }
 // WaitDownload configures downloads and subscribes before returning. Invoke its
 // single-use wait after triggering a download; it returns the first download in
 // this browser context when that GUID completes, or an error on cancellation.
-// Files are saved as filepath.Join(dir, info.GUID). Only one wait may configure a
-// browser context at once. Both completion and context cancellation restore the
-// previous behavior, using an independent five-second cleanup budget. Browser
-// download events remain enabled until the last concurrent context waiter stops.
+// Files are saved as filepath.Join(dir, info.GUID); use a directory that other
+// local users cannot write, such as one from os.MkdirTemp. The wait returns an
+// error matching ErrDownloadGUID, without the download, when the browser reports
+// a GUID for that download that is not a single local file name. Only one wait may
+// configure a browser context at once. Both completion and context cancellation
+// restore the previous behavior, using an independent five-second cleanup budget.
+// Browser download events remain enabled until the last concurrent context
+// waiter stops. Until the wait is invoked or the context ends, the subscription
+// keeps target and download events in memory.
 func (b *Browser) WaitDownload(dir string) (func() (*proto.BrowserDownloadWillBegin, error), error) {
 	if err := b.ctx.Err(); err != nil {
 		return nil, err
@@ -739,7 +866,7 @@ func (b *Browser) WaitDownload(dir string) (func() (*proto.BrowserDownloadWillBe
 	events := shared.(*downloadEvents)
 	ctx, cancel := contextWithSession(b.ctx, b.connectionCtx)
 	browser := b.Context(ctx)
-	messages := browser.Event()
+	messages := b.event.SubscribeFilter(ctx, downloadEvent)
 	var oldBehavior proto.BrowserSetDownloadBehavior
 	if !b.LoadState("", &oldBehavior) {
 		oldBehavior = proto.BrowserSetDownloadBehavior{Behavior: proto.BrowserSetDownloadBehaviorBehaviorDefault, BrowserContextID: b.BrowserContextID}
@@ -797,7 +924,9 @@ func (b *Browser) WaitDownload(dir string) (func() (*proto.BrowserDownloadWillBe
 	}
 	contexts := make(map[proto.PageFrameID]proto.BrowserBrowserContextID)
 	for _, target := range targets.TargetInfos {
-		contexts[proto.PageFrameID(target.TargetID)] = target.BrowserContextID
+		if target != nil {
+			contexts[proto.PageFrameID(target.TargetID)] = target.BrowserContextID
+		}
 	}
 	stopCleanup := context.AfterFunc(ctx, cleanup)
 	return func() (info *proto.BrowserDownloadWillBegin, err error) {
@@ -816,26 +945,33 @@ func (b *Browser) WaitDownload(dir string) (func() (*proto.BrowserDownloadWillBe
 			var changed proto.TargetTargetInfoChanged
 			var begin proto.BrowserDownloadWillBegin
 			var progress proto.BrowserDownloadProgress
-			switch {
-			case message.Load(&created):
+			if ok, err := message.Load(&created); err != nil {
+				return info, err
+			} else if ok && created.TargetInfo != nil {
 				contexts[proto.PageFrameID(created.TargetInfo.TargetID)] = created.TargetInfo.BrowserContextID
-			case message.Load(&changed):
+			}
+			if ok, err := message.Load(&changed); err != nil {
+				return info, err
+			} else if ok && changed.TargetInfo != nil {
 				contexts[proto.PageFrameID(changed.TargetInfo.TargetID)] = changed.TargetInfo.BrowserContextID
-			case message.Load(&begin):
-				if info != nil {
-					continue
-				}
+			}
+			if ok, err := message.Load(&begin); err != nil {
+				return info, err
+			} else if ok && info == nil {
 				matches, matchErr := browser.downloadInContext(begin.FrameID, contexts, incognito)
 				if matchErr != nil {
 					return nil, matchErr
 				}
 				if matches {
+					if !validDownloadGUID(begin.GUID) {
+						return nil, fmt.Errorf("%w: %q", ErrDownloadGUID, begin.GUID)
+					}
 					info = &begin
 				}
-			case message.Load(&progress):
-				if info == nil || progress.GUID != info.GUID {
-					continue
-				}
+			}
+			if ok, err := message.Load(&progress); err != nil {
+				return info, err
+			} else if ok && info != nil && progress.GUID == info.GUID {
 				switch progress.State {
 				case proto.BrowserDownloadProgressStateCompleted:
 					return info, nil
@@ -855,6 +991,10 @@ func (b *Browser) WaitDownload(dir string) (func() (*proto.BrowserDownloadWillBe
 // main frames, including download-only tabs that have already closed. For a
 // child frame, inspect frame trees without changing device settings or page state.
 func (b *Browser) downloadInContext(frame proto.PageFrameID, contexts map[proto.PageFrameID]proto.BrowserBrowserContextID, incognito map[proto.BrowserBrowserContextID]bool) (bool, error) {
+	if lenientMissing(b.decoding, frame) {
+		// Without its frame, a download cannot be attributed to a context.
+		return false, nil
+	}
 	if b.BrowserContextID == "" {
 		result, err := (proto.TargetGetBrowserContexts{}).Call(b)
 		if err != nil {
@@ -878,13 +1018,17 @@ func (b *Browser) downloadInContext(frame proto.PageFrameID, contexts map[proto.
 		return false, err
 	}
 	for _, target := range targets.TargetInfos {
+		if target == nil {
+			continue
+		}
 		contexts[proto.PageFrameID(target.TargetID)] = target.BrowserContextID
 		if proto.PageFrameID(target.TargetID) == frame {
 			return matches(target.BrowserContextID), nil
 		}
 	}
 	for _, target := range targets.TargetInfos {
-		if target.Type != proto.TargetTargetInfoTypePage || !matches(target.BrowserContextID) {
+		if target == nil || target.Type != proto.TargetTargetInfoTypePage || !matches(target.BrowserContextID) ||
+			lenientMissing(b.decoding, target.TargetID) {
 			continue
 		}
 		var tree *proto.PageGetFrameTreeResult
@@ -923,6 +1067,9 @@ func (b *Browser) downloadFrameTree(target proto.TargetTargetID) (_ *proto.PageG
 	if err != nil {
 		return nil, err
 	}
+	if lenientMissing(b.decoding, session.SessionID) {
+		return nil, missingField("TargetAttachToTargetResult", "sessionId")
+	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(b.ctx), 5*time.Second)
 		defer cancel()
@@ -934,7 +1081,7 @@ func (b *Browser) downloadFrameTree(target proto.TargetTargetID) (_ *proto.PageG
 		return nil, err
 	}
 	var result proto.PageGetFrameTreeResult
-	if err := json.Unmarshal(data, &result); err != nil {
+	if err := b.decoding.Unmarshal(data, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil

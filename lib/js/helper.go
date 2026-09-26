@@ -212,7 +212,7 @@ var Rect = &Function{
 // Overlay ...
 var Overlay = &Function{
 	Name: "overlay",
-	Definition: `async function(id, left, top, width, height, msg) {
+	Definition: `async function(id, left, top, width, height, msg, monospace) {
     await functions.waitLoad()
 
     const div = document.createElement('div')
@@ -239,7 +239,9 @@ var Overlay = &Function{
         box-shadow: #333 0 0 3px; padding: 2px 5px; border-radius: 3px; white-space: nowrap;
         top: ${height}px;` + "`" + `
 
-    msgDiv.innerHTML = msg
+    // Messages can contain page-controlled or typed text, so never parse them as HTML.
+    msgDiv.textContent = msg
+    if (monospace) msgDiv.style.fontFamily = 'monospace'
     div.appendChild(msgDiv)
     document.body.parentElement.appendChild(div)
 
@@ -775,6 +777,242 @@ var GetXPath = &Function{
     }
     steps.reverse()
     return (steps.length && steps[0].optimized ? '' : '/') + steps.join('/')
+  }`,
+	Dependencies: []*Function{},
+}
+
+// WaitDOMStable ...
+var WaitDOMStable = &Function{
+	Name: "waitDOMStable",
+	Definition: `function(ms, diff) {
+    // Checks are due at most slice milliseconds apart. A waiter whose check
+    // is overdue by grace milliseconds ends itself, so a caller that lost the
+    // connection leaves nothing behind.
+    const slice = 60000
+    const grace = 10000
+    const options = {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeOldValue: true,
+      characterData: true,
+      characterDataOldValue: true
+    }
+    const counting = diff > 0
+    const nodes = counting ? NodeFilter.SHOW_ALL : NodeFilter.SHOW_ELEMENT
+    const roots = new WeakSet()
+    let changed = counting ? new Set() : null
+    let dirty = false
+    let limit = 0
+    let start = 0
+    let found = 0
+    let timer = 0
+    let status = ''
+    let observer = null
+    // The digest at the previous check while the page cannot run callbacks.
+    let last
+
+    const change = (node) => {
+      dirty = true
+      if (changed) changed.add(node)
+    }
+    // Visits root and its descendants of the kinds in what, including open
+    // shadow trees, and returns their number. With mark, it counts each
+    // visited node as changed. With watch, it observes the shadow roots not
+    // yet observed and adds their number to found.
+    const visit = (root, what, mark, watch) => {
+      let count = 0
+      const stack = [root]
+      while (stack.length) {
+        const walker = document.createTreeWalker(stack.pop(), what)
+        for (let n = walker.currentNode; n; n = walker.nextNode()) {
+          count++
+          if (mark) change(n)
+          const shadow = n.shadowRoot
+          if (!shadow) continue
+          if (watch && !roots.has(shadow)) {
+            roots.add(shadow)
+            observer.observe(shadow, options)
+            found++
+          }
+          stack.push(shadow)
+        }
+      }
+      return count
+    }
+    const restart = () => {
+      start = performance.now()
+      if (changed) changed = new Set()
+    }
+    // Reports whether the page runs callbacks, which deliver the observer's
+    // records.
+    const live = () => {
+      let ran = false
+      const target = new EventTarget()
+      target.addEventListener('check', () => {
+        ran = true
+      })
+      target.dispatchEvent(new Event('check'))
+      return ran
+    }
+    // Returns a hash of the document and its open shadow trees: their
+    // structure, node names, attributes, and character data.
+    const digest = () => {
+      let hash = 0x811c9dc5
+      const add = (code) => {
+        hash = Math.imul(hash ^ code, 16777619)
+      }
+      const mix = (value) => {
+        for (let i = 0; i < value.length; i++) add(value.charCodeAt(i))
+        add(0x10000)
+      }
+      const stack = [document]
+      while (stack.length) {
+        const root = stack.pop()
+        for (let n = root; n; ) {
+          add(n.nodeType)
+          if (n.nodeType === Node.ELEMENT_NODE) {
+            mix(n.localName)
+            for (const name of n.getAttributeNames()) {
+              mix(name)
+              mix(n.getAttribute(name))
+            }
+            if (n.shadowRoot) stack.push(n.shadowRoot)
+          } else if (typeof n.data === 'string') {
+            mix(n.data)
+          }
+          // Visit the nodes in tree order, marking each descent and ascent.
+          if (n.firstChild) {
+            add(0x10001)
+            n = n.firstChild
+            continue
+          }
+          while (n !== root && !n.nextSibling) {
+            add(0x10002)
+            n = n.parentNode
+          }
+          n = n === root ? null : n.nextSibling
+        }
+      }
+      return hash
+    }
+    // Compares digests while the page cannot run callbacks. A digest that
+    // differs from the previous check, or callbacks that stopped since then,
+    // restart the period.
+    const compare = () => {
+      const running = live()
+      if (running && last === undefined) return
+      const hash = digest()
+      if (hash !== last) restart()
+      last = running ? undefined : hash
+    }
+    // Counts the net effect of a batch of records. A node inserted and
+    // removed again, and an attribute or text restored to its value before
+    // the batch, are not changes. A change beyond the limit restarts the
+    // stability period.
+    const handle = (records) => {
+      const added = new Set()
+      const values = new Map()
+      const before = (target, key, value) => {
+        let entry = values.get(target)
+        if (!entry) values.set(target, (entry = new Map()))
+        if (!entry.has(key)) entry.set(key, value)
+      }
+      for (const record of records) {
+        const target = record.target
+        if (record.type === 'childList') {
+          for (const node of record.addedNodes) added.add(node)
+          if (!target.isConnected) continue
+          for (const node of record.removedNodes) {
+            if (added.has(node)) continue
+            if (counting) visit(node, nodes, true, false)
+            else dirty = true
+          }
+        } else if (record.type === 'attributes') {
+          const ns = record.attributeNamespace
+          const name = record.attributeName
+          before(target, ns + ' ' + name, [ns, name, record.oldValue])
+        } else {
+          before(target, '', [null, null, record.oldValue])
+        }
+      }
+      for (const node of added) {
+        if (node.isConnected) visit(node, nodes, true, true)
+      }
+      for (const [target, entry] of values) {
+        if (!target.isConnected) continue
+        for (const [key, [ns, name, value]] of entry) {
+          if (value !== (key ? target.getAttributeNS(ns, name) : target.data)) {
+            change(target)
+          }
+        }
+      }
+      if (!dirty) return
+      dirty = false
+      if (!changed || changed.size > limit) restart()
+    }
+    const settle = (value) => {
+      if (!status) {
+        status = value
+        if (observer) observer.disconnect()
+        clearTimeout(timer)
+        window.removeEventListener('pagehide', hidden)
+        changed = null
+      }
+      return status
+    }
+    const hidden = () => settle('hidden')
+    const expire = () => settle('expired')
+    // Returns the milliseconds until the next check and renews the timer
+    // that ends an abandoned waiter.
+    const next = (now) => {
+      const wait = Math.min(Math.max(Math.ceil(start + ms - now), 1), slice)
+      clearTimeout(timer)
+      timer = setTimeout(expire, wait + grace)
+      return wait
+    }
+    const guard = (fn) => {
+      if (status) return status
+      try {
+        return fn()
+      } catch (error) {
+        settle('failed')
+        throw error
+      }
+    }
+
+    return {
+      start() {
+        return guard(() => {
+          if (observer) return next(performance.now())
+          observer = new MutationObserver(handle)
+          window.addEventListener('pagehide', hidden)
+          observer.observe(document, options)
+          limit = diff * visit(document, nodes, false, true)
+          if (!live()) last = digest()
+          start = performance.now()
+          return next(start)
+        })
+      },
+      check() {
+        return guard(() => {
+          handle(observer.takeRecords())
+          compare()
+          const now = performance.now()
+          if (now - start < ms) return next(now)
+          // A shadow root attached to an element already in the document was
+          // not observed during the period.
+          found = 0
+          visit(document, NodeFilter.SHOW_ELEMENT, false, true)
+          if (!found) return settle('stable')
+          restart()
+          return next(start)
+        })
+      },
+      cancel() {
+        return settle('canceled')
+      }
+    }
   }`,
 	Dependencies: []*Function{},
 }

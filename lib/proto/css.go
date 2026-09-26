@@ -502,7 +502,7 @@ type CSSCSSContainerQuery struct {
 	// QueriesAnchored (optional) true if the query contains anchored() queries.
 	QueriesAnchored bool `json:"queriesAnchored,omitempty"`
 
-	// ConditionText CSSContainerRule.conditionText
+	// ConditionText (optional in older browsers) CSSContainerRule.conditionText
 	ConditionText string `json:"conditionText"`
 }
 
@@ -682,7 +682,7 @@ type CSSCSSPositionTryRule struct {
 	// Style Associated style declaration.
 	Style *CSSCSSStyle `json:"style"`
 
-	// Active ...
+	// Active (optional in older browsers) ...
 	Active bool `json:"active"`
 }
 
@@ -1069,7 +1069,7 @@ type CSSGetComputedStyleForNodeResult struct {
 	// ComputedStyle Computed style for the specified DOM node.
 	ComputedStyle []*CSSCSSComputedStyleProperty `json:"computedStyle"`
 
-	// ExtraFields (experimental) A list of non-standard "extra fields" which blink stores alongside each
+	// ExtraFields (experimental) (optional in older browsers) A list of non-standard "extra fields" which blink stores alongside each
 	// computed style.
 	ExtraFields *CSSComputedStyleExtraFields `json:"extraFields"`
 }

@@ -3508,7 +3508,7 @@ func (evt PageInterstitialShown) ProtoEvent() string {
 // PageJavascriptDialogClosed Fired when a JavaScript initiated dialog (alert, confirm, prompt, or onbeforeunload) has been
 // closed.
 type PageJavascriptDialogClosed struct {
-	// FrameID (experimental) Frame id.
+	// FrameID (experimental) (optional in older browsers) Frame id.
 	FrameID PageFrameID `json:"frameId"`
 
 	// Result Whether dialog was confirmed.
@@ -3529,7 +3529,7 @@ type PageJavascriptDialogOpening struct {
 	// URL Frame url.
 	URL string `json:"url"`
 
-	// FrameID (experimental) Frame id.
+	// FrameID (experimental) (optional in older browsers) Frame id.
 	FrameID PageFrameID `json:"frameId"`
 
 	// Message that will be displayed by the dialog.
@@ -3664,7 +3664,7 @@ type PageNavigatedWithinDocument struct {
 	// URL Frame's new url.
 	URL string `json:"url"`
 
-	// NavigationType Navigation type
+	// NavigationType (optional in older browsers) Navigation type
 	NavigationType PageNavigatedWithinDocumentNavigationType `json:"navigationType"`
 }
 

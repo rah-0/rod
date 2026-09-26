@@ -518,9 +518,15 @@ func Example_customize_browser_launch() {
 	// So that we don't have to self issue certs for MITM
 	browser.MustIgnoreCertErrors(true)
 
-	// Adding authentication to the proxy, for the next auth request.
+	// Answer the proxy's next authentication challenge. Only challenges from this
+	// proxy receive the credentials.
 	// We use CLI tool "mitmproxy --proxyauth user:pass" as an example.
-	go browser.MustHandleAuth("user", "pass")()
+	go browser.MustHandleAuth(rod.AuthCredentials{
+		Source:   proto.FetchAuthChallengeSourceProxy,
+		Origin:   "http://127.0.0.1:8080",
+		Username: "user",
+		Password: "pass",
+	})()
 
 	// mitmproxy needs a cert config to support https. We use http here instead,
 	// for example
@@ -606,7 +612,7 @@ func Example_handle_events() {
 
 		for msg := range events {
 			e := proto.PageLoadEventFired{}
-			if msg.Load(&e) {
+			if msg.MustLoad(&e) {
 				break
 			}
 		}

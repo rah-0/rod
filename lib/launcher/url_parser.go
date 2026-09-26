@@ -115,12 +115,16 @@ var (
 	regProtocol = regexp.MustCompile(`^\w+://`)
 )
 
+// maxDiscoveryResponse bounds the /json/version body. Browsers return a few
+// hundred bytes.
+const maxDiscoveryResponse = 1 << 20
+
 // ResolveURL by requesting the u, it will try best to normalize the u.
 // The format of u can be "9222", ":9222", "host:9222", "ws://host:9222", "wss://host:9222",
 // "https://host:9222" "http://host:9222". The return string will look like:
 // "ws://host:9222/devtools/browser/4371405f-84df-4ad6-9e0f-eab81f7521cc"
 // Discovery requests honor ctx and have a maximum duration of 10 seconds,
-// including reading the response body.
+// including reading the response body. Responses larger than 1 MiB are rejected.
 func ResolveURL(ctx context.Context, u string) (string, error) {
 	if u == "" {
 		u = "9222"
@@ -155,9 +159,12 @@ func ResolveURL(ctx context.Context, u string) (string, error) {
 	if res.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("resolve browser URL: HTTP status %s", res.Status)
 	}
-	data, err := io.ReadAll(res.Body)
+	data, err := io.ReadAll(io.LimitReader(res.Body, maxDiscoveryResponse+1))
 	if err != nil {
 		return "", fmt.Errorf("read browser discovery: %w", err)
+	}
+	if len(data) > maxDiscoveryResponse {
+		return "", fmt.Errorf("read browser discovery: response exceeds %d bytes", maxDiscoveryResponse)
 	}
 	var version struct {
 		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`

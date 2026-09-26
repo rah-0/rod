@@ -40,11 +40,14 @@ func (e Event) String() string {
 	)
 }
 
+// fSessionID abbreviates a session ID to at most eight bytes.
 func fSessionID(s string) string {
 	if s == "" {
 		s = "00000000"
 	}
-	s = s[:8]
+	if len(s) > 8 {
+		s = s[:8]
+	}
 	return "@" + s
 }
 

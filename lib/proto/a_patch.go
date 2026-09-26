@@ -128,18 +128,17 @@ func (res *DOMGetContentQuadsResult) Box() (box *DOMRect) {
 type Shape []DOMQuad
 
 // Box returns the smallest leveled rectangle that can cover the whole shape.
+// It returns nil when the shape has no complete point.
 func (qs Shape) Box() (box *DOMRect) {
-	if len(qs) == 0 {
-		return
-	}
-
-	left := qs[0][0]
-	top := qs[0][1]
-	right := left
-	bottom := top
+	var left, top, right, bottom float64
+	found := false
 
 	for _, q := range qs {
 		q.Each(func(pt Point, _ int) {
+			if !found {
+				left, top, right, bottom = pt.X, pt.Y, pt.X, pt.Y
+				found = true
+			}
 			if pt.X < left {
 				left = pt.X
 			}
@@ -153,6 +152,9 @@ func (qs Shape) Box() (box *DOMRect) {
 				bottom = pt.Y
 			}
 		})
+	}
+	if !found {
+		return
 	}
 
 	box = &DOMRect{left, top, right - left, bottom - top}

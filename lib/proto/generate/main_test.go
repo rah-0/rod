@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -20,11 +21,11 @@ func TestRenderFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := render(data)
+	first, err := render(data, compatibility{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := render(data)
+	second, err := render(data, compatibility{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,6 +33,9 @@ func TestRenderFixture(t *testing.T) {
 		t.Fatal("generation is nondeterministic")
 	}
 	for name, code := range first {
+		if name == compatibilityOutput {
+			continue
+		}
 		formatted, err := format.Source(code)
 		if err != nil || !bytes.Equal(code, formatted) {
 			t.Fatalf("unformatted %s: %v", name, err)
@@ -50,6 +54,29 @@ func TestRenderFixture(t *testing.T) {
 		"definitions.go":      {"reflect.TypeFor[FixtureGetValue]()"},
 		"definitions_test.go": {"func TestFixtureGetValue(t *testing.T)", "c.methodName != \"Fixture.getValue\"", "reflect.DeepEqual(c.params, request)", "got != \"Fixture.changed\""},
 	}
+	// Command tests answer with the smallest result that has every required member.
+	checks["definitions_test.go"] = append(checks["definitions_test.go"], "\"encoding/json\"", "c := &Client{ret: json.RawMessage(`{\"value\":\"\",\"tree\":{\"id\":0}}`)}")
+	checks[decodersOutput] = []string{
+		// Required members of every kind are recorded as seen and reported
+		// when missing; optional members are decoded when present.
+		`func (m *FixtureGetValueResult) decodeJSON(d *decoder) error { var seen uint64 ok, err := d.object() for ok && err == nil { var name []byte if name, ok, err = d.member(); !ok || err != nil { break } switch string(name) { ` +
+			`case "value": seen |= 1 << 0 err = inField(decodeString(d, &m.Value, true), "value") ` +
+			`case "enabled": err = inField(decodeBool(d, &m.Enabled, false), "enabled") ` +
+			`case "tree": seen |= 1 << 1 err = inField(decodeObject(d, &m.Tree, true), "tree") ` +
+			// Experimental and deprecated members are not required.
+			`case "extra": err = inField(decodeObject(d, &m.Extra, false), "extra") ` +
+			`default: err = d.skip() } } if err != nil { return err } if seen != 1<<2-1 && !d.lenient { return missingMember(seen, "value tree") } return nil }`,
+		`case "nodes": seen |= 1 << 1 err = inField(decodeList(d, &m.Nodes, true, decodeObject[FixtureNode]), "nodes")`,
+		`case "preview": err = inField(decodeObject(d, &m.Preview, false), "preview") case "legacy": err = inField(decodeObject(d, &m.Legacy, false), "legacy")`,
+		`return missingMember(seen, "root nodes options")`,
+		// Optional numbers are pointers.
+		`case "count": err = inField(decodePointer(d, &m.Count, decodeInt[int]), "count")`,
+		`case "value": err = inField(decodeValue(d, &m.Value, false), "value")`,
+		// Structs without required members return the decoding error.
+		`func (m *FixtureOptions) decodeJSON(d *decoder) error { ok, err := d.object()`,
+		`default: err = d.skip() } } return err }`,
+	}
+	checks[compatibilityOutput] = []string{`{ "members": [] }`}
 	for name, expected := range checks {
 		code := strings.Join(strings.Fields(string(first[name])), " ")
 		for _, fragment := range expected {
@@ -57,6 +84,29 @@ func TestRenderFixture(t *testing.T) {
 				t.Errorf("%s lacks %q", name, fragment)
 			}
 		}
+	}
+	// Only command results, events and the objects they contain are decoded
+	// from browser data. Command parameters and types that only they use are not.
+	for _, name := range []string{"FixtureLeaf", "FixtureGetValue", "TargetTargetInfo", "InputDispatchMouseEvent"} {
+		if bytes.Contains(first[decodersOutput], []byte("func (m *"+name+") decodeJSON(")) {
+			t.Errorf("%s has an unnecessary decoder", name)
+		}
+	}
+}
+
+func TestRequiredObjectCycle(t *testing.T) {
+	data, err := os.ReadFile("testdata/schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A required object that eventually requires itself has no finite value.
+	parent := regexp.MustCompile(`("name": "parent",\s*"\$ref": "Node"),\s*"optional": true`)
+	cycle := parent.ReplaceAll(data, []byte("$1"))
+	if bytes.Equal(cycle, data) {
+		t.Fatal("fixture changed")
+	}
+	if _, err := render(cycle, compatibility{}); err == nil || !strings.Contains(err.Error(), "required object cycle through FixtureNode") {
+		t.Fatalf("render = %v", err)
 	}
 }
 
@@ -221,10 +271,10 @@ func TestReservedOutputNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, domain := range []string{"Definitions", "DefinitionsTest"} {
+	for _, domain := range []string{"Definitions", "DefinitionsTest", "Decoders"} {
 		t.Run(domain, func(t *testing.T) {
 			fixture := bytes.Replace(data, []byte(`"Fixture"`), []byte(`"`+domain+`"`), 1)
-			if _, err := render(fixture); err == nil || !strings.Contains(err.Error(), "duplicate output") {
+			if _, err := render(fixture, compatibility{}); err == nil || !strings.Contains(err.Error(), "duplicate output") {
 				t.Fatalf("reserved output accepted: %v", err)
 			}
 		})

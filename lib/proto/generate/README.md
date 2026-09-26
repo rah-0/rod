@@ -26,7 +26,8 @@ Generated Go files remain checked in, so ordinary builds do not launch Chrome.
 `schema.json` and `schema-provenance.json` record the generation input, canonical
 schema digest, and browser metadata when captured live. They describe the generated
 bindings; they do not select or constrain the next browser. Formatting and JSON
-object key order do not affect the digest.
+object key order do not affect the digest. `schema-compatibility.json` records
+the members that older browsers omit; see [required members](#required-members).
 
 ## Freshness and compatibility
 
@@ -67,6 +68,10 @@ schema records under that directory's `generate` subdirectory; selecting an
 alternate output does not update the repository's records.
 Offline generation also replaces these records, labels the source as an explicit
 schema file, and omits browser metadata because it did not inspect a browser.
+Generation reads the previous `schema.json` and `schema-compatibility.json` from
+the same subdirectory. To reproduce the repository's bindings in another
+directory, copy `schema-compatibility.json` into its `generate` subdirectory
+first.
 
 ## Output safety and wire contracts
 
@@ -95,6 +100,49 @@ go build -o /tmp/rod-proto-generate ./lib/proto/generate
 go test -count=1 -race -cover -covermode=atomic ./lib/proto/...
 ```
 
-Small deterministic fixture tests cover patches, optional fields, exact
-command/event names, formatted output, ownership collisions, and failed
-generation. They do not set the browser version used for generation or tests.
+Small deterministic fixture tests cover patches, optional fields, required
+members and the compatibility record, exact command/event names, formatted
+output, ownership collisions, and failed generation. They do not set the
+browser version used for generation or tests.
+
+## Required members
+
+`decoders.go` holds the `decodeJSON` methods that `proto.Unmarshal` and the
+generated `Call` methods use. Command results, events, and the structs they can
+contain get a method; command parameters are only sent and have none. Each
+method decodes an object in one pass, records which required members it has
+seen, and reports the first one that is missing. A member is required unless the
+schema marks it optional, experimental, or deprecated, or
+`schema-compatibility.json` lists it. Browsers older than the schema can lack
+experimental and recently added members, and newer ones can drop deprecated
+members, so those members are decoded when present but never required. Their Go
+types stay unchanged.
+
+`schema-compatibility.json` lists the members, as `Domain.definition.member`
+keys, that browsers older than the schema omit. A definition is a type, an
+event, or a command name followed by `Result`, as for `proto.GetType`.
+Generation adds the members that the new schema does not mark optional and the
+previous `schema.json` lacks or marks optional, in definitions that the
+previous schema has. In an older schema, a command without `returns` has a
+result definition without members, because the browser answers it with an empty
+object, and an object type without `properties` is a definition without
+members. Definitions that older browsers do not have need no entry, because
+those browsers never send them. The `-compat` flag compares the schema
+with the protocol of an older browser in the same way, which extends support to
+that browser:
+
+```sh
+go run ./lib/proto/generate -compat /path/to/older/protocol.json
+```
+
+Save the older protocol from that browser's `/json/protocol` endpoint. The
+record includes the members that Chromium 128 lacks. Members stay listed until
+the schema drops them or marks them optional, and their documentation starts
+with `(optional in older browsers)`. A browser older than every protocol that
+generation has compared can omit other members; decoding its data returns
+`proto.ErrMissingField` until generation compares its protocol with `-compat`.
+
+Each generated command test answers with the smallest result that has every
+required member; generation fails when required objects form a cycle, because
+such a result would be infinite, and when a struct has more than 64 required
+members.

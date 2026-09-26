@@ -7,10 +7,121 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+	"weak"
 
+	"github.com/rah-0/rod/internal/observable"
 	"github.com/rah-0/rod/lib/cdp"
 	"github.com/rah-0/rod/lib/proto"
 )
+
+func TestPageCloseAcknowledgementAfterSessionTermination(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		client := &sessionTestClient{events: make(chan *cdp.Event)}
+		browser := New().NoDefaultDevice().Context(ctx).Client(client)
+		browser.initEvents()
+		page, err := browser.PageFromTarget("target")
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.call = func(ctx context.Context, session, method string, _ any) ([]byte, error) {
+			if method != "Page.close" || session != string(page.SessionID) {
+				t.Fatalf("unexpected close request: %s %s", session, method)
+			}
+			client.events <- &cdp.Event{Method: "Target.targetDestroyed", Params: json.RawMessage(`{"targetId":"target"}`)}
+			synctest.Wait() // End the shared session before acknowledging closure.
+			if page.sessionCtx.Err() == nil {
+				t.Fatal("destruction did not terminate the session")
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return []byte(`{}`), nil
+		}
+		if err := page.Close(); err != nil {
+			t.Fatalf("successful closure returned an error: %v", err)
+		}
+		if browser.loadCachedPage(page.TargetID) != nil || browser.sessionContext(page.SessionID) != nil {
+			t.Fatal("closed target retained its attachment")
+		}
+	})
+}
+
+func TestPageCloseSubscriptionSkipsUnusedEvents(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		client := &sessionTestClient{events: make(chan *cdp.Event)}
+		browser := New().NoDefaultDevice().Context(ctx).Client(client)
+		browser.initEvents()
+		page, err := browser.PageFromTarget("target")
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.call = func(ctx context.Context, _, _ string, _ any) ([]byte, error) {
+			// Close reads its subscription only after Chrome acknowledges Page.close.
+			unused := []weak.Pointer[Message]{
+				publishUnused(browser, "Network.dataReceived", page.SessionID),
+				publishUnused(browser, "Page.javascriptDialogClosed", "other-session"),
+			}
+			synctest.Wait() // The page forwards its own session's events.
+			requireReleased(t, unused...)
+			client.events <- &cdp.Event{Method: "Target.targetDestroyed", Params: json.RawMessage(`{"targetId":"target"}`)}
+			return []byte(`{}`), ctx.Err()
+		}
+		if err := page.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestPageCloseUndecodableEvent(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		client := &sessionTestClient{events: make(chan *cdp.Event)}
+		browser := New().NoDefaultDevice().Context(ctx).Client(client)
+		browser.initEvents()
+		page, err := browser.PageFromTarget("target")
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.call = func(ctx context.Context, _, _ string, _ any) ([]byte, error) {
+			client.events <- &cdp.Event{Method: "Target.targetDestroyed", Params: json.RawMessage(`{"targetId":1}`)}
+			return []byte(`{}`), ctx.Err()
+		}
+		var typeErr *json.UnmarshalTypeError
+		if err := page.Close(); !errors.As(err, &typeErr) {
+			t.Fatalf("close error = %v", err)
+		}
+		// The page's own lifecycle monitor skips the undecodable event.
+		synctest.Wait()
+		if page.sessionCtx.Err() != nil {
+			t.Fatal("an undecodable lifecycle event ended the page session")
+		}
+	})
+}
+
+func TestPageCloseRequiresClosureEvidence(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	browser := New().Context(ctx).Client(&lifecycleRegressionClient{call: func(_ context.Context, method string, _ any) ([]byte, error) {
+		if method == "Page.close" {
+			cancel()
+		}
+		return []byte(`{}`), nil
+	}})
+	browser.event = observable.New[*Message](ctx)
+	page := &Page{browser: browser, ctx: ctx, TargetID: "still-alive", SessionID: "session"}
+	browser.states.Store(page.TargetID, page)
+	if err := page.Close(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("closure without target event returned %v", err)
+	}
+	if _, present := browser.states.Load(page.TargetID); !present {
+		t.Fatal("unconfirmed closure removed the cached target")
+	}
+}
 
 type pageWaitOpenResult struct {
 	page *Page
@@ -115,8 +226,8 @@ func TestPageWaitOpenSuccess(t *testing.T) {
 			done <- pageWaitOpenResult{popup, err}
 		}()
 		for _, params := range []string{
-			`{"targetInfo":{"targetId":"no-opener"}}`,
-			`{"targetInfo":{"targetId":"unrelated","openerId":"other"}}`,
+			`{"targetInfo":{"targetId":"no-opener","type":"page","title":"","url":"","attached":false}}`,
+			`{"targetInfo":{"targetId":"unrelated","openerId":"other","type":"page","title":"","url":"","attached":false}}`,
 		} {
 			client.events <- &cdp.Event{Method: "Target.targetCreated", Params: json.RawMessage(params)}
 			synctest.Wait()
@@ -126,7 +237,7 @@ func TestPageWaitOpenSuccess(t *testing.T) {
 			default:
 			}
 		}
-		client.events <- &cdp.Event{Method: "Target.targetCreated", Params: json.RawMessage(`{"targetInfo":{"targetId":"popup","openerId":"opener"}}`)}
+		client.events <- &cdp.Event{Method: "Target.targetCreated", Params: json.RawMessage(`{"targetInfo":{"targetId":"popup","openerId":"opener","type":"","title":"","url":"","attached":false}}`)}
 		synctest.Wait()
 		var popup *Page
 		select {

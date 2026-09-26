@@ -47,7 +47,7 @@ func (k *Keyboard) modifiers() int {
 // To input characters that are not on the keyboard, such as Chinese or Japanese, you should
 // use method like [Page.InsertText].
 func (k *Keyboard) Press(key input.Key) error {
-	defer k.page.tryTrace(TraceTypeInput, "press key: "+key.Info().Code)()
+	defer k.page.tryTrace(TraceTypeInput, traceKey("press", key))()
 	k.page.browser.trySlowMotion()
 
 	k.Lock()
@@ -63,7 +63,7 @@ func (k *Keyboard) Press(key input.Key) error {
 
 // Release the key.
 func (k *Keyboard) Release(key input.Key) error {
-	defer k.page.tryTrace(TraceTypeInput, "release key: "+key.Info().Code)()
+	defer k.page.tryTrace(TraceTypeInput, traceKey("release", key))()
 
 	k.Lock()
 	defer k.Unlock()
@@ -221,7 +221,7 @@ func (ka *KeyActions) balance() []KeyAction {
 
 // InsertText is like pasting text into the page.
 func (p *Page) InsertText(text string) error {
-	defer p.tryTrace(TraceTypeInput, "insert text "+text)()
+	defer p.tryTrace(TraceTypeInput, traceText("insert text", text))()
 	p.browser.trySlowMotion()
 
 	err := proto.InputInsertText{Text: text}.Call(p)

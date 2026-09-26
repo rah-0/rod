@@ -38,6 +38,21 @@ func (c *Client) GetSessionID() proto.TargetSessionID { return "" }
 
 func (c *Client) GetContext() context.Context { return nil }
 
+// A type that embeds a generated type is decoded with encoding/json, even
+// though its embedded pointer is nil.
+func TestUnmarshalEmbeddingType(t *testing.T) {
+	var embedding struct {
+		*proto.RuntimeRemoteObject
+		Extra string `json:"extra"`
+	}
+	if err := proto.Unmarshal([]byte(`{"type":"object","extra":"x"}`), &embedding); err != nil {
+		t.Fatal(err)
+	}
+	if embedding.RuntimeRemoteObject == nil || embedding.Type != "object" || embedding.Extra != "x" {
+		t.Fatalf("decoded %+v", embedding)
+	}
+}
+
 func TestCallErr(t *testing.T) {
 	g := testutil.New(t)
 	client := &Client{err: errors.New("err")}

@@ -46,8 +46,8 @@ closing the fixture to obtain a complete final snapshot.
 Handlers must honor request cancellation and release their own resources. Close
 does not wait for arbitrary handler code; hijacked connections remain
 handler-owned. Custom CDP clients must honor request cancellation. An interrupted
-write on the built-in transport closes the connection because a partial frame
-cannot safely be resumed.
+write on the built-in transport closes the connection only when part of the frame
+was written, or on TLS; a write canceled before any byte is sent leaves it usable.
 
 The caller owns the browser and closes it after its fixtures. Use separate
 `Browser.Incognito` contexts or profiles for storage isolation. Each server uses

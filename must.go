@@ -19,6 +19,7 @@ import (
 
 	"github.com/rah-0/rod/lib/devices"
 	"github.com/rah-0/rod/lib/input"
+	"github.com/rah-0/rod/lib/js"
 	"github.com/rah-0/rod/lib/jsonvalue"
 	"github.com/rah-0/rod/lib/proto"
 	"github.com/rah-0/rod/lib/utils"
@@ -87,8 +88,8 @@ func (b *Browser) MustPageFromTargetID(targetID proto.TargetTargetID) *Page {
 }
 
 // MustHandleAuth is similar to [Browser.HandleAuth].
-func (b *Browser) MustHandleAuth(username, password string) (wait func()) {
-	w := b.HandleAuth(username, password)
+func (b *Browser) MustHandleAuth(credentials AuthCredentials) (wait func()) {
+	w := b.HandleAuth(credentials)
 	return func() { b.e(w()) }
 }
 
@@ -116,22 +117,42 @@ func (b *Browser) MustSetCookies(cookies ...*proto.NetworkCookie) *Browser {
 	return b
 }
 
-// MustWaitDownload is similar to [Browser.WaitDownload].
-// It will read the file into bytes then remove the file.
+// MustWaitDownload is similar to [Browser.WaitDownload]. Each call saves the
+// download in a new temporary directory from [os.MkdirTemp], which is private on
+// Unix. The returned function reads the whole file into memory and removes that
+// directory, including when the wait fails. Call it once to release the
+// directory.
 func (b *Browser) MustWaitDownload() func() []byte {
-	tmpDir := filepath.Join(os.TempDir(), "rod", "downloads")
-	wait, err := b.WaitDownload(tmpDir)
-	b.e(err)
+	dir, err := os.MkdirTemp("", "rod-download-")
+	if err != nil {
+		b.e(err)
+		return func() []byte { return nil }
+	}
+	wait, err := b.WaitDownload(dir)
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		b.e(err)
+		return func() []byte { return nil }
+	}
 
 	return func() []byte {
+		defer func() { _ = os.RemoveAll(dir) }()
 		info, err := wait()
-		b.e(err)
-		path := filepath.Join(tmpDir, info.GUID)
-		defer func() { _ = os.Remove(path) }()
-		data, err := os.ReadFile(path)
+		if err != nil {
+			b.e(err)
+			return nil
+		}
+		data, err := os.ReadFile(filepath.Join(dir, info.GUID))
 		b.e(err)
 		return data
 	}
+}
+
+// MustLoad is similar to [Message.Load].
+func (msg *Message) MustLoad[E proto.Event](out *E) bool {
+	ok, err := msg.Load(out)
+	utils.E(err)
+	return ok
 }
 
 // MustVersion is similar to [Browser.Version].
@@ -514,10 +535,16 @@ func (p *Page) MustEvalOnNewDocument(js string) {
 }
 
 // MustExpose is similar to [Page.Expose].
-func (p *Page) MustExpose(name string, fn func(jsonvalue.Value) (any, error)) (stop func()) {
-	s, err := p.Expose(name, fn)
+func (p *Page) MustExpose(name string, fn func(jsonvalue.Value) (any, error), onError func(error)) (stop func()) {
+	s, err := p.Expose(name, fn, onError)
 	p.e(err)
 	return func() { p.e(s()) }
+}
+
+// MustExposeHelpers is similar to [Page.ExposeHelpers].
+func (p *Page) MustExposeHelpers(list ...*js.Function) *Page {
+	p.e(p.ExposeHelpers(list...))
+	return p
 }
 
 // MustEval is similar to [Page.Eval].
@@ -1184,7 +1211,8 @@ func (r *HijackRouter) MustStop() {
 	r.browser.e(r.Stop())
 }
 
-// MustLoadResponse is similar to [Hijack.LoadResponse].
+// MustLoadResponse is similar to [Hijack.LoadResponse] with http.DefaultClient,
+// loading the body. It uses the Hijack's FollowRedirects setting and size limits.
 func (h *Hijack) MustLoadResponse() {
 	h.browser.e(h.LoadResponse(http.DefaultClient, true))
 }

@@ -967,10 +967,10 @@ type StorageSharedStorageAccessed struct {
 	// AccessTime Time of the access.
 	AccessTime TimeSinceEpoch `json:"accessTime"`
 
-	// Scope Enum value indicating the access scope.
+	// Scope (optional in older browsers) Enum value indicating the access scope.
 	Scope StorageSharedStorageAccessScope `json:"scope"`
 
-	// Method Enum value indicating the Shared Storage API method invoked.
+	// Method (optional in older browsers) Enum value indicating the Shared Storage API method invoked.
 	Method StorageSharedStorageAccessMethod `json:"method"`
 
 	// MainFrameID DevTools Frame Token for the primary frame tree's root.
@@ -979,7 +979,7 @@ type StorageSharedStorageAccessed struct {
 	// OwnerOrigin Serialization of the origin owning the Shared Storage data.
 	OwnerOrigin string `json:"ownerOrigin"`
 
-	// OwnerSite Serialization of the site owning the Shared Storage data.
+	// OwnerSite (optional in older browsers) Serialization of the site owning the Shared Storage data.
 	OwnerSite string `json:"ownerSite"`
 
 	// Params The sub-parameters wrapped by `params` are all optional and their
