@@ -10,6 +10,16 @@ Each heading names that version and the previous version it changes. Describe
 the implementation for the named version. Keep historical entries intact; add
 later changes under their own version.
 
+## v0.126.0 — compared with v0.125.0
+
+### Pseudo-element interactability
+
+| Affected | Change | Migration |
+| --- | --- | --- |
+| `Element.Interactable`, `Element.WaitInteractable`, `Element.Hover`, `Element.Click`, `Element.Tap`, and their `Must` helpers | On browsers that expose `CSSPseudoElement`, including Chrome 152, a hit on a pseudo-element of the target or one of its descendants counts as part of the target. In v0.125.0, Rod reports these targets as covered and waits for them, which can end in a timeout. The behavior now matches Chrome 131, whose pseudo-elements already follow the element's ancestry. Other elements and their pseudo-elements still cover the target. A modal dialog's backdrop counts as part of the dialog and its ancestors, but still covers other targets. | No change is needed for clicks. Code that expects `CoveredError` or waits for these targets to remain covered now sees them as interactable. |
+| `Element.ContainsElement`, `Element.MustContainsElement` | Return true for a `CSSPseudoElement` belonging to the receiver or one of its descendants, as on Chrome 131. | Update code that expects false for these pseudo-elements. |
+| `CoveredError`, `Element.String` on its covering element | When available, a covering `CSSPseudoElement` is described by its originating element's tag and ID and its pseudo-element type, such as `<div#cover::after>`. The error still owns the covering pseudo-element handle. | Inspect the error type instead of matching its message. Handle ownership is unchanged. |
+
 ## v0.125.0 — compared with v0.124.0
 
 [Security](SECURITY.md) describes the threat model, the secure defaults of this

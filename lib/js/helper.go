@@ -150,6 +150,14 @@ var ContainsElement = &Function{
 	Name: "containsElement",
 	Definition: `function(target) {
     let node = target
+    if (node === this) {
+      return true
+    }
+    // Newer browsers resolve pseudo-elements to CSSPseudoElement, not a Node.
+    // Its element is the ultimate origin, including for nested pseudo-elements.
+    if (typeof CSSPseudoElement !== 'undefined' && node instanceof CSSPseudoElement) {
+      node = node.element
+    }
     while (node != null) {
       if (node === this) {
         return true

@@ -151,6 +151,7 @@ func (el *Element) Tap() error {
 
 // Interactable checks if the element is interactable with cursor.
 // The cursor can be mouse, finger, stylus, etc.
+// Pseudo-elements of the element or its descendants count as part of the element.
 // If not interactable err will be ErrNotInteractable, such as when covered by a modal,.
 func (el *Element) Interactable() (pt *proto.Point, err error) {
 	noPointerEvents, err := el.Eval(`() => getComputedStyle(this).pointerEvents === 'none'`)
@@ -200,6 +201,17 @@ func (el *Element) Interactable() (pt *proto.Point, err error) {
 	if err == nil && !contains.Value.Bool() {
 		var covering *Element
 		if covering, err = page.ElementFromObject(hit); err == nil {
+			if hit.ClassName == "CSSPseudoElement" {
+				// Describe the covering pseudo-element without replacing its handle.
+				// A failed diagnostic must not hide the CoveredError.
+				description, describeErr := covering.Eval(`() => {
+					const el = this.element
+					return el.localName + (el.id ? '#' + el.id : '') + this.type
+				}`)
+				if describeErr == nil && description.Type == proto.RuntimeRemoteObjectTypeString {
+					hit.Description = description.Value.Str()
+				}
+			}
 			err = &CoveredError{covering}
 			return
 		}
@@ -536,6 +548,7 @@ func (el *Element) Frame() (*Page, error) {
 }
 
 // ContainsElement check if the target is equal or inside the element.
+// A pseudo-element target belongs to its originating element.
 func (el *Element) ContainsElement(target *Element) (bool, error) {
 	res, err := el.Evaluate(evalHelper(js.ContainsElement, target.Object))
 	if err != nil {

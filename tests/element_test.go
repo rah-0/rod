@@ -142,6 +142,205 @@ func TestNotInteractable(t *testing.T) {
 	g.Err(el.Interactable())
 }
 
+type interactablePseudoCase struct {
+	name   string
+	style  string
+	markup string
+	hit    string
+}
+
+func TestInteractableOwnPseudoElement(t *testing.T) {
+	for _, test := range []interactablePseudoCase{
+		{"after", "#target::after { inset: -6px }", "<button id=target>ok</button>", "::after"},
+		{"before", "#target::before { inset: 0 }", "<button id=target>ok</button>", "::before"},
+		{"descendant", "#target > span::after { inset: -20px }", "<button id=target><span>ok</span></button>", "::after"},
+		{"no pointer events", "#target::after { inset: -6px; pointer-events: none }", "<button id=target>ok</button>", "BUTTON"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			g := setup(t)
+			p := g.page.MustNavigate(g.html(`<!doctype html><style>
+				body { margin: 40px } #target, span { position: relative }
+				::before, ::after { content: ""; position: absolute }
+				` + test.style + `</style>` + test.markup)).MustWaitLoad()
+			el := p.MustElement("#target")
+			hit := pseudoElementHit(t, el, test.hit)
+			defer hit.MustRelease()
+			point, err := el.Interactable()
+			g.E(err)
+			g.NotNil(point)
+		})
+	}
+}
+
+func TestInteractableCoveredByPseudoElement(t *testing.T) {
+	for _, test := range []interactablePseudoCase{
+		{"unrelated", "#cover { position: absolute; left: 40px; top: 40px } #cover::after { content: '' }", "<button id=target>ok</button><div id=cover></div>", "::after"},
+		{"ancestor", "#cover { position: relative } #cover::after { content: '' }", "<div id=cover><button id=target>ok</button></div>", "::after"},
+		{"element", "#cover { position: absolute; left: 40px; top: 40px }", "<button id=target>ok</button><div id=cover></div>", "DIV"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			g := setup(t)
+			p := g.page.MustNavigate(g.html(`<!doctype html><style>
+				body { margin: 40px } #target, #cover { width: 100px; height: 50px }
+				#cover::after { position: absolute; inset: 0 }
+				` + test.style + `</style>` + test.markup)).MustWaitLoad()
+			el := p.MustElement("#target")
+			hit := pseudoElementHit(t, el, test.hit)
+			defer hit.MustRelease()
+			_, err := el.Interactable()
+			covered, ok := errors.AsType[*rod.CoveredError](err)
+			if !ok {
+				t.Fatalf("Interactable error = %v, want CoveredError", err)
+			}
+			defer covered.MustRelease()
+			g.Eq(covered.MustDescribe().NodeName, test.hit)
+			if test.hit == "::after" {
+				g.Has(err.Error(), "::after")
+				if covered.Object.ClassName == "CSSPseudoElement" {
+					g.Has(err.Error(), "div#cover::after")
+				}
+			} else {
+				g.Has(err.Error(), "<div#cover>")
+			}
+			g.True(p.MustElement("#cover").MustContainsElement(covered.Element))
+			g.True(p.MustElement("body").MustContainsElement(covered.Element))
+			g.True(covered.MustContainsElement(covered.Element))
+			g.False(el.MustContainsElement(covered.Element))
+		})
+	}
+}
+
+func TestInteractablePseudoElementActions(t *testing.T) {
+	g := setup(t)
+	p := g.newPage().MustEmulate(devices.IPad).MustNavigate(g.html(`<!doctype html>
+		<style>
+			body { margin: 40px }
+			label { position: relative; display: inline-block; padding: 4px 12px }
+			label::after { content: ""; position: absolute; inset: -3px -1px }
+		</style>
+		<input type=radio id=radio>
+		<label for=radio onmouseenter="this.dataset.hovered = 'yes'"
+			ontouchstart="this.dataset.tapped = 'yes'">1h</label>`)).MustWaitLoad()
+	el := p.MustElement("label").Timeout(5 * time.Second)
+	defer el.CancelTimeout()
+	hit := pseudoElementHit(t, el, "::after")
+	defer hit.MustRelease()
+	point, err := el.WaitInteractable()
+	g.E(err)
+	g.NotNil(point)
+	g.E(el.Hover())
+	g.Eq(el.MustEval(`() => this.dataset.hovered`).Str(), "yes")
+	start := time.Now()
+	g.E(el.Click(proto.InputMouseButtonLeft, 1))
+	g.Lt(time.Since(start), 4*time.Second)
+	g.True(p.MustElement("#radio").MustProperty("checked").Bool())
+	g.E(el.Tap())
+	g.Eq(el.MustEval(`() => this.dataset.tapped`).Str(), "yes")
+}
+
+const interactablePseudoContextHTML = `<style>
+	#target { position: relative; width: 100px; height: 50px }
+	#target::after, #cover::after { content: ""; position: absolute; inset: 0 }
+	#cover { display: none; position: absolute; top: 8px; left: 8px; width: 100px; height: 50px }
+</style><button id=target>ok</button><div id=cover></div>`
+
+func TestInteractablePseudoElementContexts(t *testing.T) {
+	for _, name := range []string{"iframe", "shadow root"} {
+		t.Run(name, func(t *testing.T) {
+			g := setup(t)
+			p := g.page.MustNavigate(g.html(`<!doctype html><div id=host></div><iframe></iframe>`)).Timeout(5 * time.Second)
+			defer p.CancelTimeout()
+			p.MustWaitLoad()
+			var el, cover *rod.Element
+			if name == "iframe" {
+				p.MustElement("iframe").MustEval(`html => new Promise(resolve => {
+					this.onload = () => resolve()
+					this.srcdoc = html
+				})`, interactablePseudoContextHTML)
+				frame := p.MustElement("iframe").MustFrame()
+				el = frame.MustElement("#target")
+				cover = frame.MustElement("#cover")
+			} else {
+				p.MustElement("#host").MustEval(`html => this.attachShadow({mode: 'open'}).innerHTML = html`, interactablePseudoContextHTML)
+				root := p.MustElement("#host").MustShadowRoot()
+				el = root.MustElement("#target")
+				cover = root.MustElement("#cover")
+			}
+			g.E(p.WaitRepaint())
+			hit := pseudoElementHit(t, el, "::after")
+			hit.MustRelease()
+			point, err := el.Interactable()
+			g.E(err)
+			g.NotNil(point)
+			cover.MustEval(`() => this.style.display = 'block'`)
+			_, err = el.Interactable()
+			covered, ok := errors.AsType[*rod.CoveredError](err)
+			if !ok {
+				t.Fatalf("Interactable error = %v, want CoveredError", err)
+			}
+			defer covered.MustRelease()
+			g.Eq(covered.MustDescribe().NodeName, "::after")
+			g.True(cover.MustContainsElement(covered.Element))
+			g.False(el.MustContainsElement(covered.Element))
+		})
+	}
+}
+
+func TestInteractablePseudoElementMarker(t *testing.T) {
+	g := setup(t)
+	p := g.page.MustNavigate(g.html(`<!doctype html><style>
+		body { margin: 40px } ol { list-style-position: inside; margin: 0; padding: 0 }
+		#target { float: left }
+	</style><ol><li id=target>.</li></ol>`)).MustWaitLoad()
+	el := p.MustElement("#target")
+	hit := pseudoElementHit(t, el, "::marker")
+	defer hit.MustRelease()
+	point, err := el.Interactable()
+	g.E(err)
+	g.NotNil(point)
+}
+
+func TestInteractablePseudoElementBackdrop(t *testing.T) {
+	g := setup(t)
+	p := g.page.MustNavigate(g.html(`<!doctype html><style>
+		body { margin: 40px } #container { width: 100px; height: 100px }
+		dialog { position: fixed; inset: 200px auto auto 200px; margin: 0 }
+	</style><div id=container><button id=target>ok</button><dialog>modal</dialog></div>
+	<script>document.querySelector('dialog').showModal()</script>`)).MustWaitLoad()
+	el := p.MustElement("#target")
+	hit := pseudoElementHit(t, el, "::backdrop")
+	defer hit.MustRelease()
+	_, err := el.Interactable()
+	covered, ok := errors.AsType[*rod.CoveredError](err)
+	if !ok {
+		t.Fatalf("Interactable error = %v, want CoveredError", err)
+	}
+	defer covered.MustRelease()
+	g.Eq(covered.MustDescribe().NodeName, "::backdrop")
+	container := p.MustElement("#container")
+	hit = pseudoElementHit(t, container, "::backdrop")
+	defer hit.MustRelease()
+	// The backdrop belongs to a descendant, just like a descendant's ::after.
+	point, err := container.Interactable()
+	g.E(err)
+	g.NotNil(point)
+}
+
+// Verify the fixture exercises the expected hit, rather than an uncovered point.
+func pseudoElementHit(t *testing.T, el *rod.Element, nodeName string) *rod.Element {
+	t.Helper()
+	point := el.MustShape().OnePointInside()
+	if point == nil {
+		t.Fatal("target has no point inside")
+	}
+	hit := el.Page().MustElementFromPoint(int(point.X), int(point.Y))
+	if got := hit.MustDescribe().NodeName; got != nodeName {
+		hit.MustRelease()
+		t.Fatalf("hit node = %q, want %q", got, nodeName)
+	}
+	return hit
+}
+
 func TestInteractableWithNoShape(t *testing.T) {
 	g := setup(t)
 

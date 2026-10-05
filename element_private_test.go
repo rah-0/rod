@@ -343,11 +343,16 @@ func TestElementsByJSReleasesUnreturnedHandles(t *testing.T) {
 }
 
 func TestInteractableReleasesTemporaryObjects(t *testing.T) {
-	for _, mode := range []string{"success", "evaluation failure", "covered", "wait", "must"} {
+	for _, mode := range []string{
+		"success", "evaluation failure", "covered", "wait", "must",
+		"pseudo success", "pseudo covered", "pseudo diagnostic failure", "pseudo diagnostic non-string", "pseudo wait", "pseudo must",
+	} {
 		t.Run(mode, func(t *testing.T) {
+			pseudo := strings.HasPrefix(mode, "pseudo ")
+			mode = strings.TrimPrefix(mode, "pseudo ")
 			failed := errors.New("contains failed")
 			var released []proto.RuntimeRemoteObjectID
-			attempts, calls := 0, 0
+			attempts, calls, diagnostics := 0, 0, 0
 			client := &lifecycleRegressionClient{call: func(_ context.Context, method string, params any) ([]byte, error) {
 				calls++
 				switch method {
@@ -365,9 +370,21 @@ func TestInteractableReleasesTemporaryObjects(t *testing.T) {
 						if mode == "evaluation failure" {
 							return nil, failed
 						}
-						if mode == "covered" || mode == "must" || (mode == "wait" && attempts < 3) {
+						if mode == "covered" || strings.HasPrefix(mode, "diagnostic ") || mode == "must" || (mode == "wait" && attempts < 3) {
 							return []byte(`{"result":{"type":"boolean","value":false}}`), nil
 						}
+					case strings.Contains(req.FunctionDeclaration, "this.element"):
+						diagnostics++
+						if req.ObjectID != "temporary-element" || req.ReturnByValue == nil || !*req.ReturnByValue {
+							t.Fatal("pseudo-element description must use its existing handle and return by value")
+						}
+						if mode == "diagnostic failure" {
+							return nil, errors.New("description failed")
+						}
+						if mode == "diagnostic non-string" {
+							return []byte(`{"result":{"type":"boolean","value":true}}`), nil
+						}
+						return []byte(`{"result":{"type":"string","value":"div#cover::after"}}`), nil
 					}
 					return []byte(`{"result":{"type":"boolean","value":true}}`), nil
 				case "DOM.getContentQuads":
@@ -375,6 +392,9 @@ func TestInteractableReleasesTemporaryObjects(t *testing.T) {
 				case "DOM.getNodeForLocation":
 					return []byte(`{"backendNodeId":1,"frameId":""}`), nil
 				case "DOM.resolveNode":
+					if pseudo {
+						return []byte(`{"object":{"objectId":"temporary-element","type":"object","className":"CSSPseudoElement","description":"CSSPseudoElement"}}`), nil
+					}
 					return []byte(`{"object":{"objectId":"temporary-element","type":""}}`), nil
 				case "DOM.scrollIntoViewIfNeeded":
 					return []byte(`{}`), nil
@@ -411,15 +431,34 @@ func TestInteractableReleasesTemporaryObjects(t *testing.T) {
 			default:
 				_, err = element.Interactable()
 			}
+			wantDiagnostics := 0
+			if pseudo && mode != "success" {
+				wantDiagnostics = attempts
+				if mode == "wait" {
+					wantDiagnostics--
+				}
+			}
+			if diagnostics != wantDiagnostics {
+				t.Fatalf("pseudo-element descriptions = %d, want %d", diagnostics, wantDiagnostics)
+			}
 			switch mode {
 			case "evaluation failure":
 				if !errors.Is(err, failed) {
 					t.Fatalf("lost evaluation failure: %v", err)
 				}
-			case "covered":
+			case "covered", "diagnostic failure", "diagnostic non-string":
 				covered, ok := errors.AsType[*CoveredError](err)
 				if !ok || covered.Object.ObjectID != "temporary-element" || slices.Contains(released, "temporary-element") {
 					t.Fatalf("covered error must transfer its element to the caller: %v, %v", err, released)
+				}
+				if pseudo {
+					wantDescription := "div#cover::after"
+					if strings.HasPrefix(mode, "diagnostic ") {
+						wantDescription = "CSSPseudoElement"
+					}
+					if covered.Object.Description != wantDescription {
+						t.Fatalf("pseudo-element description = %q, want %q", covered.Object.Description, wantDescription)
+					}
 				}
 				return
 			default:
