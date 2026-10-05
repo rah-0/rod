@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -200,6 +201,76 @@ func TestWebSocketCanceledSendPreservesTransport(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+type deadlineSendConn struct {
+	frameConn
+	setupErr error
+	resetErr error
+	writeErr error
+	cancel   context.CancelFunc
+}
+
+func (c *deadlineSendConn) Write(p []byte) (int, error) {
+	if c.writeErr != nil {
+		return 0, c.writeErr
+	}
+	return c.frameConn.Write(p)
+}
+
+func (c *deadlineSendConn) SetWriteDeadline(deadline time.Time) error {
+	if !deadline.IsZero() {
+		return c.setupErr
+	}
+	if c.cancel != nil {
+		c.cancel()
+	}
+	return c.resetErr
+}
+
+type deadlineSendTest struct {
+	name     string
+	setupErr error
+	resetErr error
+	writeErr error
+	cancel   bool
+	wantErr  error
+}
+
+func TestWebSocketSendDeadlineErrors(t *testing.T) {
+	resetErr := errors.New("reset failed")
+	for _, test := range []deadlineSendTest{
+		{name: "success"},
+		{name: "closed after write", resetErr: net.ErrClosed},
+		{name: "wrapped closed after write", resetErr: fmt.Errorf("reset: %w", net.ErrClosed)},
+		{name: "other reset error", resetErr: resetErr, wantErr: resetErr},
+		{name: "closed before write", setupErr: net.ErrClosed, wantErr: net.ErrClosed},
+		{name: "closed during write", writeErr: net.ErrClosed, wantErr: net.ErrClosed},
+		{name: "canceled after write", resetErr: net.ErrClosed, cancel: true, wantErr: context.Canceled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			conn := &deadlineSendConn{setupErr: test.setupErr, resetErr: test.resetErr, writeErr: test.writeErr}
+			if test.cancel {
+				conn.cancel = cancel
+			}
+			ws := &WebSocket{conn: conn}
+			if err := ws.SendContext(ctx, []byte("frame")); !errors.Is(err, test.wantErr) {
+				t.Fatalf("send = %v, want %v", err, test.wantErr)
+			}
+			if test.setupErr != nil || test.writeErr != nil {
+				if conn.written.Len() != 0 {
+					t.Fatal("failed send wrote a frame")
+				}
+				return
+			}
+			opcode, payload := readClientFrame(t, conn.written.Bytes())
+			if opcode != 1 || string(payload) != "frame" {
+				t.Fatalf("sent frame: opcode %d, %q", opcode, payload)
+			}
+		})
 	}
 }
 

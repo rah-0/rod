@@ -267,7 +267,11 @@ func (ws *WebSocket) writeFrame(ctx context.Context, opcode byte, msg []byte) er
 	if err != nil && ws.writeBroken(n, err) {
 		_ = ws.Close()
 	} else if reset := ws.conn.SetWriteDeadline(time.Time{}); err == nil {
-		err = reset
+		// The reader may close the connection after the frame was written.
+		// A deadline reset on that closed connection does not invalidate the send.
+		if !errors.Is(reset, net.ErrClosed) {
+			err = reset
+		}
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
