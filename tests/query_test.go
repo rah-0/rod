@@ -133,6 +133,76 @@ func TestSearch(t *testing.T) {
 	})
 }
 
+// Page.Search searches again without sleeping after it resets stale node IDs.
+// It sleeps before the next search when that search also finds stale node IDs
+// or when the reset fails.
+func TestSearchNodeIDReset(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		// stale is the number of searches that return a stale node ID before
+		// one returns the node.
+		stale    int
+		resetErr error
+		sleeps   int
+	}{
+		{"stale once", 1, nil, 0},
+		{"stale twice", 2, nil, 1},
+		{"stale three times", 3, nil, 1},
+		{"reset fails", 1, errors.New("reset failed"), 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
+				defer cancel()
+				searches := 0
+				env := newLenientEnv(t, ctx, proto.DecodeStrict, lenientCase{
+					responses: map[string]string{
+						"DOM.performSearch": `{"searchId":"search","resultCount":1}`,
+						"DOM.getDocument":   `{"root":{"nodeId":1,"backendNodeId":1,"nodeType":9,"nodeName":"#document","localName":"","nodeValue":""}}`,
+						"DOM.resolveNode":   `{"object":{"type":"object","subtype":"node","objectId":"found"}}`,
+						"DOM.describeNode":  lenientNode,
+					},
+					answer: func(method string, _ any) (string, error) {
+						switch method {
+						case "DOM.getDocument":
+							return "", test.resetErr
+						case "DOM.getSearchResults":
+							if searches++; searches <= test.stale {
+								return `{"nodeIds":[0]}`, nil
+							}
+							return `{"nodeIds":[1]}`, nil
+						}
+						return "", nil
+					},
+				})
+				sleeps := 0
+				page := env.page.Sleeper(func() utils.Sleeper {
+					return func(context.Context) error {
+						sleeps++
+						return nil
+					}
+				})
+
+				result, err := page.Search("a")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if result.First == nil {
+					t.Fatal("search returned no element")
+				}
+				if err := result.Release(); err != nil {
+					t.Fatal(err)
+				}
+				resets := len(env.client.params("DOM.getDocument"))
+				if searches != test.stale+1 || resets != test.stale || sleeps != test.sleeps {
+					t.Fatalf("searches, resets, sleeps = %d, %d, %d, want %d, %d, %d",
+						searches, resets, sleeps, test.stale+1, test.stale, test.sleeps)
+				}
+			})
+		})
+	}
+}
+
 func TestSearchElements(t *testing.T) {
 	g := setup(t)
 

@@ -5,7 +5,8 @@ cover. It mirrors the source layout:
 
 - `tests/`: the root Rod package, with its shared browser harness in
   `setup_test.go` and the fake protocol clients that several test files use in
-  `fake_client_test.go`. A fake that one topic needs stays in that topic's file.
+  `fake_client_test.go` and `lenient_api_test.go`. A fake that one topic needs
+  stays in that topic's file.
 - `tests/lib/cdp/`: browser-backed CDP transport tests.
 - `tests/lib/launcher/`: browser launch tests and the manager benchmark.
 

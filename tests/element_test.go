@@ -395,6 +395,49 @@ func TestWaitInteractable(t *testing.T) {
 	g.Err(el.WaitInteractable())
 }
 
+// The target starts below the viewport, where scrolling cannot bring it into
+// view. The page starts to change 40 ms after the toggle is clicked, about when
+// the next action has seen the target unchanged for two animation frames.
+func TestWaitInteractableMovingIntoView(t *testing.T) {
+	for _, test := range []struct{ name, style string }{
+		// A fixed panel does not scroll with the document. The target moves
+		// into view while the content above it collapses.
+		{"content above collapses", `
+			#panel { position: fixed; inset: 0 }
+			#above { height: 100vh; transition: height 150ms linear }
+			.changed #above { height: 0 }`},
+		// The panel scrolls no further than the clipped section has grown, so
+		// each scroll moves the target only part of the way.
+		{"scroll range grows", `
+			html, body, #panel { height: 100% }
+			#panel { overflow-y: auto }
+			#above { height: 100% }
+			#section { height: 0; overflow: clip; transition: height 150ms linear }
+			.changed #section { height: 150px }
+			#target { position: relative; top: 100px }`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			g := setup(t)
+			p := g.page.MustNavigate(g.html(`<!doctype html><style>body { margin: 0 }` + test.style + `</style>
+				<div id=panel>
+					<button id=toggle onclick="setTimeout(() => document.body.className = 'changed', 40)">toggle</button>
+					<div id=above></div>
+					<div id=section><button id=target onclick="this.dataset.clicked = 'yes'">target</button></div>
+				</div>`)).MustWaitLoad()
+			target := p.MustElement("#target").Timeout(5 * time.Second)
+			defer target.CancelTimeout()
+
+			// Without a change of the page, the target stays out of view.
+			_, err := target.WaitInteractable()
+			g.Is(err, &rod.InvisibleShapeError{})
+
+			p.MustElement("#toggle").MustClick()
+			g.E(target.Click(proto.InputMouseButtonLeft, 1))
+			g.Eq(target.MustEval(`() => this.dataset.clicked`).Str(), "yes")
+		})
+	}
+}
+
 func TestHover(t *testing.T) {
 	g := setup(t)
 

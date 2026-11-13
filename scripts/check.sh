@@ -40,7 +40,7 @@ pure)
 
     pure_packages=(./internal/... ./lib/assets/... ./lib/defaults/... ./lib/devices/...
         ./lib/input/... ./lib/js/... ./lib/jsonvalue/... ./lib/proto/... ./lib/utils/...
-        ./lib/launcher/rod-manager/...)
+        ./lib/launcher/internal/... ./lib/launcher/rod-manager/...)
     go test "${test_flags[@]}" "${pure_packages[@]}"
     GOWORK=off go test "${test_flags[@]}" "${pure_packages[@]}"
     # These mixed packages also contain browser tests. Select deterministic
@@ -54,6 +54,9 @@ pure)
         'LauncherContextReplacementReleasesParent|FailedManagedInitializationReleasesParent'
         'Guardian(CleansDescendants|ParentExit|ManagedProfileCleanup|ScratchCleanupOnStartupFailure)'
         'Guardian(TemporaryCleanupConfined|TemporaryDirectoryResolvesSymlinks)'
+        'Guardian(ReapsLateAdoptions|ReapIgnoredChildSignal|RaceEnvironment|ProcessEnvironment|BrowserProcessState)'
+        'Guardian(WritesPreferences|StartupFailure|SkipsLateInitializers|BrowserSignalDispositions)'
+        'Guardian(OutlivesExitSignals|OutlivesExitSignalsOnceReady)'
         'ManagerLaunchStopsWhenRequestIsCanceled|ManagerAuthentication'
         'OwnedProfile(IsPrivateTemporaryChild|RejectsPlantedSymlink)|Manager(RejectsRemoteProcessOptions|RequiresCanonicalOptionNames)'
     )
@@ -67,7 +70,7 @@ pure)
         'Download(FailedSetupPreservesSharedEvents|UndecodableEvent|SubscriptionSkipsUnusedEvents)'
         'ElementByJS(NonElementCleanup|LookupFailureCleanup)|ElementQueryKnownContext|ElementsByJSReleasesUnreturnedHandles'
         'InteractableReleasesTemporaryObjects|TemporaryObjectAlreadyReleased|PageHTMLReleasesTemporaryObjects'
-        'ElementFromNodeReleasesUnreturnedParent|ElementEqualReturnsEvaluationError'
+        'ElementFromNodeReleasesUnreturnedParent|ElementEqualReturnsEvaluationError|WaitInteractableRetriesMovingElement'
         'Typed.*|EventWaitReportsSetupAndCancellation|MissingProtocolObjects'
         'Hijack(RepeatedHeaders|ReplayableBodies|RouteMutation|LoadResponseRedirect|LoadResponseBodyLimit)'
         'HijackLoadResponse(ReplacesHeaders|HeaderLimit|FollowRedirects)|HandleAuth(ErrorsAndRestore|Validation)'
@@ -84,8 +87,10 @@ pure)
     )
     # Public API tests in ./tests that use fake protocol clients or local fixtures.
     rod_public_tests=(
-        'BrowserDecoding|LenientDecodingAPIs|BrowserResetControlURL|TestTry|BrowserConnect(Failure|Conflict)|DefaultSleeperBackoff|BinarySize'
+        'BrowserDecoding|LenientDecodingAPIs|BrowserResetControlURL|TestTry|BrowserConnect(Failure|Conflict)|DefaultSleeperBackoff|SearchNodeIDReset|BinarySize'
         'PagesOthers|ElementsOthers|EvalOptionsString|ElementFromObjectRequiresHandle'
+        'NavigationEndsEvaluation|PageHTMLInFrameAfterReplacedDocument'
+        'SearchSharesNodeIDReset|SearchNodeIDReset(WaitHonorsContext|AfterCanceledSearch|PerSession)'
         'ConfiguredBrowser(LaunchFailures|LaunchConflicts|OutputLimit|DiscoveryFailureClosesTransport)'
         'Monitor(Cancellation|AccessControl)|TraceRedactsTypedInput'
         'Typed(PageEventSessionAndDomainRestore|WaitEvent|MessageLoad)|MessageLoad(DecodeError|MissingField)|PageSessionEndClosesUnreadEvent'

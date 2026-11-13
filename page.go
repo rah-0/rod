@@ -106,16 +106,61 @@ func (p *Page) Info() (*proto.TargetTargetInfo, error) {
 	return p.browser.Context(ctx).pageInfo(p.TargetID)
 }
 
-// HTML of the page.
-func (p *Page) HTML() (_ string, err error) {
-	el, err := p.Element("html")
-	if err != nil {
-		return "", err
-	}
-	defer func() {
-		err = errors.Join(err, p.releaseObject(el.Object))
-	}()
-	return el.HTML()
+// HTML of the page: the markup of its html element, serialized by the DOM
+// domain as for [Element.HTML]. Like [Page.Element], it retries with the page's
+// sleeper until the document has an html element. When the document is replaced
+// during the query for the element or before the read, for example by a reload,
+// the new document is read. The page of a frame that shares the session of its
+// parent returns the error of the query or the read instead.
+func (p *Page) HTML() (string, error) {
+	// A global named querySelector answers the query, as it does for
+	// Page.Element. The document's own method answers when there is no such
+	// global, or when the global throws or finds nothing.
+	query := Eval(`() => {
+		try {
+			const el = window.querySelector && window.querySelector('html')
+			if (el) return el
+		} catch (e) {}
+		return document.querySelector('html')
+	}`).ByObject()
+
+	var html string
+	err := utils.Retry(p.ctx, p.sleeper(), func() (bool, error) {
+		for {
+			el, err := p.Evaluate(query)
+			if errors.Is(err, cdp.ErrCtxDestroyed) && p.continuesInNewDocument() {
+				// A navigation ended the query: query the new document.
+				continue
+			}
+			if err != nil {
+				return true, err
+			}
+			if el.Type == proto.RuntimeRemoteObjectTypeObject && el.Subtype == proto.RuntimeRemoteObjectSubtypeNull {
+				return false, nil
+			}
+			if el.Subtype != proto.RuntimeRemoteObjectSubtypeNode {
+				err = &ExpectElementError{el}
+				if cleanupErr := p.releaseObject(el); cleanupErr != nil {
+					err = errors.Join(err, cleanupErr)
+				}
+				return true, err
+			}
+
+			res, err := proto.DOMGetOuterHTML{ObjectID: el.ObjectID}.Call(p)
+			cleanupErr := p.releaseObject(el)
+			replaced := errors.Is(err, cdp.ErrCtxNotFound) || errors.Is(err, cdp.ErrCtxDestroyed) || errors.Is(err, cdp.ErrObjNotFound)
+			if replaced && cleanupErr == nil && p.continuesInNewDocument() {
+				// The document was replaced after the query and the handle
+				// went with it: read the new document.
+				continue
+			}
+			if err == nil {
+				html = res.OuterHTML
+			}
+			return true, errors.Join(err, cleanupErr)
+		}
+	})
+	return html, err
 }
 
 // Cookies returns the page cookies. By default it will return the cookies for current page.

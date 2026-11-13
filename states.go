@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rah-0/rod/lib/proto"
@@ -17,12 +18,13 @@ import (
 // domain enable command or Page.setLifecycleEventsEnabled.
 var ErrUnsupportedDomain = errors.New("rod: domain helpers require a domain enable command or Page.setLifecycleEventsEnabled")
 
-// retainedCommands holds the retained commands and domain leases of one session,
-// or the context-scoped commands of one browser context. Browser.stateLock
-// guards its maps.
+// retainedCommands holds the retained commands, domain leases, and search
+// resets of one session, or the context-scoped commands of one browser context.
+// Browser.stateLock guards its fields.
 type retainedCommands struct {
 	commands map[string]json.RawMessage
 	leases   map[string]*domainLease
+	resets   *searchResets
 }
 
 // sessionCommandsKey and contextCommandsKey index retainedCommands in Browser.states.
@@ -421,6 +423,34 @@ func (b *Browser) DisableDomain(sessionID proto.TargetSessionID, req proto.Reque
 		}
 	}
 	return restore, nil
+}
+
+// searchResets coordinates the node ID resets of the searches of one session.
+// DOM.getDocument gives the nodes of the session new IDs and discards its
+// search results, including those that another search is using. The searches
+// that find stale node IDs at the same time therefore share one reset.
+type searchResets struct {
+	// lock is held by the search that decides on a reset and sends it. A
+	// search that waits for it can leave when its context ends.
+	lock chan struct{}
+	// count is the number of successful resets.
+	count atomic.Uint64
+}
+
+// searchResets returns the resets that the searches of a session share. They
+// are released with the session's retained commands; the search of a session
+// that has ended gets resets of its own.
+func (b *Browser) searchResets(sessionID proto.TargetSessionID) *searchResets {
+	b.stateLock.Lock()
+	defer b.stateLock.Unlock()
+	commands := b.retained(sessionCommandsKey(sessionID), false)
+	if commands == nil {
+		return &searchResets{lock: make(chan struct{}, 1)}
+	}
+	if commands.resets == nil {
+		commands.resets = &searchResets{lock: make(chan struct{}, 1)}
+	}
+	return commands.resets
 }
 
 type sessionStateKey proto.TargetSessionID

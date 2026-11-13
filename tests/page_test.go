@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -168,6 +169,302 @@ func TestPageHTML(t *testing.T) {
 
 	g.mc.stubErr(1, proto.RuntimeCallFunctionOn{})
 	g.Err(p.HTML())
+}
+
+// eqPageHTML requires Page.HTML to return the markup that DOM.getOuterHTML
+// reports for the html element, which Element.HTML reads. A document that
+// changes between the reads is read again.
+func eqPageHTML(g G, page *rod.Page) string {
+	g.Helper()
+	el := page.MustElement("html")
+	defer el.MustRelease()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		want := el.MustHTML()
+		got := page.MustHTML()
+		if el.MustHTML() != want {
+			if time.Now().After(deadline) {
+				g.Fatalf("the document kept changing")
+			}
+			continue
+		}
+		if got != want {
+			i := 0
+			for i < len(got) && i < len(want) && got[i] == want[i] {
+				i++
+			}
+			g.Fatalf("Page.HTML (%d bytes) and DOM.getOuterHTML (%d bytes) differ at byte %d: %q, want %q",
+				len(got), len(want), i, got[i:min(i+80, len(got))], want[i:min(i+80, len(want))])
+		}
+		return got
+	}
+}
+
+// Page.HTML returns the markup that Element.HTML returns for the html element:
+// in the repository's fixtures, in documents with content that is serialized in
+// a particular way, in frames, and in a document that is still loading.
+func TestPageHTMLEqualsElementHTML(t *testing.T) {
+	g := setup(t)
+	var compare func(page *rod.Page)
+	compare = func(page *rod.Page) {
+		eqPageHTML(g, page)
+		for _, iframe := range page.MustElements("iframe") {
+			compare(iframe.MustFrame())
+		}
+	}
+
+	fixtures, err := filepath.Glob(repoPath("fixtures/*.html"))
+	g.E(err)
+	g.Gt(len(fixtures), 20)
+	for _, fixture := range fixtures {
+		compare(g.page.MustNavigate(g.srcFile("fixtures/" + filepath.Base(fixture))).MustWaitLoad())
+	}
+
+	s := g.Serve()
+	for i, document := range []struct {
+		contentType string
+		body        string
+		has         []string
+	}{
+		{body: `<!-- before --><!DOCTYPE html><!-- between --><html lang="en"><!-- inside --><head><title>t</title></head>` +
+			`<body><!-- body --><p>text</p></body></html><!-- after -->`,
+			has: []string{`<html lang="en"><!-- inside -->`, `<!-- body -->`}},
+		{body: `<!doctype html><body>
+<div id="declarative"><template shadowrootmode="open"><slot></slot><b>declarative</b></template><span>light</span></div>
+<div id="closed"><template shadowrootmode="closed"><i>closed</i></template></div>
+<div id="attached"><span slot="s">slotted</span></div>
+<template id="t"><p>template <span>content</span></p><template><em>nested</em></template></template>
+<custom-element><template>inert</template></custom-element>
+<script>
+  document.getElementById('attached').attachShadow({ mode: 'open' }).innerHTML = '<u>attached</u><slot name="s"></slot>'
+  document.getElementById('t').content.append(document.createElement('hr'), 'added <&>')
+  customElements.define('custom-element', class extends HTMLElement {
+    constructor() {
+      super()
+      this.attachShadow({ mode: 'closed' }).textContent = 'custom'
+    }
+  })
+</script>`,
+			has: []string{`<div id="declarative"><span>light</span></div>`, `<div id="closed"></div>`,
+				`<template><em>nested</em></template><hr>added &lt;&amp;&gt;</template>`, `<template>inert</template>`}},
+		{body: `<!doctype html><iframe srcdoc="<p>srcdoc &amp;amp; <b>markup</b></p><iframe srcdoc='nested'></iframe>"></iframe>` +
+			`<iframe src="about:blank"></iframe><iframe>fallback <b>text</b></iframe>`,
+			has: []string{`<iframe>fallback <b>text</b></iframe>`}},
+		{body: `<!doctype html><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 10 10">` +
+			`<title>t</title><foreignObject width="5" height="5"><div>html in svg<br></div></foreignObject><path d="M0 0L1 1"/>` +
+			`<use xlink:href="#a"/><style>a > b { fill: red }</style><textPath>x</textPath></svg>` +
+			`<math><mfrac><mi>x</mi><mn>2</mn></mfrac><annotation-xml encoding="text/html"><p>p</p></annotation-xml></math>`,
+			has: []string{`<foreignObject width="5" height="5"><div>html in svg<br></div></foreignObject>`, `<use xlink:href="#a"></use>`, `<mi>x</mi>`}},
+		{body: "<!doctype html><p title=\"a&quot;b&amp;c&lt;d&gt;e&nbsp;f\">&lt;&amp;&gt;&nbsp;\"double\" 'single'</p>" +
+			"<textarea>\n\nleading newline</textarea><pre>\n\npre</pre><script>if (1 < 2 && 3 > 2) { /* </p> */ }</script>" +
+			"<style>a > b { content: \"<\" }</style><noscript><p>noscript</p></noscript><xmp><b>xmp</b></xmp>" +
+			"<input value=\"v\" disabled><img alt=\"\"><a href=\"/x?a=1&b=2&amp;c=3\">link</a><div data-json='{\"k\":\"v\"}'></div>" +
+			"<select><option selected>o</select><p>\U0001F600 \u00e9 \u4e2d \u2028 \u00a0 \ufffd</p><plaintext>rest <b>",
+			has: []string{`<a href="/x?a=1&amp;b=2&amp;c=3">`, "\U0001F600 \u00e9 \u4e2d \u2028 &nbsp; \ufffd", `<plaintext>rest <b></plaintext>`}},
+		{body: `<!doctype html><body><script>
+  const div = document.createElement('div')
+  div.setAttribute('a\u00e9', '1')
+  div.setAttribute('xml:lang', 'en')
+  div.append('<raw>&\ud83d lone surrogate', document.createComment('--comment--'), document.createProcessingInstruction('target', 'data'))
+  const foreign = document.createElementNS('urn:x', 'x:y')
+  foreign.setAttributeNS('urn:z', 'z:q', 'v')
+  foreign.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '#')
+  const input = document.createElement('input')
+  input.value = 'property only'
+  div.append(foreign, document.createElement('BR'), input)
+  document.body.append(div)
+  document.title = 'changed <title>'
+</script>`,
+			has: []string{`<title>changed &lt;title&gt;</title>`, `<!----comment---->`, `<x:y z:q="v" xlink:href="#"></x:y><br><input>`}},
+		{body: `<html><body><table><tr><td>no doctype<p>unclosed`, has: []string{`<td>no doctype<p>unclosed</p></td>`}},
+		{contentType: "application/xhtml+xml", body: `<?xml version="1.0" encoding="UTF-8"?><?pi before?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:svg="http://www.w3.org/2000/svg" xml:lang="en"><head><title>x</title></head>
+<body><br/><p>a &amp; b<![CDATA[ <cdata> ]]></p><svg:svg><svg:rect width="1"/></svg:svg><div xmlns="urn:other"><html>nested</html></div></body></html>`,
+			has: []string{`<br />`, `<![CDATA[ <cdata> ]]>`}},
+		{contentType: "image/svg+xml", body: `<svg xmlns="http://www.w3.org/2000/svg"><foreignObject width="9" height="9">` +
+			`<html xmlns="http://www.w3.org/1999/xhtml"><body>inside svg</body></html></foreignObject></svg>`,
+			has: []string{`<body>inside svg</body>`}},
+		{body: `<!doctype html><body><script>
+  for (let i = 0; i < 20000; i++) {
+    const p = document.createElement('p')
+    p.className = 'c' + (i % 7)
+    p.textContent = 'row ' + i + ' <&> ' + 'x'.repeat(40)
+    document.body.append(p)
+  }
+</script>`, has: []string{`<p class="c0">row 19999 &lt;&amp;&gt; xxxx`}},
+	} {
+		contentType := cmp.Or(document.contentType, "text/html; charset=utf-8")
+		path := fmt.Sprintf("/document-%d", i)
+		s.Mux.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", contentType)
+			_, _ = w.Write([]byte(document.body))
+		})
+		page := g.page.MustNavigate(s.URL(path)).MustWaitLoad()
+		html := eqPageHTML(g, page)
+		for _, part := range document.has {
+			if !strings.Contains(html, part) {
+				t.Errorf("document %d lacks %q: %s", i, part, html[:min(len(html), 2000)])
+			}
+		}
+		for _, iframe := range page.MustElements("iframe") {
+			compare(iframe.MustFrame())
+		}
+	}
+
+	// A document that is still loading.
+	release := make(chan struct{})
+	finish := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(finish)
+	s.Mux.HandleFunc("/loading", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<!doctype html><title>loading</title><p id="early">early</p>` + strings.Repeat("<!-- padding -->", 512)))
+		w.(http.Flusher).Flush()
+		<-release
+		_, _ = w.Write([]byte(`<p id="late">late</p>`))
+	})
+	page := g.page.MustNavigate(s.URL("/loading"))
+	page.MustElement("#early")
+	g.False(strings.Contains(eqPageHTML(g, page), `id="late"`))
+	finish()
+	page.MustWaitLoad()
+	g.Has(eqPageHTML(g, page), `id="late"`)
+}
+
+// Page.HTML waits for the html element like a query for it, and fails like
+// one when the sleeper gives up.
+func TestPageHTMLWithoutHTMLElement(t *testing.T) {
+	g := setup(t)
+
+	page := g.page.MustNavigate(g.srcFile("fixtures/object-model.svg")).MustWaitLoad()
+	_, err := page.Sleeper(rod.NotFoundSleeper).HTML()
+	g.Is(err, &rod.ElementNotFoundError{})
+	_, err = page.Sleeper(rod.NotFoundSleeper).Element("html")
+	g.Is(err, &rod.ElementNotFoundError{})
+
+	page = g.page.MustNavigate(g.blank()).MustWaitLoad()
+	page.MustEval(`() => {
+		window.root = document.documentElement
+		window.root.remove()
+	}`)
+	_, err = page.Sleeper(rod.NotFoundSleeper).HTML()
+	g.Is(err, &rod.ElementNotFoundError{})
+	page.MustEval(`() => { setTimeout(() => document.append(window.root), 100) }`)
+	g.Eq(page.MustHTML(), eqPageHTML(g, page))
+}
+
+// Page.HTML does not read the outerHTML property, which a page script can
+// redefine. It returns the markup that the DOM domain reports.
+func TestPageHTMLRedefinedProperty(t *testing.T) {
+	g := setup(t)
+
+	s := g.Serve()
+	for i, script := range []string{
+		`Object.defineProperty(Element.prototype, 'outerHTML', { get() { return 'redefined' } })`,
+		`Object.defineProperty(Element.prototype, 'outerHTML', { get() { return undefined } })`,
+		`Object.defineProperty(Element.prototype, 'outerHTML', { get() { return null } })`,
+		`Object.defineProperty(Element.prototype, 'outerHTML', { get() { return 42 } })`,
+		`Object.defineProperty(Element.prototype, 'outerHTML', { get() { return { a: 1 } } })`,
+		`Object.defineProperty(Element.prototype, 'outerHTML', { get() { throw new Error('no') } })`,
+		`Object.defineProperty(Element.prototype, 'outerHTML', { set(v) {} })`,
+		`Object.defineProperty(HTMLElement.prototype, 'outerHTML', { set(v) {}, configurable: true })`,
+		`Object.defineProperty(document.documentElement, 'outerHTML', { value: 'own value' })`,
+	} {
+		path := fmt.Sprintf("/redefined-%d", i)
+		body := `<p>text</p><script>` + script + `</script>`
+		s.Route(path, ".html", `<!doctype html>`+body)
+		page := g.page.MustNavigate(s.URL(path)).MustWaitLoad().Timeout(10 * time.Second)
+		g.Eq(eqPageHTML(g, page), `<html><head></head><body>`+body+`</body></html>`)
+		page.CancelTimeout()
+	}
+}
+
+// Page.HTML asks a global named querySelector for the html element, as
+// Page.Element does, and the document's own method when that global throws or
+// finds nothing. It reads the html element when either of them finds it.
+func TestPageHTMLGlobalQuerySelector(t *testing.T) {
+	g := setup(t)
+
+	s := g.Serve()
+	const global = `var querySelector = document.querySelector.bind(document); `
+	for i, body := range []string{
+		// The global is not a function, finds nothing, or throws.
+		`<div id="querySelector"></div><p>text</p>`,
+		`<p>text</p><script>function querySelector() { return null }</script>`,
+		`<p>text</p><script>function querySelector() { throw new Error('no') }</script>`,
+		// The global finds the element, and the document's method does not.
+		`<p>text</p><script>` + global + `document.querySelector = () => null</script>`,
+		`<p>text</p><script>` + global + `document.querySelector = () => { throw new Error('no') }</script>`,
+		`<p>text</p><script>` + global + `document.querySelector = () => document.createElement('html')</script>`,
+	} {
+		path := fmt.Sprintf("/global-%d", i)
+		s.Route(path, ".html", `<!doctype html>`+body)
+		page := g.page.MustNavigate(s.URL(path)).MustWaitLoad().Timeout(10 * time.Second)
+		el := page.MustElementByJS(`() => document.documentElement`)
+		html := page.MustHTML()
+		g.Eq(html, el.MustHTML())
+		g.Eq(html, `<html><head></head><body>`+body+`</body></html>`)
+		el.MustRelease()
+		page.CancelTimeout()
+	}
+}
+
+// A document that is replaced between the query for the html element and the
+// read takes the handle of the query with it, and one that is replaced during
+// the query ends the query with an error. Page.HTML reads the new document.
+func TestPageHTMLReplacedDocument(t *testing.T) {
+	g := setup(t)
+
+	s := g.Serve()
+	s.Route("/first", ".html", `<!doctype html><p>first</p>`)
+	s.Route("/second", ".html", `<!doctype html><p>second</p>`)
+	page := g.page.MustNavigate(s.URL("/first")).MustWaitLoad()
+	g.mc.stub(1, proto.DOMGetOuterHTML{}, func(send StubSend) (jsonvalue.Value, error) {
+		page.MustNavigate(s.URL("/second")).MustWaitLoad()
+		return send()
+	})
+	g.Eq(page.MustHTML(), `<html><head></head><body><p>second</p></body></html>`)
+
+	// Chrome answers a request that a navigation interrupts with this error.
+	g.mc.stub(1, proto.RuntimeCallFunctionOn{}, func(StubSend) (jsonvalue.Value, error) {
+		page.MustNavigate(s.URL("/first")).MustWaitLoad()
+		return jsonvalue.New(nil), &cdp.Error{Code: -32000, Message: "Inspected target navigated or closed"}
+	})
+	g.Eq(page.MustHTML(), `<html><head></head><body><p>first</p></body></html>`)
+}
+
+// Page.HTML ends with the page's context and with the page, also while every
+// read reports a replaced document.
+func TestPageHTMLReplacedUntilEnd(t *testing.T) {
+	g := setup(t)
+
+	// read answers every DOM.getOuterHTML like the read of a replaced
+	// document, calls end during the third one, and returns the error of
+	// Page.HTML.
+	read := func(page *rod.Page, end func()) error {
+		reads := 0
+		g.mc.setCall(func(ctx context.Context, sessionID, method string, params any) ([]byte, error) {
+			if method != (proto.DOMGetOuterHTML{}).ProtoReq() {
+				return g.mc.principal.Call(ctx, sessionID, method, params)
+			}
+			if reads++; reads == 3 {
+				end()
+			}
+			if reads > 100 {
+				return nil, errors.New("the reads did not end")
+			}
+			return nil, cdp.ErrCtxNotFound
+		})
+		defer g.mc.resetCall()
+		_, err := page.HTML()
+		g.Eq(reads, 3)
+		return err
+	}
+
+	page, cancel := g.page.MustNavigate(g.blank()).MustWaitLoad().WithCancel()
+	defer cancel()
+	g.Is(read(page, cancel), context.Canceled)
+
+	page = g.browser.MustPage(g.blank()).MustWaitLoad()
+	g.Is(read(page, page.MustClose), context.Canceled)
 }
 
 func TestMustWaitElementsMoreThan(t *testing.T) {

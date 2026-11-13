@@ -9,10 +9,6 @@ import (
 	"github.com/rah-0/rod/lib/launcher/flags"
 )
 
-func killGroup(pid int) {
-	_ = syscall.Kill(-pid, syscall.SIGKILL)
-}
-
 func (l *Launcher) osSetupCmd(cmd *exec.Cmd) {
 	if flags, has := l.GetFlags(flags.XVFB); has {
 		var command []string

@@ -183,6 +183,27 @@ func TestPageDiagnosticsBrowserExpiredContext(t *testing.T) {
 	}
 }
 
+// Stop reaches its boundary while Page.DisableDomain keeps the Runtime domain
+// disabled. The browser then installs the binding only in a world that exists
+// when it receives the binding command, so Stop creates the world first.
+func TestPageDiagnosticsBrowserRuntimeDisabled(t *testing.T) {
+	g := setup(t)
+	page := g.newPage(g.blank()).MustWaitLoad()
+	diagnostics, err := page.StartDiagnostics(rod.DiagnosticsOptions{})
+	g.E(err)
+	page.MustEval(`() => console.log('before-disable')`)
+	restore, err := page.DisableDomain(&proto.RuntimeEnable{})
+	g.E(err)
+	snapshot, err := diagnostics.Stop()
+	if err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if !slices.ContainsFunc(snapshot.Console, func(e rod.ConsoleMessage) bool { return e.Text == "before-disable" }) {
+		t.Errorf("stop lost the console message: %+v", snapshot)
+	}
+	g.E(restore())
+}
+
 func TestPageDiagnosticsBrowserFrameCleanup(t *testing.T) {
 	g := setup(t)
 	page := g.newPage(g.html(`<iframe srcdoc="<p>first</p>"></iframe><iframe srcdoc="<p>second</p>"></iframe>`)).MustWaitLoad()

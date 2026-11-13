@@ -84,7 +84,8 @@ func (el *Element) ScrollIntoView() error {
 }
 
 // Hover the mouse over the center of the element.
-// Before the action, it will try to scroll to the element and wait until it's interactable.
+// Before the action, it will try to scroll to the element and wait until it's interactable,
+// as [Element.WaitInteractable] does.
 func (el *Element) Hover() error {
 	pt, err := el.WaitInteractable()
 	if err != nil {
@@ -128,6 +129,7 @@ func (el *Element) Click(button proto.InputMouseButton, clickCount int) error {
 
 // Tap will scroll to the button and tap it just like a human.
 // Before the action, it will try to scroll to the element and wait until it's interactable and enabled.
+// It waits for interactability as [Element.WaitInteractable] does.
 func (el *Element) Tap() error {
 	err := el.ScrollIntoView()
 	if err != nil {
@@ -675,12 +677,49 @@ func (el *Element) WaitStableRAF() error {
 	return nil
 }
 
+// interactableSettle is how long the shape of an element that comes into view
+// during [Element.WaitInteractable] has to stay the same before its point is
+// returned. [Element.MustWaitStable] waits for the same interval.
+const interactableSettle = 300 * time.Millisecond
+
 // WaitInteractable waits for the element to be interactable.
 // It will try to scroll to the element on each try.
+// A covered element is tried again. So is an element without a point in the
+// viewport, until its shape ([Element.Shape]) equals the shape after the
+// previous such try: an element that is moving into view is waited for, and
+// one that does not move returns [InvisibleShapeError] on the second try.
+// Once a try has found no point in the viewport, a point is returned only
+// after the shape has stayed the same for 300 ms: an element that comes into
+// view in steps rests between them for longer than the two animation frames
+// that each try waits for. An element that rests for more than 300 ms and
+// then moves again can be acted on during that rest, and an action that
+// arrives after the move reaches what is at the point then; wait for such an
+// element with [Element.WaitStable] first. A shape that keeps changing is
+// waited for until the sleeper or the context ends the wait.
+// If the context ends the wait after a try without a point in the viewport,
+// the error is that [InvisibleShapeError] joined with the error of the
+// context. If the sleeper ends the wait right after such a try, or before the
+// 300 ms have passed, and the context of the element has not ended, the error
+// is that [InvisibleShapeError] alone.
 func (el *Element) WaitInteractable() (pt *proto.Point, err error) {
 	defer el.tryTrace(TraceTypeWait, "interactable")()
 
+	// The error of the latest try that found no point in the viewport, and
+	// the shape after that try.
+	var outOfView error
+	var invisible *proto.DOMGetContentQuadsResult
+	// The shape after the latest try, if that try found a point after an
+	// earlier one found none, and the time of the first try in a row that
+	// read this shape.
+	var inView *proto.DOMGetContentQuadsResult
+	var inViewSince time.Time
+	// Whether the latest try is repeated because the element had no point in
+	// the viewport, or has come into view and is not known to rest there.
+	var comingIntoView bool
+
 	err = utils.Retry(el.ctx, el.sleeper(), func() (bool, error) {
+		comingIntoView = false
+
 		// For lazy loading page the element can be outside of the viewport.
 		// If we don't scroll to it, it will never be available.
 		err := el.ScrollIntoView()
@@ -690,11 +729,60 @@ func (el *Element) WaitInteractable() (pt *proto.Point, err error) {
 
 		pt, err = el.Interactable()
 		if covered, ok := errors.AsType[*CoveredError](err); ok {
+			inView = nil
 			err := el.page.Context(el.ctx).releaseObject(covered.Object)
 			return err != nil, err
 		}
+		if _, ok := errors.AsType[*InvisibleShapeError](err); ok {
+			outOfView = err
+			// An animation can start after the scroll and carry the element
+			// into view, so only an unchanged shape is final.
+			shape, shapeErr := el.Shape()
+			if shapeErr != nil {
+				return true, shapeErr
+			}
+			if !shapesEqual(invisible, shape) {
+				invisible, inView, comingIntoView = shape, nil, true
+				return false, nil
+			}
+		}
+		if err == nil && outOfView != nil {
+			// The element has come into view during this wait. Two equal
+			// animation frames do not show that it rests: an element that
+			// moves in steps would be acted on between two steps, at a point
+			// that it has left when the action arrives. The shape has to stay
+			// the same from the answer to one request to the start of a later
+			// one, so that the time an answer takes does not count as rest.
+			asked := time.Now()
+			shape, shapeErr := el.Shape()
+			if shapeErr != nil {
+				return true, shapeErr
+			}
+			if !shapesEqual(inView, shape) {
+				inView, inViewSince = shape, time.Now()
+			}
+			if asked.Sub(inViewSince) < interactableSettle {
+				comingIntoView = true
+				return false, nil
+			}
+		}
 		return true, err
 	})
+	if err != nil && outOfView != nil {
+		// A try found no point in the viewport, and no later one found the
+		// element at rest in view. The error of that try is kept when the
+		// context ends the wait, and returned alone when the sleeper ends it
+		// while the element is on its way into view.
+		ended := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+		switch {
+		case comingIntoView && (!ended || el.ctx.Err() == nil):
+			// The sleeper refuses to wait: its error is not that of a
+			// context, or the context of the element has not ended.
+			err = outOfView
+		case ended:
+			err = errors.Join(outOfView, err)
+		}
+	}
 	return
 }
 

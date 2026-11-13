@@ -50,14 +50,40 @@ terminates, and reaps surviving descendants, including detached Chrome crash
 reporters. It requires access to `/proc`. Other Unix systems target the browser
 process group; descendants that leave that group have weaker cleanup guarantees.
 Windows uses direct launches and does not provide this application-crash cleanup.
-Killing the supervisor itself or a host failure cannot guarantee profile cleanup.
 
-The supervisor re-executes the application's binary with a private invocation
-and inherited pipes. Package initializers that run before the launcher's
-initializer run again in that helper; keep such initializers free of external
-side effects. A helper that cannot initialize causes launch to fail. No helper
-binary downloads or additional Go dependencies are needed. Starting Chrome
-yourself with `exec.Command` bypasses this supervision.
+The supervisor ends when that pipe closes or the browser exits. It receives and
+discards `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM`, so a signal that is sent
+to every process with the application's name, or to all processes of a service,
+does not leave the browser without supervision. A `SIGHUP` or `SIGINT` that is
+ignored when the application launches, as `SIGHUP` is under `nohup`, stays
+ignored in the supervisor and in the browser. If the supervisor is ended in
+another way, such as by `SIGKILL`, or the host fails, browser and profile
+cleanup is not guaranteed.
+
+The supervisor is the application's own binary, started again with a private
+invocation and inherited pipes. An internal package that imports little more
+than `os` and `os/signal` answers that invocation from its initializer, so the
+helper runs only the package initializers that Go schedules before that one. Go
+initializes a package after the packages it imports and, among the packages
+that are ready, picks the one whose import path sorts first. With Go 1.27 the
+helper takes over before `unicode` is initialized and therefore skips every
+package that depends on it, such as `strings`, `fmt`, and `net/http`: most of
+the launcher's dependencies and of a typical application. A package whose
+imports are all initialized earlier, such as one that imports only `os` and
+`sync`, can still run its initializer in the helper, so keep package
+initializers free of external side effects. On Linux, an attribute that the
+kernel keeps for each thread, such as a scheduling priority set with
+`setpriority(PRIO_PROCESS, 0, …)` or a CPU affinity, reaches the helper and the
+browser from the thread that calls `Launch`; an initializer that sets it on
+another thread does not pass it on. A helper that cannot initialize causes
+launch to fail. No helper binary downloads or additional Go dependencies are
+needed. Starting Chrome yourself with `exec.Command` bypasses this supervision.
+
+A program built with the race detector sleeps at exit, one second by default,
+while other goroutines are alive, and browser cleanup waits for the supervisor
+to exit. In such a build the supervisor therefore starts with
+`atexit_sleep_ms=0` added to `GORACE`, unless `GORACE` already sets
+`atexit_sleep_ms`. The application and the browser keep their environments.
 
 Without `UserDataDir`, `New` selects an unpredictable profile path directly inside
 `os.TempDir()`. Launch creates that directory, with owner-only permissions on

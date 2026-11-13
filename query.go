@@ -230,6 +230,14 @@ func (p *Page) queryJSCtxID(opts *EvalOptions) (proto.RuntimeRemoteObjectID, err
 	return id, err
 }
 
+// continuesInNewDocument reports whether the page can evaluate again after its
+// document is replaced. A frame in the session of its parent cannot rely on
+// that: the frame element, through which the next evaluation would find the
+// frame's window, ends with the document of the parent.
+func (p *Page) continuesInNewDocument() bool {
+	return !p.IsIframe() || p.SessionID != p.element.page.SessionID
+}
+
 // elementFromCall wraps a node returned by a call with opts. A call returns
 // handles owned by its target's execution context, so no lookup is needed when
 // that context is known and cached: thisCtx for a call on opts.ThisObj, or pid
@@ -386,6 +394,12 @@ func (p *Page) releaseObjects(objs []*proto.RuntimeRemoteObject) error {
 // Search for the given query in the DOM tree until the result count is not zero, before that it will keep retrying.
 // The query can be plain text or css selector or xpath.
 // It will search nested iframes and shadow doms too.
+// A search that finds node IDs that the browser has invalidated resets them
+// with DOM.getDocument, which also invalidates the node IDs and search results
+// of the other searches of the page's session. Concurrent searches of a
+// session therefore share one reset: a search that finds such node IDs while
+// another search resets them waits for that reset, or until its own context
+// ends, and then searches again.
 func (p *Page) Search(query string) (*SearchResult, error) {
 	restore, err := p.browser.Context(p.ctx).acquireDomain(p.SessionID, proto.DOMEnable{})
 	if err != nil {
@@ -395,8 +409,14 @@ func (p *Page) Search(query string) (*SearchResult, error) {
 		page:    p,
 		restore: restore,
 	}
+	resets := p.browser.searchResets(p.SessionID)
 
-	err = utils.Retry(p.ctx, p.sleeper(), func() (bool, error) {
+	// reset reports that the node IDs which the last search found stale have
+	// been reset, so that the same search can succeed at once.
+	reset := false
+	search := func() (bool, error) {
+		reset = false
+		resetCount := resets.count.Load()
 		if sr.DOMPerformSearchResult != nil {
 			if err := (proto.DOMDiscardSearchResults{SearchID: sr.SearchID}).Call(p); err != nil {
 				return true, err
@@ -452,7 +472,24 @@ func (p *Page) Search(query string) (*SearchResult, error) {
 		// invalidate all the existing NodeID. We have to call proto.DOMGetDocument
 		// to reset the remote browser's tracker.
 		if id == 0 {
-			_, _ = proto.DOMGetDocument{}.Call(p)
+			// A reset invalidates the node IDs and search results of every
+			// search of the session, so one search at a time decides on it.
+			select {
+			case resets.lock <- struct{}{}:
+			case <-p.ctx.Done():
+				return true, p.ctx.Err()
+			}
+			defer func() { <-resets.lock }()
+			if resets.count.Load() != resetCount {
+				// Another search has reset the node IDs since this one began.
+				// A second reset would invalidate the IDs that search holds.
+				reset = true
+				return false, nil
+			}
+			_, err := proto.DOMGetDocument{}.Call(p)
+			if reset = err == nil; reset {
+				resets.count.Add(1)
+			}
 			return false, nil
 		}
 
@@ -464,6 +501,15 @@ func (p *Page) Search(query string) (*SearchResult, error) {
 		sr.First = el
 
 		return true, nil
+	}
+	err = utils.Retry(p.ctx, p.sleeper(), func() (bool, error) {
+		stop, err := search()
+		if reset {
+			// Search again without sleeping. If that search also finds stale
+			// node IDs, the next one waits for the sleeper.
+			stop, err = search()
+		}
+		return stop, err
 	})
 	if err != nil {
 		return nil, errors.Join(err, sr.Release())

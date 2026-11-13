@@ -96,8 +96,8 @@ headful/display-server operation, Docker images, or other OS/CPU combinations.
 Implementation details, cleanup usage, and limitations are documented in the
 [launcher guide](../lib/launcher/README.md). The platform assessments are based
 on [browser discovery](../lib/launcher/browser.go), the
-[Linux guardian](../lib/launcher/guardian_linux.go),
-[other Unix cleanup](../lib/launcher/guardian_other_unix.go),
+[Linux guardian](../lib/launcher/internal/guardian/guardian_linux.go),
+[other Unix cleanup](../lib/launcher/internal/guardian/guardian_other_unix.go),
 [Windows launch path](../lib/launcher/guardian_windows.go), and
 [Unix process setup](../lib/launcher/os_unix.go).
 

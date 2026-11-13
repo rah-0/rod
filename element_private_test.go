@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/rah-0/rod/lib/cdp"
 	"github.com/rah-0/rod/lib/proto"
@@ -477,6 +479,206 @@ func TestInteractableReleasesTemporaryObjects(t *testing.T) {
 	}
 }
 
+func TestWaitInteractableRetriesMovingElement(t *testing.T) {
+	// The scripted viewport is 844 px high. Each try reads the shape twice for
+	// the stability wait and once for the hit test. A try without a point in
+	// the viewport reads it once more, and so does a try that finds a point
+	// after such a try. A sleep takes 100 ms, and so does a slow answer to a
+	// shape request; nothing else takes time.
+	const (
+		below    = `{"quads":[[61,843.5,354,843.5,354,875.5,61,875.5]]}`
+		moved    = `{"quads":[[61,841.5,354,841.5,354,873.5,61,873.5]]}`
+		nearer   = `{"quads":[[61,830,354,830,354,862,61,862]]}`
+		entering = `{"quads":[[61,800,354,800,354,832,61,832]]}`
+		inside   = `{"quads":[[61,400,354,400,354,432,61,432]]}`
+		none     = `{"quads":[]}`
+		// These fail the request; canceled also cancels the context.
+		failed   = ""
+		canceled = "canceled"
+		// A shape with this prefix is a slow answer.
+		slow = "slow"
+	)
+	shapeFailed := errors.New("shape failed")
+	sleepFailed := errors.New("sleep failed")
+	for _, test := range []struct {
+		name string
+		// shapes are the DOM.getContentQuads results in call order.
+		shapes []string
+		// covered is the try whose hit test finds another element.
+		covered int
+		// ends is the sleep that ends the wait, with the error end. For
+		// context.Canceled, it cancels the context of the element first.
+		ends          int
+		end           error
+		tries, sleeps int
+		// outOfView expects an InvisibleShapeError and with another error.
+		// A point is expected without them; with outOfView only, the error
+		// is the InvisibleShapeError itself.
+		outOfView bool
+		with      error
+	}{
+		{"in view", []string{inside, inside, inside}, 0, 0, nil, 1, 0, false, nil},
+		// The point is returned by the first try that has read the same shape
+		// in view for 300 ms.
+		{"moving into view", slices.Concat(
+			[]string{below, below, moved, moved}, slices.Repeat([]string{nearer}, 4),
+			slices.Repeat([]string{inside}, 16),
+		), 0, 0, nil, 6, 5, false, nil},
+		// The target rests in view between two steps.
+		{"stepping into view", slices.Concat(
+			slices.Repeat([]string{below}, 4), slices.Repeat([]string{entering}, 4),
+			slices.Repeat([]string{inside}, 16),
+		), 0, 0, nil, 6, 5, false, nil},
+		// A try that finds the target covered starts the 300 ms again.
+		{"covered on the way", slices.Concat(
+			slices.Repeat([]string{below}, 4), slices.Repeat([]string{inside}, 4),
+			slices.Repeat([]string{inside}, 3), slices.Repeat([]string{inside}, 16),
+		), 3, 0, nil, 7, 6, false, nil},
+		// So does a try that finds the target out of view again.
+		{"out of view again", slices.Concat(
+			slices.Repeat([]string{below}, 4), slices.Repeat([]string{inside}, 4),
+			slices.Repeat([]string{moved}, 4), slices.Repeat([]string{inside}, 16),
+		), 0, 0, nil, 7, 6, false, nil},
+		// The time that an answer takes to arrive is not time at rest.
+		{"slow answer", slices.Concat(
+			slices.Repeat([]string{below}, 4), slices.Repeat([]string{inside}, 11),
+			[]string{slow + inside}, slices.Repeat([]string{inside}, 4),
+		), 0, 0, nil, 5, 4, false, nil},
+		{"out of view", slices.Repeat([]string{below}, 8), 0, 0, nil, 2, 1, true, nil},
+		// The target moves between the first two tries and then stays in place.
+		{"moved out of view", slices.Concat(
+			slices.Repeat([]string{below}, 4), slices.Repeat([]string{moved}, 8),
+		), 0, 0, nil, 3, 2, true, nil},
+		{"no shape", slices.Repeat([]string{none}, 8), 0, 0, nil, 2, 1, true, nil},
+		// An error that is not from the context is returned as it is.
+		{"shape error", []string{below, below, below, failed}, 0, 0, nil, 1, 0, false, shapeFailed},
+		{"shape error in the next try", []string{below, below, below, below, failed}, 0, 0, nil, 1, 1, false, shapeFailed},
+		{"shape error in view", []string{below, below, below, below, inside, inside, inside, failed}, 0, 0, nil, 2, 1, false, shapeFailed},
+		{"sleeper error", slices.Repeat([]string{below}, 4), 0, 1, sleepFailed, 1, 1, true, nil},
+		// A sleeper that gives up can return the error of a context of its own.
+		{"sleeper error of its own context", slices.Repeat([]string{below}, 4), 0, 1, context.DeadlineExceeded, 1, 1, true, nil},
+		{"sleeper error in view", slices.Concat(
+			slices.Repeat([]string{below}, 4), slices.Repeat([]string{inside}, 4),
+		), 0, 2, sleepFailed, 2, 2, true, nil},
+		// A covered element ends with the error of the sleeper.
+		{"sleeper error when covered", slices.Concat(
+			slices.Repeat([]string{below}, 4), slices.Repeat([]string{inside}, 3),
+		), 2, 2, sleepFailed, 2, 2, false, sleepFailed},
+		{"canceled", slices.Repeat([]string{below}, 4), 0, 1, context.Canceled, 1, 1, true, context.Canceled},
+		{"canceled in the first try", []string{below, below, below, canceled}, 0, 0, nil, 1, 0, true, context.Canceled},
+		{"canceled in the next try", []string{below, below, below, below, canceled}, 0, 0, nil, 1, 1, true, context.Canceled},
+		{"canceled in view", slices.Concat(
+			slices.Repeat([]string{below}, 4), slices.Repeat([]string{inside}, 4),
+		), 0, 2, context.Canceled, 2, 2, true, context.Canceled},
+		// The context ends the wait after an earlier try found no point in the
+		// viewport.
+		{"canceled when covered", slices.Concat(
+			slices.Repeat([]string{below}, 4), slices.Repeat([]string{inside}, 3),
+		), 2, 2, context.Canceled, 2, 2, true, context.Canceled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				shapes, tries, sleeps, resolved := 0, 0, 0, 0
+				var released []proto.RuntimeRemoteObjectID
+				client := &lifecycleRegressionClient{call: func(_ context.Context, method string, params any) ([]byte, error) {
+					switch method {
+					case "Runtime.callFunctionOn":
+						req := params.(proto.RuntimeCallFunctionOn)
+						switch {
+						case strings.Contains(req.FunctionDeclaration, "pointerEvents"):
+							return []byte(`{"result":{"type":"boolean","value":false}}`), nil
+						case strings.Contains(req.FunctionDeclaration, "window.scrollX"):
+							return []byte(`{"result":{"type":"object","value":{"x":0,"y":0}}}`), nil
+						case strings.Contains(req.FunctionDeclaration, "/* containsElement */") && tries == test.covered:
+							return []byte(`{"result":{"type":"boolean","value":false}}`), nil
+						}
+						// Visibility, animation frame, and containment.
+						return []byte(`{"result":{"type":"boolean","value":true}}`), nil
+					case "DOM.getContentQuads":
+						if shapes == len(test.shapes) {
+							t.Fatal("unexpected shape request")
+						}
+						shape := test.shapes[shapes]
+						shapes++
+						if answer, ok := strings.CutPrefix(shape, slow); ok {
+							time.Sleep(100 * time.Millisecond)
+							shape = answer
+						}
+						switch shape {
+						case failed:
+							return nil, shapeFailed
+						case canceled:
+							cancel()
+							return nil, ctx.Err()
+						}
+						return []byte(shape), nil
+					case "DOM.scrollIntoViewIfNeeded":
+						tries++
+						return []byte(`{}`), nil
+					case "DOM.getNodeForLocation":
+						if params.(proto.DOMGetNodeForLocation).Y >= 844 {
+							return nil, cdp.ErrNodeNotFoundAtPos
+						}
+						return []byte(`{"backendNodeId":1,"frameId":""}`), nil
+					case "DOM.resolveNode":
+						resolved++
+						return []byte(`{"object":{"objectId":"temporary-element","type":""}}`), nil
+					case "Runtime.releaseObject":
+						released = append(released, params.(proto.RuntimeReleaseObject).ObjectID)
+						return []byte(`{}`), nil
+					default:
+						t.Fatalf("unexpected request: %s", method)
+						return nil, nil
+					}
+				}}
+				browser := New().Context(ctx).Client(client)
+				page := browser.PageFromSession("session")
+				*page.jsCtxID = "window"
+				page.helpers.contexts = map[proto.RuntimeRemoteObjectID]map[string]proto.RuntimeRemoteObjectID{
+					"window": {"functions": "functions", "containsElement": "containsElement", "tag": "tag", "visible": "visible"},
+				}
+				element := &Element{
+					e: browser.e, ctx: ctx, page: page, Object: &proto.RuntimeRemoteObject{ObjectID: "target"},
+					sleeper: func() utils.Sleeper {
+						return func(ctx context.Context) error {
+							sleeps++
+							if sleeps != test.ends {
+								time.Sleep(100 * time.Millisecond)
+								return nil
+							}
+							if test.end == context.Canceled {
+								cancel()
+								return ctx.Err()
+							}
+							return test.end
+						}
+					},
+				}
+				point, err := element.WaitInteractable()
+				_, alone := err.(*InvisibleShapeError)
+				switch {
+				case !test.outOfView && test.with == nil:
+					if err != nil || point == nil || *point != proto.NewPoint(207.5, 416) {
+						t.Fatalf("WaitInteractable = %v, %v", point, err)
+					}
+				case errors.Is(err, &InvisibleShapeError{}) != test.outOfView, alone != (test.with == nil),
+					test.with != nil && !errors.Is(err, test.with):
+					t.Fatalf("WaitInteractable error = %T %v; want InvisibleShapeError: %v, with %v", err, err, test.outOfView, test.with)
+				}
+				if !slices.Equal(released, slices.Repeat([]proto.RuntimeRemoteObjectID{"temporary-element"}, resolved)) {
+					t.Fatalf("released %v of %d resolved nodes", released, resolved)
+				}
+				if shapes != len(test.shapes) || tries != test.tries || sleeps != test.sleeps {
+					t.Fatalf("shape requests = %d, tries = %d, sleeps = %d; want %d, %d, %d",
+						shapes, tries, sleeps, len(test.shapes), test.tries, test.sleeps)
+				}
+			})
+		})
+	}
+}
+
 func TestTemporaryObjectAlreadyReleased(t *testing.T) {
 	for _, cause := range []error{cdp.ErrObjNotFound, cdp.ErrCtxNotFound, cdp.ErrCtxDestroyed, errors.New("transport failed")} {
 		t.Run(cause.Error(), func(t *testing.T) {
@@ -495,28 +697,119 @@ func TestTemporaryObjectAlreadyReleased(t *testing.T) {
 	}
 }
 
+// Page.HTML reads the html element through the DOM domain and releases the
+// handle of every query, also when the read fails or the context ends. It
+// sleeps with the page's sleeper while the document has no html element, and
+// queries again at once when the document is replaced during the query or
+// before the read.
 func TestPageHTMLReleasesTemporaryObjects(t *testing.T) {
-	for _, fail := range []bool{false, true} {
-		t.Run(map[bool]string{false: "success", true: "canceled read"}[fail], func(t *testing.T) {
+	const missing = `{"result":{"type":"object","subtype":"null","value":null}}`
+	// destroyed and navigated stand for queries that end with the errors of a
+	// document that is replaced during them.
+	const destroyed, navigated = "destroyed", "navigated"
+	element := func(id string) string {
+		return `{"result":{"type":"object","subtype":"node","objectId":"` + id + `"}}`
+	}
+	ids := func(ids ...proto.RuntimeRemoteObjectID) []proto.RuntimeRemoteObjectID { return ids }
+	failed := errors.New("request failed")
+	releaseFailed := errors.New("release failed")
+	queryErrors := map[string]error{
+		"":        failed,
+		destroyed: cdp.ErrCtxDestroyed,
+		navigated: &cdp.Error{Code: -32000, Message: "Inspected target navigated or closed"},
+	}
+	for _, test := range []struct {
+		name string
+		// queries are the results of the queries for the html element in call
+		// order; an empty entry, destroyed, and navigated fail the call.
+		queries []string
+		// reads are the errors of the DOM.getOuterHTML calls in call order; nil
+		// returns the markup.
+		reads []error
+		// cancel ends the page's context during the last read, and closed ends
+		// its session. In a case without reads, they do so during the last
+		// query.
+		cancel, closed bool
+		release        error
+		sleeper        func() utils.Sleeper
+		want           string
+		wantErr        error
+		released       []proto.RuntimeRemoteObjectID
+		slept          int
+	}{
+		{name: "success", queries: []string{element("a")}, reads: []error{nil}, want: "<html></html>", released: ids("a")},
+		{name: "element missing", queries: []string{missing, missing, element("a")}, reads: []error{nil},
+			want: "<html></html>", released: ids("a"), slept: 2},
+		{name: "sleeper error", queries: []string{missing}, sleeper: NotFoundSleeper, wantErr: &ElementNotFoundError{}},
+		{name: "failed query", queries: []string{""}, wantErr: failed},
+		{name: "not an element", queries: []string{`{"result":{"type":"object","objectId":"plain"}}`},
+			wantErr: &ExpectElementError{}, released: ids("plain")},
+		{name: "not an object", queries: []string{`{"result":{"type":"undefined"}}`}, wantErr: &ExpectElementError{}},
+		{name: "failed read", queries: []string{element("a")}, reads: []error{failed}, wantErr: failed, released: ids("a")},
+		{name: "canceled read", queries: []string{element("a")}, reads: []error{failed}, cancel: true,
+			wantErr: failed, released: ids("a")},
+		{name: "failed release", queries: []string{element("a")}, reads: []error{nil}, release: releaseFailed,
+			want: "<html></html>", wantErr: releaseFailed, released: ids("a")},
+		{name: "replaced during the query", queries: []string{destroyed, navigated, element("a")}, reads: []error{nil},
+			want: "<html></html>", released: ids("a")},
+		{name: "replaced during the query until the context ends", queries: []string{destroyed, navigated}, cancel: true,
+			wantErr: context.Canceled},
+		{name: "replaced during the query until the page closes", queries: []string{navigated, destroyed}, closed: true,
+			wantErr: context.Canceled},
+		{name: "replaced document", queries: []string{element("a"), element("b"), element("c"), element("d")},
+			reads: []error{cdp.ErrCtxNotFound, cdp.ErrCtxDestroyed, cdp.ErrObjNotFound, nil},
+			want:  "<html></html>", released: ids("a", "b", "c", "d")},
+		{name: "replaced document and failed release", queries: []string{element("a")}, reads: []error{cdp.ErrCtxNotFound},
+			release: releaseFailed, wantErr: releaseFailed, released: ids("a")},
+		{name: "replaced until the context ends", queries: []string{element("a"), element("b"), element("c")},
+			reads: []error{cdp.ErrCtxNotFound, cdp.ErrCtxNotFound, cdp.ErrCtxNotFound}, cancel: true,
+			wantErr: context.Canceled, released: ids("a", "b", "c")},
+		// The handles of a closed page end with its session.
+		{name: "replaced until the page closes", queries: []string{element("a"), element("b")},
+			reads: []error{cdp.ErrCtxNotFound, cdp.ErrCtxDestroyed}, closed: true,
+			wantErr: context.Canceled, released: ids("a")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			failed := errors.New("read failed")
+			sessionCtx, closeSession := context.WithCancel(t.Context())
+			defer closeSession()
+			queries, reads, slept := 0, 0, 0
 			var released []proto.RuntimeRemoteObjectID
+			end := func() {
+				if test.cancel {
+					cancel()
+				}
+				if test.closed {
+					closeSession()
+				}
+			}
 			client := &lifecycleRegressionClient{call: func(ctx context.Context, method string, params any) ([]byte, error) {
 				switch method {
 				case "Runtime.callFunctionOn":
-					req := params.(proto.RuntimeCallFunctionOn)
-					if req.FunctionDeclaration == `() => window` {
-						t.Fatal("the query created a temporary window")
+					if queries == len(test.queries) {
+						t.Fatal("unexpected query")
 					}
-					if req.ReturnByValue != nil && *req.ReturnByValue {
-						return []byte(`{"result":{"type":"boolean","value":true}}`), nil
+					query := test.queries[queries]
+					queries++
+					if queries == len(test.queries) && len(test.reads) == 0 {
+						end()
 					}
-					return []byte(`{"result":{"type":"object","subtype":"node","objectId":"temporary-element"}}`), nil
+					if err, fails := queryErrors[query]; fails {
+						return nil, err
+					}
+					return []byte(query), nil
 				case "DOM.getOuterHTML":
-					if fail {
-						cancel()
-						return nil, failed
+					if reads == len(test.reads) {
+						t.Fatal("unexpected read")
+					}
+					err := test.reads[reads]
+					reads++
+					if reads == len(test.reads) {
+						end()
+					}
+					if err != nil {
+						return nil, err
 					}
 					return []byte(`{"outerHTML":"<html></html>"}`), nil
 				case "Runtime.releaseObject":
@@ -524,27 +817,32 @@ func TestPageHTMLReleasesTemporaryObjects(t *testing.T) {
 						t.Fatalf("cleanup reused expired operation context: %v", err)
 					}
 					released = append(released, params.(proto.RuntimeReleaseObject).ObjectID)
+					if test.release != nil {
+						return nil, test.release
+					}
 					return []byte(`{}`), nil
 				default:
 					t.Fatalf("unexpected request: %s", method)
-					return nil, nil
 				}
+				return nil, nil
 			}}
-			browser := New().Context(ctx).Client(client)
-			page := browser.PageFromSession("session")
-			page.sessionCtx = t.Context()
+			page := New().Context(ctx).Client(client).PageFromSession("session")
+			page.sessionCtx = sessionCtx
 			*page.jsCtxID = "window"
-			page.helpers.contexts = map[proto.RuntimeRemoteObjectID]map[string]proto.RuntimeRemoteObjectID{
-				"window": {"functions": "functions", "element": "element"},
+			sleeper := test.sleeper
+			if sleeper == nil {
+				sleeper = func() utils.Sleeper {
+					return func(context.Context) error { slept++; return nil }
+				}
 			}
-			result, err := page.HTML()
-			if fail && !errors.Is(err, failed) {
-				t.Fatalf("HTML lost read failure: %v", err)
-			}
-			if !fail && (err != nil || result != "<html></html>") {
+			result, err := page.Sleeper(sleeper).HTML()
+			if result != test.want || !errors.Is(err, test.wantErr) {
 				t.Fatalf("HTML = %q, %v", result, err)
 			}
-			if !slices.Equal(released, []proto.RuntimeRemoteObjectID{"temporary-element"}) {
+			if queries != len(test.queries) || reads != len(test.reads) || slept != test.slept {
+				t.Fatalf("queries = %d, reads = %d, sleeps = %d", queries, reads, slept)
+			}
+			if !slices.Equal(released, test.released) {
 				t.Fatalf("released temporary objects = %v", released)
 			}
 		})

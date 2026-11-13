@@ -7,6 +7,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/rah-0/rod/lib/launcher/internal/guardian"
 )
 
 func TestGuardianManagedProfileCleanup(t *testing.T) {
@@ -19,7 +21,7 @@ func TestGuardianManagedProfileCleanup(t *testing.T) {
 		}
 		return
 	}
-	if err := guardianSubreaper(); err != nil {
+	if err := guardian.Subreaper(); err != nil {
 		t.Fatal(err)
 	}
 	dir := os.Getenv("ROD_GUARDIAN_TEST_DIR")
@@ -45,7 +47,7 @@ func TestGuardianManagedProfileCleanup(t *testing.T) {
 		if !waited {
 			_ = cmd.Wait()
 		}
-		guardianReapChildren(nil)
+		guardian.ReapChildren(nil)
 	})
 	pids := guardianTestPIDs(t, dir)
 	var name string
