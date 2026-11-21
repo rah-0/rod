@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"io"
+	"math"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
@@ -25,6 +27,10 @@ type WebSocket struct {
 	Writing   chan struct{}
 	CloseOnce sync.Once
 	CloseErr  error
+	// MaxMessageSize bounds the complete message, including all fragments.
+	// Nonpositive values select cdp.DefaultMaxMessageSize. Production transports
+	// must retain this guard even when adapting the example.
+	MaxMessageSize int64
 }
 
 // NewWebSocket uses ctx for dialing and the lifetime of the custom transport.
@@ -113,7 +119,26 @@ func (w *WebSocket) Read() ([]byte, error) {
 			continue
 		}
 		if header.OpCode == ws.OpText {
-			return io.ReadAll(reader)
+			limit := w.MaxMessageSize
+			if limit <= 0 {
+				limit = cdp.DefaultMaxMessageSize
+			}
+			limit = min(limit, math.MaxInt64-1)
+			data, err := io.ReadAll(io.LimitReader(reader, limit+1))
+			if err != nil {
+				return nil, err
+			}
+			if int64(len(data)) <= limit {
+				return data, nil
+			}
+			// A peer that stops reading must not block the size-limit failure.
+			ctx, cancel := context.WithTimeout(w.Context, time.Second)
+			defer cancel()
+			_ = w.write(ctx, func() error {
+				return wsutil.WriteClientMessage(w.Conn, ws.OpClose, ws.NewCloseFrameBody(ws.StatusMessageTooBig, "message too large"))
+			})
+			_ = w.Close()
+			return nil, cdp.ErrWebSocketMessageTooLarge
 		}
 		if err := reader.Discard(); err != nil {
 			return nil, err

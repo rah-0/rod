@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build linux
 
 package launcher
 
@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rah-0/rod/internal/secureexec"
 	"github.com/rah-0/rod/lib/launcher/flags"
 	"github.com/rah-0/rod/lib/launcher/internal/guardian"
 )
@@ -29,6 +30,9 @@ func withoutGuardianEnv(env []string) []string {
 // startProcess replaces cmd with the guardian command. Wait consequently waits
 // for the browser, its remaining children, and temporary-profile cleanup.
 func (l *Launcher) startProcess(cmd *exec.Cmd) (int, func(), error) {
+	if secureexec.Active() {
+		return 0, nil, ErrSecureExecution
+	}
 	if cmd.Err != nil {
 		return 0, nil, cmd.Err
 	}
@@ -36,7 +40,7 @@ func (l *Launcher) startProcess(cmd *exec.Cmd) (int, func(), error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	livenessRead, livenessWrite, err := os.Pipe()
+	livenessRead, livenessWrite, err := guardianChannel()
 	if err != nil {
 		return 0, nil, err
 	}
@@ -71,7 +75,11 @@ func (l *Launcher) startProcess(cmd *exec.Cmd) (int, func(), error) {
 		// Keep this short: Unix socket paths have a small fixed maximum length.
 		configuration.Scratch = append(configuration.Scratch, "rod-"+rand.Text()[:8])
 	}
-	helper := exec.Command(executable, guardian.Argument, l.cleanupUserDataDir, profileName)
+	ownedProfile := ""
+	if l.cleanupUserDataDir != "" {
+		ownedProfile = "owned"
+	}
+	helper := exec.Command(executable, guardian.Argument, ownedProfile, profileName)
 	helper.Env = guardianRaceEnv(append(withoutGuardianEnv(os.Environ()), guardian.Env+"=1"))
 	helper.Stdin = livenessRead
 	helper.Stdout = cmd.Stdout
@@ -126,6 +134,12 @@ func (l *Launcher) startProcess(cmd *exec.Cmd) (int, func(), error) {
 		return fail(fmt.Errorf("launcher guardian startup: %w", status.Err()))
 	}
 	go func() {
+		if err := guardian.AnswerChallenge(statusRead, livenessWrite); err != nil {
+			var status guardian.Status
+			status.SetError(err)
+			results <- status
+			return
+		}
 		if err := guardian.WriteCommand(livenessWrite, configuration); err != nil {
 			var status guardian.Status
 			status.SetError(err)

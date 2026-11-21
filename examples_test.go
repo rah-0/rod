@@ -670,11 +670,11 @@ func Example_hijack_requests() {
 		// for more information.
 		ctx.Request.Req().Header.Set("My-Header", "test")
 
-		// LoadResponse runs the default request to the destination of the request.
+		// This example fetches from its own trusted loopback test server.
 		// Not calling this will require you to mock the entire response.
 		// This can be done with the SetXxx (Status, Header, Body) functions on the
 		// ctx.Response struct.
-		ctx.MustLoadResponse()
+		ctx.MustLoadResponseUnsafe()
 
 		// Here we append some code to every js file.
 		// The code will update the document title to "hi"

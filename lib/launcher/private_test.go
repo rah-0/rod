@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"crypto/tls"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -52,19 +53,17 @@ func TestLaunchOptions(t *testing.T) {
 	defaults.Load()
 	defaults.Show = true
 	defaults.Devtools = true
-	inContainer = true
 
 	// restore
 	defer func() {
 		defaults.ResetWith("")
-		inContainer = utils.InContainer
 	}()
 
 	l := New()
 
 	g.False(l.Has(flags.Headless))
 
-	g.True(l.Has(flags.NoSandbox))
+	g.False(l.Has(flags.NoSandbox))
 
 	g.True(l.Has("auto-open-devtools-for-tabs"))
 }
@@ -113,16 +112,16 @@ func TestManaged(t *testing.T) {
 
 	ctx := g.Timeout(5 * time.Second)
 
-	s := testutil.New(t).Serve()
 	rl := NewManager(managerTestToken)
 	rl.userDataRoot = t.TempDir()
 	profilePath := make(chan string, 1)
 	rl.BeforeLaunch = func(l *Launcher, _ http.ResponseWriter, _ *http.Request) {
 		profilePath <- l.Get(flags.UserDataDir)
 	}
-	s.Mux.Handle("/", rl)
+	s := httptest.NewTLSServer(rl)
+	defer s.Close()
 
-	l := MustNewManaged(t.Context(), s.URL(), managerTestToken)
+	l := MustNewManaged(t.Context(), s.URL, managerTestToken, managerTestOptions(s)).NoSandbox(true)
 	if l.Has("disable-http2") {
 		t.Fatal("managed launcher retained the obsolete Docker HTTP/2 workaround")
 	}
@@ -150,8 +149,9 @@ func TestManaged(t *testing.T) {
 	}
 	g.Err(os.Stat(dir))
 
-	u, h := MustNewManaged(t.Context(), s.URL(), managerTestToken).Bin("go").ClientHeader()
-	_, err := cdp.StartWithURL(ctx, u, h)
+	u, h := MustNewManaged(t.Context(), s.URL, managerTestToken, managerTestOptions(s)).Bin("go").ClientHeader()
+	ws := &cdp.WebSocket{Dialer: &tls.Dialer{Config: managerTestOptions(s).TLSConfig}}
+	err := ws.Connect(ctx, u, h)
 	g.Eq(err.(*cdp.BadHandshakeError).Body, "[rod-manager] remote option is not allowed: rod-bin\n")
 }
 
@@ -391,10 +391,10 @@ func TestManagerAuthentication(t *testing.T) {
 		g.Eq("", r.Header.Get("Authorization"))
 		return New()
 	}
-	s := httptest.NewServer(m)
+	s := httptest.NewTLSServer(m)
 	defer s.Close()
 
-	res, err := http.Get(s.URL)
+	res, err := s.Client().Get(s.URL)
 	g.E(err)
 	g.Eq(http.StatusUnauthorized, res.StatusCode)
 	g.Eq("Bearer", res.Header.Get("WWW-Authenticate"))
@@ -413,11 +413,11 @@ func TestManagerAuthentication(t *testing.T) {
 	g.Eq(http.StatusUnauthorized, upgradeResult.Code)
 	g.False(launchHookCalled)
 
-	_, err = NewManaged(t.Context(), s.URL, "wrong-token")
+	_, err = NewManaged(t.Context(), s.URL, "wrong-token", managerTestOptions(s))
 	g.True(errors.Is(err, ErrManagerUnauthorized))
 	g.False(defaultsCalled)
 
-	l, err := NewManaged(t.Context(), s.URL, managerTestToken)
+	l, err := NewManaged(t.Context(), s.URL, managerTestToken, managerTestOptions(s))
 	g.E(err)
 	g.True(defaultsCalled)
 
@@ -425,9 +425,9 @@ func TestManagerAuthentication(t *testing.T) {
 	g.Eq("Bearer "+managerTestToken, header.Get("Authorization"))
 	g.False(strings.Contains(string(l.JSON()), managerTestToken))
 
-	locked := httptest.NewServer(NewManager(""))
+	locked := httptest.NewTLSServer(NewManager(""))
 	defer locked.Close()
-	_, err = NewManaged(t.Context(), locked.URL, managerTestToken)
+	_, err = NewManaged(t.Context(), locked.URL, managerTestToken, managerTestOptions(locked))
 	g.True(errors.Is(err, ErrManagerUnauthorized))
 	_, err = NewManaged(t.Context(), "http://192.0.2.1:7317", managerTestToken)
 	g.True(errors.Is(err, ErrManagerInsecureTransport))
@@ -439,11 +439,11 @@ func TestManagerAuthentication(t *testing.T) {
 		redirectedAuthorization = r.Header.Get("Authorization")
 	}))
 	defer redirectTarget.Close()
-	redirectSource := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	redirectSource := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, redirectTarget.URL, http.StatusFound)
 	}))
 	defer redirectSource.Close()
-	_, err = NewManaged(t.Context(), redirectSource.URL, managerTestToken)
+	_, err = NewManaged(t.Context(), redirectSource.URL, managerTestToken, managerTestOptions(redirectSource))
 	g.Has(err.Error(), "HTTP status 302")
 	g.Eq("", redirectedAuthorization)
 }
@@ -728,11 +728,11 @@ func TestLaunchClient(t *testing.T) {
 
 	ctx := g.Timeout(5 * time.Second)
 
-	s := testutil.New(t).Serve()
 	rl := NewManager(managerTestToken)
-	s.Mux.Handle("/", rl)
+	s := httptest.NewTLSServer(rl)
+	defer s.Close()
 
-	l := MustNewManaged(t.Context(), s.URL(), managerTestToken)
+	l := MustNewManaged(t.Context(), s.URL, managerTestToken, managerTestOptions(s)).NoSandbox(true)
 	c, err := l.Client()
 	if err != nil {
 		g.Err(err)

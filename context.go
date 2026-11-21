@@ -135,13 +135,14 @@ func (el *Element) Sleeper(sleeper func() utils.Sleeper) *Element {
 // contextWithSession links cancellation only for the operation or subscription,
 // so creating lightweight Page views never retains lifetime callbacks.
 func contextWithSession(ctx, session context.Context) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancelCause := context.WithCancelCause(ctx)
+	cancel := func() { cancelCause(context.Canceled) }
 	if session == nil {
 		return ctx, cancel
 	}
-	stop := context.AfterFunc(session, cancel)
+	stop := context.AfterFunc(session, func() { cancelCause(context.Cause(session)) })
 	if session.Err() != nil {
-		cancel()
+		cancelCause(context.Cause(session))
 	}
 	stopCaller := context.AfterFunc(ctx, func() { stop() })
 	return ctx, func() { stopCaller(); stop(); cancel() }

@@ -1,5 +1,6 @@
 // Package guardian implements the cleanup supervisor that the launcher starts
-// for every local browser on Unix by re-executing the current executable.
+// for every local browser on Linux by re-executing the current executable.
+// Other systems do not enter private mode.
 //
 // This package's initializer answers the private invocation and never returns,
 // so the supervisor runs only the package initializers that Go schedules

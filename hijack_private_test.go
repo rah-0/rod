@@ -51,7 +51,7 @@ func TestHijackRepeatedHeaders(t *testing.T) {
 		Request: &proto.NetworkRequest{URL: server.URL, Method: http.MethodGet},
 	})
 	for range 2 {
-		if err := h.LoadResponse(server.Client(), true); err != nil {
+		if err := h.LoadResponseUnsafe(server.Client(), true); err != nil {
 			t.Fatal(err)
 		}
 		if got := h.Response.Headers().Values("Set-Cookie"); !slices.Equal(got, []string{"session=one", "csrf=two"}) {
@@ -102,7 +102,7 @@ func TestHijackLoadResponseHeaderLimit(t *testing.T) {
 			t.Fatalf("initial limit = %d", h.MaxResponseHeaderBytes)
 		}
 		h.MaxResponseHeaderBytes = limit
-		return h, h.LoadResponse(server.Client(), true)
+		return h, h.LoadResponseUnsafe(server.Client(), true)
 	}
 
 	// Zero and negative limits select the default.
@@ -140,7 +140,7 @@ func TestHijackLoadResponseHeaderLimit(t *testing.T) {
 	// MustLoadResponse uses the same limit.
 	h = newTestHijack(t, &proto.FetchRequestPaused{Request: &proto.NetworkRequest{URL: server.URL + "/many", Method: http.MethodGet}})
 	h.MaxResponseHeaderBytes = 1024
-	if err := Try(h.MustLoadResponse); !errors.Is(err, ErrResponseHeadersTooLarge) || h.Response.RawResponse != nil {
+	if err := Try(h.MustLoadResponseUnsafe); !errors.Is(err, ErrResponseHeadersTooLarge) || h.Response.RawResponse != nil {
 		t.Fatalf("MustLoadResponse: %v", err)
 	}
 }
@@ -207,7 +207,7 @@ func TestHijackReplayableBodies(t *testing.T) {
 					}
 				}
 				// The browser follows redirects, so LoadResponse returns the first hop.
-				if err := h.LoadResponse(server.Client(), true); err != nil {
+				if err := h.LoadResponseUnsafe(server.Client(), true); err != nil {
 					t.Fatal(err)
 				}
 				if h.Response.Payload().ResponseCode != status || h.Response.Headers().Get("Location") != "/finish" {
@@ -252,7 +252,7 @@ func TestHijackLoadResponseRedirect(t *testing.T) {
 	}}
 	for _, c := range []*http.Client{client, nil} {
 		h := newTestHijack(t, &proto.FetchRequestPaused{Request: &proto.NetworkRequest{URL: front.URL + "/redir", Method: http.MethodGet}})
-		if err := h.LoadResponse(c, true); err != nil {
+		if err := h.LoadResponseUnsafe(c, true); err != nil {
 			t.Fatal(err)
 		}
 		headers := h.Response.Headers()
@@ -312,7 +312,7 @@ func TestHijackLoadResponseFollowRedirects(t *testing.T) {
 	// Without a CheckRedirect, the client's default policy applies.
 	for _, c := range []*http.Client{{}, nil} {
 		h := paused(http.MethodGet, "/redir")
-		if err := h.LoadResponse(c, true); err != nil {
+		if err := h.LoadResponseUnsafe(c, true); err != nil {
 			t.Fatal(err)
 		}
 		// The final response's headers apply to the original URL, and those of
@@ -327,7 +327,7 @@ func TestHijackLoadResponseFollowRedirects(t *testing.T) {
 		t.Fatalf("internal hits = %d", internalHits.Load())
 	}
 	h := paused(http.MethodGet, "/loop")
-	if err := h.LoadResponse(nil, true); err == nil || !strings.Contains(err.Error(), "stopped after 10 redirects") || !unchanged(h) {
+	if err := h.LoadResponseUnsafe(nil, true); err == nil || !strings.Contains(err.Error(), "stopped after 10 redirects") || !unchanged(h) {
 		t.Fatalf("redirect loop: %v", err)
 	}
 
@@ -341,7 +341,7 @@ func TestHijackLoadResponseFollowRedirects(t *testing.T) {
 		return nil
 	}}
 	h = paused(http.MethodGet, "/redir")
-	if err := h.LoadResponse(sameHost, true); err != nil {
+	if err := h.LoadResponseUnsafe(sameHost, true); err != nil {
 		t.Fatal(err)
 	}
 	if h.Response.Payload().ResponseCode != http.StatusFound || h.Response.Headers().Get("Location") != internal.URL+"/secret" ||
@@ -350,14 +350,14 @@ func TestHijackLoadResponseFollowRedirects(t *testing.T) {
 	}
 	rejected := errors.New("redirect rejected")
 	h = paused(http.MethodGet, "/redir")
-	if err := h.LoadResponse(&http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return rejected }}, true); !errors.Is(err, rejected) || !unchanged(h) {
+	if err := h.LoadResponseUnsafe(&http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return rejected }}, true); !errors.Is(err, rejected) || !unchanged(h) {
 		t.Fatalf("CheckRedirect error: %v", err)
 	}
 
 	// A 307 replays the request body to the redirect target.
 	h = paused(http.MethodPost, "/post")
 	h.Request.SetBody("payload")
-	if err := h.LoadResponse(nil, true); err != nil || h.Response.Body() != "payload" {
+	if err := h.LoadResponseUnsafe(nil, true); err != nil || h.Response.Body() != "payload" {
 		t.Fatalf("replayed body = %q, %v", h.Response.Body(), err)
 	}
 	if first, second := <-received, <-received; first != "payload" || second != "payload" {
@@ -366,13 +366,13 @@ func TestHijackLoadResponseFollowRedirects(t *testing.T) {
 
 	// MustLoadResponse uses the same setting.
 	h = paused(http.MethodGet, "/redir")
-	h.MustLoadResponse()
+	h.MustLoadResponseUnsafe()
 	if h.Response.Body() != "internal secret" {
 		t.Fatalf("MustLoadResponse followed = %q", h.Response.Body())
 	}
 	h = paused(http.MethodGet, "/redir")
 	h.FollowRedirects = false
-	h.MustLoadResponse()
+	h.MustLoadResponseUnsafe()
 	if h.Response.Payload().ResponseCode != http.StatusFound || internalHits.Load() != 3 {
 		t.Fatalf("MustLoadResponse without following = %d", h.Response.Payload().ResponseCode)
 	}
@@ -413,7 +413,7 @@ func TestHijackLoadResponseBodyLimit(t *testing.T) {
 			t.Fatalf("initial limit = %d", h.MaxResponseBodyBytes)
 		}
 		h.MaxResponseBodyBytes = limit
-		return h, h.LoadResponse(s.Client(), loadBody)
+		return h, h.LoadResponseUnsafe(s.Client(), loadBody)
 	}
 	load := func(path string, limit int64, loadBody bool) (*Hijack, error) {
 		return loadFrom(server, http.MethodGet, path, limit, loadBody)

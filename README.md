@@ -21,7 +21,7 @@ A high-level Go driver for the Chrome DevTools Protocol, built for browser autom
 
 ## Requirements
 
-- Go 1.27.1 or later
+- Go 1.27.4 or later
 - Chrome, Chromium, or Edge installed locally
 
 See the [platform support matrix](doc/PLATFORM_SUPPORT.md) for exact tested OS,
@@ -132,8 +132,11 @@ bash scripts/check.sh browser
 
 This also compares the installed browser's protocol with the generated bindings,
 prints the browser version, and fails when regeneration is needed. Runtime tests
-still run when the freshness check fails. Keep the browser installation updated
-to expose protocol changes and compatibility regressions in newer releases.
+still run when the freshness check fails. Use the same browser for generation
+and testing; an older browser can pass runtime tests while failing this exact
+schema comparison. Keep the browser installation updated to expose protocol
+changes and compatibility regressions in newer releases. See
+[browser selection](lib/proto/generate/README.md#freshness-and-compatibility).
 Environments that require disabling sandboxing for protocol capture can use
 `ROD_PROTOCOL_NO_SANDBOX=1 bash scripts/check.sh browser`.
 
@@ -147,6 +150,10 @@ suite in `tests/` reuses one browser, retires it after a failed test, and bounds
 graceful shutdown before killing owned processes and removing profiles.
 Integration and e2e browser cases stay sequential even with a higher `-parallel`
 setting. The cleanup benchmark also runs one browser lifecycle at a time.
+
+`bash scripts/check.sh security` verifies the Go patch floor and runs production
+and test vulnerability scans for all four modules. Install `govulncheck` before
+running it and use a supported patched Go compiler.
 
 Executable documentation examples run separately with `bash scripts/check.sh live`.
 Tests store screenshots, PDFs, and failed-test CDP logs in `t.ArtifactDir()`.

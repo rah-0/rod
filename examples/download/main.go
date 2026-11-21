@@ -69,7 +69,7 @@ func run(ctx context.Context, output io.Writer) (err error) {
 	// wait rejects a GUID that is not a single file name, so joining it with the
 	// directory cannot reach another path. Use a private directory, such as one
 	// from os.MkdirTemp, so other local users cannot read or replace the file.
-	wait, err := browser.WaitDownload(directory)
+	wait, err := app.Page.WaitDownload(directory, rod.DownloadOptions{SuggestedFilename: "report.csv"})
 	if err != nil {
 		return err
 	}

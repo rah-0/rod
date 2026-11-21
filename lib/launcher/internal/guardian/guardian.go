@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"sync"
 	"syscall"
+
+	"github.com/rah-0/rod/internal/secureexec"
 )
 
 const (
@@ -70,15 +72,21 @@ func (s Status) Err() error {
 
 // A separate process must own cleanup: a goroutine cannot run after its owner
 // panics, calls os.Exit, or is killed by a test timeout or SIGKILL. The private
-// invocation also requires two inherited pipes, so an environment variable
-// alone never changes the normal executable's behavior.
+// invocation requires an inherited command socket and status pipe. Secure
+// execution never enters this mode; Linux also authenticates the parent.
 func init() {
-	if os.Getenv(Env) != "1" || len(os.Args) != 4 || os.Args[1] != Argument {
+	if runtime.GOOS != "linux" {
 		return
 	}
-	status := os.NewFile(3, "rod-launcher-status")
-	if !pipe(os.Stdin) || !pipe(status) {
+	if os.Getenv(Env) != "1" || len(os.Args) < 2 || os.Args[1] != Argument {
 		return
+	}
+	if len(os.Args) != 4 || (os.Args[2] != "" && os.Args[2] != "owned") || secureexec.Active() {
+		os.Exit(1)
+	}
+	status := os.NewFile(3, "rod-launcher-status")
+	if !parentChannel(os.Stdin) || !pipe(status) {
+		os.Exit(1)
 	}
 	syscall.CloseOnExec(int(status.Fd()))
 	os.Exit(run(status, os.Args[2], os.Args[3]))
@@ -118,9 +126,6 @@ func discardExitSignals() {
 func run(status *os.File, profile, managedProfile string) int {
 	discardExitSignals()
 	defer status.Close()
-	if profile != "" {
-		defer os.RemoveAll(profile)
-	}
 	report := func(pid int, err error) bool {
 		result := Status{PID: pid}
 		if err != nil {
@@ -128,7 +133,14 @@ func run(status *os.File, profile, managedProfile string) int {
 		}
 		return WriteStatus(status, result) == nil
 	}
-	cleanupManaged, err := managedCleanup(managedProfile)
+	if err := WriteStatus(status, Status{Ready: true}); err != nil {
+		return 1
+	}
+	if err := authenticateParent(status); err != nil {
+		report(0, err)
+		return 1
+	}
+	cleanupManaged, profileRoot, err := managedCleanup(managedProfile)
 	if err != nil {
 		report(0, err)
 		return 1
@@ -136,9 +148,6 @@ func run(status *os.File, profile, managedProfile string) int {
 	defer cleanupManaged()
 	if err := Subreaper(); err != nil {
 		report(0, err)
-		return 1
-	}
-	if err := WriteStatus(status, Status{Ready: true}); err != nil {
 		return 1
 	}
 	configuration, err := ReadCommand(os.Stdin)
@@ -153,7 +162,7 @@ func run(status *os.File, profile, managedProfile string) int {
 	}
 	defer cleanupTemporary()
 	if profile != "" && configuration.Preferences != "" {
-		if err := preferences(profile, configuration); err != nil {
+		if err := preferences(profileRoot, managedProfile, configuration); err != nil {
 			report(0, err)
 			return 1
 		}
@@ -257,6 +266,10 @@ func TemporaryDir(configuration *Command) (func(), error) {
 	}
 	err = errors.New("launcher guardian: no name for the temporary directory")
 	for _, name := range configuration.Scratch {
+		if name == "" || name == "." || name == ".." || path.Base(name) != name {
+			_ = parent.Close()
+			return nil, errors.New("invalid temporary directory name")
+		}
 		// A name that exists is skipped: the directory must be created here.
 		err = parent.Mkdir(name, 0o700)
 		if err == nil {
@@ -276,11 +289,14 @@ func TemporaryDir(configuration *Command) (func(), error) {
 	return nil, err
 }
 
-func preferences(profile string, configuration Command) error {
-	if err := os.MkdirAll(profile, 0o700); err != nil {
+func preferences(parent *os.Root, profile string, configuration Command) error {
+	if parent == nil {
+		return errors.New("missing profile parent descriptor")
+	}
+	if err := parent.MkdirAll(profile, 0o700); err != nil {
 		return err
 	}
-	root, err := os.OpenRoot(profile)
+	root, err := parent.OpenRoot(profile)
 	if err != nil {
 		return err
 	}
@@ -295,13 +311,27 @@ func preferences(profile string, configuration Command) error {
 	return root.WriteFile(path.Join(name, "Preferences"), []byte(configuration.Preferences), 0o600)
 }
 
-func managedCleanup(name string) (func(), error) {
+func managedCleanup(name string) (func(), *os.Root, error) {
 	if name == "" {
-		return func() {}, nil
+		return func() {}, nil, nil
 	}
 	if name == "." || name == ".." || path.Base(name) != name {
-		return nil, errors.New("invalid managed profile name")
+		return nil, nil, errors.New("invalid managed profile name")
 	}
+	root, err := profileParent()
+	if err != nil {
+		return nil, nil, err
+	}
+	return func() {
+		defer root.Close()
+		// Keep deletion anchored to the inherited directory even when its
+		// pathname has been renamed or a parent symlink has been replaced.
+		_ = root.RemoveAll(name)
+	}, root, nil
+}
+
+// profileParent reopens the inherited directory, never an argv cleanup path.
+func profileParent() (*os.Root, error) {
 	parent := os.NewFile(4, "rod-manager-profile-parent")
 	defer parent.Close()
 	syscall.CloseOnExec(4)
@@ -325,10 +355,5 @@ func managedCleanup(name string) (func(), error) {
 		_ = root.Close()
 		return nil, errors.New("managed profile parent descriptor could not be reopened")
 	}
-	return func() {
-		defer root.Close()
-		// Keep deletion anchored to the inherited directory even when its
-		// pathname has been renamed or a parent symlink has been replaced.
-		_ = root.RemoveAll(name)
-	}, nil
+	return root, nil
 }

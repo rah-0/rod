@@ -1,6 +1,7 @@
 package launcher_test
 
 import (
+	"errors"
 	"flag"
 	"net/url"
 	"os"
@@ -67,7 +68,9 @@ func TestLaunchUserMode(t *testing.T) {
 		l.Cleanup()
 	})
 	u := l.MustLaunch()
-	g.Eq(u, launcher.NewUserMode().Context(g.Context()).RemoteDebuggingPort(port).MustLaunch())
+	_, err := launcher.NewUserMode().Context(g.Context()).RemoteDebuggingPort(port).Launch()
+	g.True(errors.Is(err, launcher.ErrDebuggingPortInUse))
+	g.Eq(u, launcher.MustResolveURL(g.Context(), u))
 }
 
 func TestLaunchXVFB(t *testing.T) {

@@ -3,11 +3,15 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -32,7 +36,7 @@ func run(ctx context.Context, output io.Writer) (err error) {
 	defer cancel()
 
 	// A private ephemeral server makes the example self-contained. Authentication
-	// remains enabled; use HTTPS/WSS for a manager on a non-loopback host.
+	// and a pinned ephemeral certificate authenticate both peers, including loopback.
 	token := rand.Text()
 	manager := launcher.NewManager(token)
 	launched := make(chan *launcher.Launcher, 1)
@@ -54,8 +58,14 @@ func run(ctx context.Context, output io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
+	certificate, roots, err := managerCertificate()
+	if err != nil {
+		_ = listener.Close()
+		return err
+	}
 	served := make(chan error, 1)
-	go func() { served <- server.Serve(listener) }()
+	tlsListener := tls.NewListener(listener, &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12})
+	go func() { served <- server.Serve(tlsListener) }()
 	stopServer := context.AfterFunc(ctx, func() { _ = server.Close() })
 
 	var client *cdp.Client
@@ -105,7 +115,7 @@ func run(ctx context.Context, output io.Writer) (err error) {
 	}
 	defer func() { err = errors.Join(err, cleanup()) }()
 
-	remote, err := launcher.NewManaged(ctx, "http://"+listener.Addr().String(), token)
+	remote, err := launcher.NewManaged(ctx, "https://"+listener.Addr().String(), token, launcher.ManagerClientOptions{TLSConfig: &tls.Config{RootCAs: roots}})
 	if err != nil {
 		return err
 	}
@@ -150,4 +160,32 @@ func run(ctx context.Context, output io.Writer) (err error) {
 	}
 	_, err = fmt.Fprintf(output, "Authenticated manager page: %s\nManager process and profile: cleaned\n", text)
 	return err
+}
+
+// managerCertificate creates trust local to this invocation. A persistent
+// deployment uses its configured server certificate and trusted CA instead.
+func managerCertificate() (tls.Certificate, *x509.CertPool, error) {
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, nil, err
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, public, private)
+	if err != nil {
+		return tls.Certificate{}, nil, err
+	}
+	certificate, err := x509.ParseCertificate(der)
+	if err != nil {
+		return tls.Certificate{}, nil, err
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(certificate)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: private}, roots, nil
 }

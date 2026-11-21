@@ -14,6 +14,27 @@ test_pattern() {
 }
 
 case "${1:-pure}" in
+security)
+    minimum=1.27.4
+    check_floor() {
+        local version=$1 source=$2
+        local major minor patch min_major min_minor min_patch
+        IFS=. read -r major minor patch <<< "$version"
+        IFS=. read -r min_major min_minor min_patch <<< "$minimum"
+        if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+            (( major < min_major || major == min_major && minor < min_minor ||
+               major == min_major && minor == min_minor && patch < min_patch )); then
+            printf '%s requires Go %s or newer; found %s\n' "$source" "$minimum" "$version" >&2
+            exit 1
+        fi
+    }
+    check_floor "$(go env GOVERSION | sed 's/^go//')" 'selected compiler'
+    check_floor "$(awk '$1 == "go" { print $2 }' go.work)" go.work
+    for module in "${modules[@]}"; do
+        check_floor "$(awk '$1 == "go" { print $2 }' "$module/go.mod")" "$module/go.mod"
+        (cd "$module" && GOWORK=off govulncheck ./... && GOWORK=off govulncheck -test ./...)
+    done
+    ;;
 pure)
     sources=()
     while IFS= read -r -d '' source; do
@@ -46,6 +67,9 @@ pure)
     # These mixed packages also contain browser tests. Select deterministic
     # protocol, local HTTP, and helper-process fixtures explicitly.
     launcher_tests=(
+        'URLHelpersRejectSwitches|FormatArgsPreservesPositionalOrder|SecureLauncherDefaults|LaunchNeverAdoptsOccupiedPort|ManagedRejectsUnauthenticatedServer'
+        'GuardianRejectsForeignParentExecutable|LocalProfileCleanupUsesOpenedParent'
+        'GuardianRejectsDelegatedChallenge'
         'ResolveURL.*|TestOpen'
         'UserModeOptions|LaunchErr'
         'Cleanup(WithoutProcess|ReusedBrowser|ContextBudget)'
@@ -62,7 +86,14 @@ pure)
     )
     # Package-internal tests of the root package.
     rod_tests=(
-        'SaveFileDefaultPaths|ShapesEqual|DecodeDataURL|Monitor(HostAllowed|ReportsURL)'
+        'HijackNetwork.*|HijackLoadResponseSafeDefault|HijackRouterConcurrency'
+        'EventWaitOverflow|EventOverflowDuringCallback|EventStreamOverflowContext|DiagnosticsIngressOverflow'
+        'StreamReaderByteLimit|StreamReaderLimitExtremes|PDFStreamDefaultLimit|ScrollScreenshotTotalPixelBudget'
+        'Screenshot(SizeBudget|RejectsBeforeCapture|ImageHeaderBudget)'
+        'ExposeAuthorizesBrowserSource|ExposeDefaultRejectsChildAndStaleQueuedCalls|ExposeReplyLimit'
+        'FileDialogRejectsOtherFramesAndMissingNodes|PageDownloadFiltersAndBounds|DownloadTimeoutWithoutInvokingWait'
+        'ExposeOverflowReportsOnceWhenErrorHandlerExits|FileDialogRejectsNavigationAfterChooser|DownloadOverflowCannotReturnSuccess'
+        'SaveFileDefaultPaths|ShapesEqual|DecodeDataURL|Monitor(HostAllowed|ReportsURL|HeaderDeadline|BodyDeadline)'
         'OwnedBrowserClose(ExpiredContext|Timeout)|AttachedBrowserCloseContext|ConfiguredBrowserCleanupBudget'
         'Diagnostics(ExceptionPreservesStackURL|Lifecycle|SetupFailure|IncompleteStop|CorrelationAndRevocation)'
         'Diagnostics(RetentionAndConcurrentSnapshots|ValueFormatting|DomainTransitionCancellation|SubscriptionSkipsUnusedEvents)'
@@ -87,6 +118,7 @@ pure)
     )
     # Public API tests in ./tests that use fake protocol clients or local fixtures.
     rod_public_tests=(
+        'DownloadConvenienceLimitsRead|DownloadConvenienceUnusedTimeoutCleansDirectory'
         'BrowserDecoding|LenientDecodingAPIs|BrowserResetControlURL|TestTry|BrowserConnect(Failure|Conflict)|DefaultSleeperBackoff|SearchNodeIDReset|BinarySize'
         'PagesOthers|ElementsOthers|EvalOptionsString|ElementFromObjectRequiresHandle'
         'NavigationEndsEvaluation|PageHTMLInFrameAfterReplacedDocument'
@@ -167,7 +199,7 @@ docker)
     go test "${test_flags[@]}" ./lib/docker/...
     ;;
 *)
-    printf 'usage: %s [pure|fix|examples|browser|live|docker]\n' "$0" >&2
+    printf 'usage: %s [pure|fix|examples|browser|live|docker|security]\n' "$0" >&2
     exit 2
     ;;
 esac

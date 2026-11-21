@@ -16,8 +16,7 @@
     "Preload.prerenderStatusUpdated.pipelineId",
     "Runtime.getHeapUsageResult.backingStorageSize",
     "Runtime.getHeapUsageResult.embedderHeapUsedSize",
-    "Storage.sharedStorageAccessed.method",
-    "Storage.sharedStorageAccessed.ownerSite",
-    "Storage.sharedStorageAccessed.scope"
+    "WebAudio.BaseAudioContext.renderQuantumSize",
+    "WebAuthn.Credential.signCount"
   ]
 }

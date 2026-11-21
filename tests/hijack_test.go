@@ -80,7 +80,7 @@ func TestHijack(t *testing.T) {
 		g.True(ctx.Request.JSONBody().Nil())
 
 		// send request load response from real destination as the default value to hijack
-		ctx.MustLoadResponse()
+		ctx.MustLoadResponseUnsafe()
 
 		g.Eq(200, ctx.Response.Payload().ResponseCode)
 
@@ -112,7 +112,7 @@ func TestHijack(t *testing.T) {
 
 	router.MustAdd(s.URL("/b"), func(ctx *rod.Hijack) {
 		// transparent proxy
-		ctx.MustLoadResponse()
+		ctx.MustLoadResponseUnsafe()
 	})
 
 	go router.Run()
@@ -308,11 +308,11 @@ func TestHijackLoadResponseErr(t *testing.T) {
 	wg.Add(1)
 
 	router.MustAdd("http://localhost/a", func(ctx *rod.Hijack) {
-		g.Err(ctx.LoadResponse(&http.Client{
+		g.Err(ctx.LoadResponseUnsafe(&http.Client{
 			Transport: &MockRoundTripper{err: errors.New("err")},
 		}, true))
 
-		g.Err(ctx.LoadResponse(&http.Client{
+		g.Err(ctx.LoadResponseUnsafe(&http.Client{
 			Transport: &MockRoundTripper{res: &http.Response{
 				StatusCode: http.StatusOK,
 				Body:       io.NopCloser(&MockReader{err: errors.New("err")}),
@@ -349,7 +349,7 @@ func TestHijackResponseErr(t *testing.T) {
 			wg.Done()
 		}
 
-		ctx.MustLoadResponse()
+		ctx.MustLoadResponseUnsafe()
 		g.mc.stub(1, proto.FetchFulfillRequest{}, func(send StubSend) (jsonvalue.Value, error) {
 			res, _ := send()
 			return res, errors.New("err")
@@ -477,7 +477,7 @@ func TestHijackHandlerPanicFailsRequest(t *testing.T) {
 	errs := make(chan error, 8)
 	router.MustAdd(refused+"/*", func(ctx *rod.Hijack) {
 		ctx.OnError = func(err error) { errs <- err }
-		ctx.MustLoadResponse() // panics with the connection error
+		ctx.MustLoadResponseUnsafe() // panics with the connection error
 	})
 
 	go router.Run()
@@ -536,7 +536,7 @@ func TestHijackLoadResponseCrossOriginRedirect(t *testing.T) {
 	defer router.MustStop()
 
 	router.MustAdd("*", func(ctx *rod.Hijack) {
-		ctx.MustLoadResponse()
+		ctx.MustLoadResponseUnsafe()
 	})
 
 	go router.Run()
@@ -578,7 +578,7 @@ func TestHijackLoadResponseFollowRedirectsBrowser(t *testing.T) {
 
 	router.MustAdd("*", func(ctx *rod.Hijack) {
 		ctx.FollowRedirects = true
-		ctx.MustLoadResponse()
+		ctx.MustLoadResponseUnsafe()
 	})
 
 	go router.Run()
@@ -623,7 +623,7 @@ func TestHijackLoadResponseHeaderLimitBrowser(t *testing.T) {
 		if ctx.Request.URL().Query().Has("raised") {
 			ctx.MaxResponseHeaderBytes = 1 << 20
 		}
-		ctx.MustLoadResponse()
+		ctx.MustLoadResponseUnsafe()
 	})
 
 	go router.Run()
@@ -730,7 +730,7 @@ func TestHijackLoadResponseBodyLimitBrowser(t *testing.T) {
 	router.OnError(func(err error) { errs <- err })
 	router.MustAdd(s.URL("/stream"), func(ctx *rod.Hijack) {
 		ctx.MaxResponseBodyBytes = 1 << 20
-		ctx.MustLoadResponse()
+		ctx.MustLoadResponseUnsafe()
 	})
 
 	go router.Run()
@@ -758,7 +758,7 @@ func TestHijackLoadResponseHeadBrowser(t *testing.T) {
 	errs := make(chan error, 8)
 	router.OnError(func(err error) { errs <- err })
 	router.MustAdd(s.URL("/video"), func(ctx *rod.Hijack) {
-		ctx.MustLoadResponse()
+		ctx.MustLoadResponseUnsafe()
 	})
 
 	go router.Run()
@@ -814,7 +814,7 @@ func TestHijackBinaryRedirectBrowser(t *testing.T) {
 	g.E(router.Add(server.URL("/a+b/**"), "", func(h *rod.Hijack) {
 		h.OnError = func(err error) { handlerErrors <- err }
 		handled <- []byte(h.Request.Body())
-		if err := h.LoadResponse(http.DefaultClient, true); err != nil {
+		if err := h.LoadResponseUnsafe(http.DefaultClient, true); err != nil {
 			handlerErrors <- err
 			h.Response.Fail(proto.NetworkErrorReasonFailed)
 		}

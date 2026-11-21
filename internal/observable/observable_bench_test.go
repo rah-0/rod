@@ -46,7 +46,9 @@ func BenchmarkObservableBacklog(b *testing.B) {
 			ctx, cancel := context.WithCancel(b.Context())
 			defer cancel()
 			o := New[int](ctx)
-			stream := o.Subscribe(ctx)
+			// Leave one slot for delivery accounting while keeping the requested
+			// backlog; the default budget also includes the event being delivered.
+			stream := o.Subscribe(WithLimits(ctx, Limits{MaxEvents: backlog + 1}))
 			for event := range backlog {
 				o.Publish(event)
 			}

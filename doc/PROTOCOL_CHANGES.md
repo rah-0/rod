@@ -1,7 +1,9 @@
 # Protocol changes compared with v0.120.0
 
-The generated `lib/proto` API uses the protocol reported by Chrome
+In v0.121.0, the generated `lib/proto` API uses the protocol reported by Chrome
 `152.0.7977.64`, replacing the Chrome `128.0.6568.0` schema used in v0.120.0.
+This inventory records that migration; later updates are recorded in
+[Breaking changes](BREAKING.md).
 The browser version identifies the generation source; it does not select the
 browser used by applications or tests. See [protocol generation](../lib/proto/generate/README.md)
 for capture, regeneration, and checks against the installed browser.

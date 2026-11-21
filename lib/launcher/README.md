@@ -36,22 +36,24 @@ CDP clients must honor request cancellation. An interrupted write on the
 built-in transport closes the connection only when part of the frame was
 written, or on TLS; a write canceled before any byte is sent leaves it usable.
 
-For standalone use, `Launcher.LaunchNew(ctx)` also rejects port reuse. The
-existing `Launcher.Launch` retains its debugging-port attachment behavior.
+For standalone use, both `Launcher.Launch` and `Launcher.LaunchNew(ctx)` start a
+new process and reject occupied debugging ports with `ErrDebuggingPortInUse`.
+To attach intentionally, pass the selected endpoint to `Browser.ControlURL`.
 Register `Kill` and `CleanupContext` before launching when managing ownership
 yourself. `CleanupContext(ctx)` waits directly on the process completion signal
 without creating a cleanup waiter; it returns when the budget expires, while
 the launcher's process reaper remains responsible for eventual process exit.
 
-On Unix, each local launch runs under a supervisor. A private pipe ties it to the
+On Linux, each local launch runs under a supervisor. A private Unix socket ties it to the
 launching application: application exit, panic, test timeout, or `SIGKILL` closes
-the pipe and triggers browser cleanup. On Linux the supervisor also adopts,
+the socket and triggers browser cleanup. On Linux the supervisor also adopts,
 terminates, and reaps surviving descendants, including detached Chrome crash
-reporters. It requires access to `/proc`. Other Unix systems target the browser
-process group; descendants that leave that group have weaker cleanup guarantees.
-Windows uses direct launches and does not provide this application-crash cleanup.
+reporters. It requires access to `/proc`. Other Unix systems launch the browser
+directly and target its process group during explicit cleanup; descendants that
+leave that group can survive. Windows directly targets the initial process.
+Neither provides cleanup after the application exits or crashes.
 
-The supervisor ends when that pipe closes or the browser exits. It receives and
+The supervisor ends when that socket closes or the browser exits. It receives and
 discards `SIGHUP`, `SIGINT`, `SIGQUIT`, and `SIGTERM`, so a signal that is sent
 to every process with the application's name, or to all processes of a service,
 does not leave the browser without supervision. A `SIGHUP` or `SIGINT` that is
@@ -61,7 +63,7 @@ another way, such as by `SIGKILL`, or the host fails, browser and profile
 cleanup is not guaranteed.
 
 The supervisor is the application's own binary, started again with a private
-invocation and inherited pipes. An internal package that imports little more
+invocation, an inherited command socket, and a status pipe. An internal package that imports little more
 than `os` and `os/signal` answers that invocation from its initializer, so the
 helper runs only the package initializers that Go schedules before that one. Go
 initializes a package after the packages it imports and, among the packages
@@ -79,6 +81,15 @@ another thread does not pass it on. A helper that cannot initialize causes
 launch to fail. No helper binary downloads or additional Go dependencies are
 needed. Starting Chrome yourself with `exec.Command` bypasses this supervision.
 
+Unix launches reject secure execution with `ErrSecureExecution`: differing real
+and effective credentials, Linux `AT_SECURE` (including file capabilities), or
+the BSD/macOS `issetugid` marker. Ambient `-rod` configuration is also ignored
+in these invocations. Linux verifies the command socket's kernel peer
+credentials and requires its creator to be the parent running the same
+executable. A fresh challenge must be answered by that parent PID, checked with
+kernel message credentials, before a command or cleanup path is accepted.
+Private re-execution is disabled on other Unix systems.
+
 A program built with the race detector sleeps at exit, one second by default,
 while other goroutines are alive, and browser cleanup waits for the supervisor
 to exit. In such a build the supervisor therefore starts with
@@ -93,8 +104,7 @@ directory.
 Newly created launcher-generated temporary profiles are removed automatically
 after process exit, including failed startup. A pre-existing path at the generated
 location remains caller-owned. `Launcher.Cleanup` waits for that removal and is
-safe to repeat, call before launch, or call after attaching to an existing
-debugging port. It does not stop a live browser; use `Kill` first. A profile
+safe to repeat or call before launch. It does not stop a live browser; use `Kill` first. A profile
 supplied through `UserDataDir` remains caller-owned.
 
 `Output` keeps the most recent 64 KiB of stdout/stderr, including output after
@@ -102,7 +112,7 @@ the DevTools endpoint appears. Configure the limit before launch with
 `OutputTail(bytes)`; zero disables this capture. Reads and concurrent writes are
 safe. `Logger` still receives the complete stream and must not block indefinitely.
 
-Unix supervisors also give each browser a private scratch directory beneath its
+Linux supervisors also give each browser a private scratch directory beneath its
 configured `TMPDIR` parent (or `/tmp`). Only the browser's environment points to
 that child directory. After its descendants exit, the supervisor removes the
 child, including Chrome's separate socket directories. The caller's temporary
@@ -115,11 +125,31 @@ and uses the bounded graceful-close and process-cleanup budget above. Closing an
 browser running. Passing a `ControlURL` does not transfer launcher ownership.
 
 The remote manager owns each browser and its randomly named profile and cleans
-them up when the WebSocket session ends. On Unix its supervisor also inherits
-the profile's parent directory descriptor, so cleanup after manager death stays
-inside the original directory even if a parent symlink is replaced. Reopening
-that descriptor requires `/proc/self/fd` on Linux or `/dev/fd` on other Unix
-systems; launch fails if the directory cannot be reopened safely.
+them up when the WebSocket session ends. Every Linux supervisor inherits the
+owned profile's parent directory descriptor. Cleanup stays inside that original
+directory even if its pathname is renamed or a parent symlink is replaced. Reopening
+that descriptor requires `/proc/self/fd`; launch fails if the directory cannot
+be reopened safely. On other systems, the manager must remain alive to clean
+up after clients disconnect.
+
+## Browser isolation and URL inputs
+
+`New` preserves Chrome's sandbox, site isolation, popup blocking, and IPC flood
+protection. Container detection does not disable them. Configure a container
+that supports Chrome's sandbox; `NoSandbox(true)` explicitly disables it when
+the caller accepts that risk. Other Chrome switches remain available through
+`Set`.
+
+`StartURL` and positional launch arguments must be absolute URLs using `http`,
+`https`, `about`, `file`, `data`, `chrome`, or `chrome-extension`. `Launch`
+returns `ErrInvalidURL` for malformed URLs or values that Chromium could parse
+as switches, including whitespace-prefixed `-` and `/` values. `Open` validates
+the same input and returns an error when validation or browser startup fails.
+`FormatArgs` sorts named switches and preserves positional URL order.
+
+DevTools still uses an unauthenticated loopback TCP endpoint. Other processes
+in the same network namespace can control it; isolate browser automation in a
+container, virtual machine, or network namespace when local users are untrusted.
 
 ## Persistent automation profiles
 
@@ -142,6 +172,7 @@ policy. Rod does not copy or recover a personal profile.
 `NewUserMode` keeps its default-directory behavior for browsers that support it.
 It does not detect browser versions or bypass Chrome's restriction. An explicit
 `NewUserMode().UserDataDir(...)` also selects a caller-owned automation directory.
+Its debugging port is random; it never adopts a running browser automatically.
 Use an installed browser; Rod does not download a replacement.
 
 See the [persistent profile example](../../examples/persistent-profile/README.md)
@@ -161,11 +192,19 @@ The command removes the token from its process environment after reading it,
 and the manager strips that variable from every browser child environment. The
 library-level `NewManager` is also locked when given an empty token.
 
-Use HTTPS/WSS, a trusted TLS reverse proxy, or an encrypted tunnel before
-binding the manager to a network interface. A bearer token sent over plain
-HTTP/WebSocket can be intercepted. Managed clients reject plaintext
-non-loopback URLs, and the command requires an explicit
-`-allow-plaintext-remote` override for non-loopback listeners.
+Managed clients require authenticated HTTPS/WSS on every host, including
+loopback. An empty service URL selects `https://localhost:7317`. Configure
+`rod-manager -tls-cert <cert.pem> -tls-key <key.pem>`, or terminate TLS at a
+trusted proxy. A plaintext loopback listener can belong to another local user;
+clients reject it before sending a bearer token.
+
+For private certificate authorities, pass
+`ManagerClientOptions{TLSConfig: &tls.Config{RootCAs: roots}}` to `NewManaged` or
+`MustNewManaged`. The configuration applies to the settings request and to
+`Client`/`MustClient`. `InsecureSkipVerify` is rejected. A custom WebSocket client
+using `ClientHeader` must apply the same TLS trust configuration itself. The
+command's `-allow-plaintext-remote` flag only permits an explicitly trusted
+plaintext server hop; it does not relax the client's TLS requirement.
 
 Treat every token holder as an administrator of the browser host. Managed
 clients have full Chrome DevTools access. Process-owned launch settings,

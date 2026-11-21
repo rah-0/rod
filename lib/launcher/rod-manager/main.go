@@ -22,6 +22,8 @@ var (
 	addr                 = flag.String("address", defaultManagerAddress, "the address to listen to")
 	quiet                = flag.Bool("quiet", false, "silence the log")
 	allowPlaintextRemote = flag.Bool("allow-plaintext-remote", false, "allow a non-loopback listener without TLS")
+	tlsCert              = flag.String("tls-cert", "", "TLS certificate PEM file (requires -tls-key)")
+	tlsKey               = flag.String("tls-key", "", "TLS private key PEM file (requires -tls-cert)")
 )
 
 func main() {
@@ -36,7 +38,10 @@ func main() {
 	if err != nil {
 		utils.E(err)
 	}
-	if !loopback && !*allowPlaintextRemote {
+	if (*tlsCert == "") != (*tlsKey == "") {
+		log.Fatal("[rod-manager] -tls-cert and -tls-key must be supplied together")
+	}
+	if !loopback && *tlsCert == "" && !*allowPlaintextRemote {
 		log.Fatal("[rod-manager] non-loopback address requires -allow-plaintext-remote")
 	}
 
@@ -59,7 +64,11 @@ func main() {
 		Handler:           m,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	utils.E(srv.Serve(l))
+	if *tlsCert != "" {
+		utils.E(srv.ServeTLS(l, *tlsCert, *tlsKey))
+	} else {
+		utils.E(srv.Serve(l))
+	}
 }
 
 func takeManagerToken() (string, bool) {

@@ -66,7 +66,7 @@ func TestExposeQueuedRepliesShareRoundTrip(t *testing.T) {
 	var batches []int
 	g.mc.setCall(func(ctx context.Context, session, method string, params any) ([]byte, error) {
 		// Expose replies address an execution context rather than an object.
-		if request, ok := params.(proto.RuntimeCallFunctionOn); ok && request.ExecutionContextID != 0 && request.ObjectID == "" {
+		if request, ok := params.(proto.RuntimeCallFunctionOn); ok && request.UniqueContextID != "" && request.ObjectID == "" {
 			data, err := json.Marshal(request.Arguments[0].Value)
 			if err != nil {
 				return nil, err

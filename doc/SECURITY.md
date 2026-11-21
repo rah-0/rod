@@ -4,7 +4,7 @@ This document describes what Rod protects against, the protections that are on
 by default, and the options that turn them off. Every opt-out is explicit and
 named below, together with the risk it brings; a program that uses one accepts
 that risk. For how these defaults changed from earlier versions, see
-[Breaking changes](BREAKING.md#v01250--compared-with-v01240).
+[Breaking changes](BREAKING.md#v01290--compared-with-v01280).
 
 ## Threat model
 
@@ -39,9 +39,9 @@ Against these sources, Rod:
 - requires a secret for the monitor and the manager, and validates the launch
   options of manager clients as defense in depth.
 
-A malicious endpoint still controls what the browser reports. Well-formed but
-false data passes every check: validation prevents crashes and unbounded memory
-use, not wrong results.
+A malicious endpoint still controls what the browser reports. Validation and
+resource budgets constrain the processing described below; they do not
+authenticate page data or guarantee correct results.
 
 ### What Rod does not defend against
 
@@ -49,7 +49,7 @@ use, not wrong results.
   functions and hijack handlers do, and the opt-outs it enables.
 - **The browser's own security**: the renderer sandbox, site isolation, the
   same-origin policy, and browser bugs. Rod relies on the browser to contain
-  page content, and its default launch flags disable some of these protections;
+  page content, and its default launch flags preserve these protections;
   see [Launcher defaults](#launcher-defaults).
 - **Anyone who holds the DevTools connection or the manager token.** Treat them
   as administrators of the browser host: they control every page, profile, and
@@ -68,7 +68,7 @@ and use the response to fulfill it.
 
 | Protection | Default | Opt-out | Risk when changed |
 | --- | --- | --- | --- |
-| Redirects of responses loaded by Go | A 3xx response and its `Location` header return to the browser, which follows the redirect under its own CORS and private network policies. Routes that match the next URL intercept it again. | Set `Hijack.FollowRedirects = true` in the handler before loading the response. It applies to that request only. | Go follows redirects with the client's `CheckRedirect`, or with `http.Client`'s default policy of at most 10 redirects when the client has none, and the final response fulfills the original URL. A page whose request is redirected, by its own server or an open redirect, reads the response of any URL the Go client can reach, including internal services, as same-origin data. The final response's headers, such as `Set-Cookie`, `Content-Security-Policy`, and CORS headers, apply to the original URL. Go forwards custom request headers, such as API tokens, to every redirect target; it drops `Authorization`, `Cookie`, and its other credential headers only when the target host is neither the original host nor one of its subdomains, so they still reach other ports and schemes of the same host, including plain `http://`. Go also sends a `Referer`: the original request's `Referer` unchanged or, when it has none, the previous URL with its path and query, except on a redirect from `https` to `http`. Restrict redirect targets with the client's `CheckRedirect`, and remove the headers they must not receive there. |
+| Redirects of responses loaded by Go | A 3xx response and its `Location` return to the browser. | Set `Hijack.FollowRedirects = true`. The safe transport permits at most ten same-origin redirects and validates each destination at dial time. | `LoadResponseUnsafe` instead uses the supplied client's redirect policy, which can expose internal services or send credentials to another origin. |
 | Response body size | `Hijack.MaxResponseBodyBytes` starts at `DefaultMaxResponseBodyBytes` (64 MiB); zero or a negative value selects that default. A larger `Content-Length` fails before reading; otherwise reading stops one byte past the limit. The error matches `ErrResponseBodyTooLarge`, and `Hijack.Response` stays unchanged. | Raise `MaxResponseBodyBytes` in the handler; `math.MaxInt64` removes the limit. | Each concurrent `LoadResponse` buffers up to the limit. Fulfilling the request holds two more copies of the body, base64 encoded, together about 2.7 times its size: the protocol message and its WebSocket frame. Chrome closes the whole DevTools connection when it receives a message larger than about 100 MiB, which a body above about 74 MiB, or a smaller body with large headers, produces. |
 | Response header size | `Hijack.MaxResponseHeaderBytes` starts at `DefaultMaxResponseHeaderBytes` (256 KiB, counted as an HTTP/1.1 header block), the size at which Chrome rejects response headers from the network. Larger headers return an error matching `ErrResponseHeadersTooLarge`, and `Hijack.Response` stays unchanged. The client's transport applies its own limit first; `http.Transport` allows 10 MiB by default. | Raise `MaxResponseHeaderBytes` in the handler. | More memory per request, and the page receives headers that Chrome rejects from the network. The headers and the base64 encoded body share Chrome's message limit. |
 | Unparsable request URLs | A paused request whose URL `net/url` cannot parse, such as a path with `%zz` or a stray `%` as in `/sale-50%-off`, or a host name containing `{`, fails with `net::ERR_FAILED`. No handler runs, and the parse error goes to the router's `OnError`. `HijackRequest.URL` is therefore never nil. | `HijackRouter.ContinueUnparsableURLs(true)` continues such requests unmodified. Handlers still do not run, and the parse error is still reported. | A page can evade any route by adding an invalid escape, or such a host name, to a URL that still matches the route's pattern: the request reaches the network without the blocking, mocking, or rewriting that the route applies. Enable it only when no route enforces a policy that the page must not evade. |
@@ -80,42 +80,36 @@ is the initial `Hijack.OnError` of each later request and also receives errors
 for requests that the router resolves without running handlers. It is called
 concurrently from the goroutines that serve requests.
 
-**Requests that Go loads bypass the browser's network policy.** In both redirect
-modes, `LoadResponse` sends the request with the client's transport, proxy, and
-TLS settings. `MustLoadResponse` and a nil client use `http.DefaultClient`,
-which reads `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`, verifies certificates
-with the system roots, and has no timeout. The request does not use the
-browser's proxy configuration, such as `--proxy-server`, its private network
-access checks, or its certificate-error settings. Go also resolves host names
-itself, so DNS rebinding to an internal address can give a page a same-origin
-read without any redirect. When pages are untrusted, give the client a
-`Transport` whose `Proxy` is nil and whose dialer, through `net.Dialer.Control`,
-rejects every address that is not global unicast or is private: with
-`netip.Addr`, reject when `!ip.IsGlobalUnicast() || ip.IsPrivate()`. This rule
-also rejects the unspecified addresses `0.0.0.0` and `::`, which reach the local
-host on Linux, and loopback, link-local, and multicast addresses. Reject other
-internal ranges of your network too, such as the shared address space
-`100.64.0.0/10`. `Control` sees the resolved address, while `CheckRedirect` sees
-only the URL. Through a proxy, the dialer sees only the proxy's address, and the
-proxy decides which targets are reachable. Alternatively, use
-`Hijack.ContinueRequest`, which leaves the request to the browser.
+**Go network requests have their own policy.** `LoadResponse(nil, ...)` and
+`MustLoadResponse` use a direct transport with certificate verification, no
+proxy, a 30-second request deadline, bounded connection and header deadlines,
+and at most eight concurrent fetches across the process. The dialer rejects
+private, loopback, link-local, multicast, unspecified, shared and special-purpose
+addresses, including mixed public/private DNS answers. It connects to the checked
+numeric address, preventing a second DNS lookup from changing the destination.
+`Hijack.DenyNetworks` adds deployment-specific ranges. `FollowRedirects` permits
+only the original scheme, host and effective port. Policy failures match
+`ErrHijackNetworkPolicy`; exhausted admission matches `ErrHijackConcurrency`.
 
-**Each paused request costs a goroutine.** The router serves every paused
-request on its own goroutine, without a concurrency limit. A page that issues
-many parallel requests to routes that call `LoadResponse` holds one goroutine
-and up to `MaxResponseBodyBytes`, plus the copies made while fulfilling, per
-request. Lower `MaxResponseBodyBytes`, continue large resources with
-`ContinueRequest`, or bound concurrency in the handler, for example with a
-semaphore. A request that Go loads lasts until the client's `Timeout` or the
-request's context ends, and the request's context lasts as long as the router;
-set a client `Timeout`, or call `HijackRequest.SetContext` with a deadline.
+A custom client passed to `LoadResponse` returns `ErrHijackUnsafeClient`.
+`LoadResponseUnsafe(client, ...)` and `MustLoadResponseUnsafe` explicitly delegate
+network, proxy, TLS, timeout and redirect policy to the caller. A nil unsafe
+client uses `http.DefaultClient`. These requests can expose internal services to
+pages. Use `ContinueRequest` when the browser should perform the request.
+Even the safe transport cannot identify deployment-specific sensitive services
+on public addresses; enforce those restrictions with `DenyNetworks` or network
+egress controls.
+
+**Handler concurrency is bounded.** Routers admit 64 handlers by default;
+`HijackRouter.MaxConcurrentRequests` changes this limit. Excess requests fail
+closed and report `ErrHijackConcurrency` through `OnError`. Lower response byte
+limits for workflows that do not need large resources, and bound callback work
+with the request context.
 
 #### What routes do not see
 
 `Page.HijackRequests` intercepts only the requests of its page's target. It does
-not see requests from the windows that the page opens, which Rod's default
-`--disable-popup-blocking` lets it open without a user gesture, or from service
-workers. With site isolation enabled, it also misses cross-site iframes, which
+not see requests from windows that the page opens or from service workers. With site isolation enabled, it also misses cross-site iframes, which
 run in their own targets. No router sees WebSocket connections. In Chrome 152, a
 page escaped a page-level route that blocked its requests through
 `window.open`, a service worker's `fetch`, and `new WebSocket`, and, with site
@@ -240,8 +234,7 @@ of the frame, the frame is abandoned and the connection stays usable. A
 partially written frame, any failed TLS write, and other write errors close the
 connection, so a later request never follows an incomplete frame.
 
-Rod accepts plain `ws://` and `http://` endpoints, including remote ones; only
-`launcher.NewManaged` rejects them for non-loopback hosts. Anyone who can read
+Rod accepts plain `ws://` and `http://` endpoints, including remote ones; `launcher.NewManaged` rejects every plaintext endpoint, including loopback. Anyone who can read
 or change such a connection sees all protocol traffic and can control the
 browser. Reach remote browsers through `wss://` or an encrypted tunnel.
 
@@ -250,21 +243,23 @@ browser. Reach remote browsers through `wss://` or an encrypted tunnel.
 `Page.Expose(name, fn, onError)` and `Page.MustExpose` install
 `window[name]`, which calls `fn` in Go with a JSON argument from the page.
 
-- **Reach.** Rod adds the binding with `Runtime.addBinding` and installs
-  `window[name]` in every new document of the page's target with
-  `Page.addScriptToEvaluateOnNewDocument`, so frames other than the main frame
-  can call it. In Chrome 152 with Rod's default launch flags, which disable site
-  isolation, a cross-site iframe called `fn` and received its result. With site
-  isolation enabled, a cross-site iframe could not, but an iframe of the same
-  site on another origin, such as another port, still could. Any script in
-  those frames, including third-party scripts, can call `fn` with any JSON
-  value, so validate the argument before acting on it.
-- **Call rate and memory.** `fn` handles one call at a time, in the order the
-  page made the calls. Calls that `fn` has not handled and replies that the
-  page has not received, including the encoded results of `fn`, stay in the Go
-  process's memory without a limit, so a page that calls faster than it receives
-  replies increases memory use. Keep `fn` fast, and call the returned stop
-  function when a page misbehaves.
+- **Reach.** `Expose` accepts calls only from the receiver's frame. The source
+  comes from CDP execution-context metadata, including its system-unique
+  document ID; stale documents and unknown contexts are rejected before Go
+  runs. `ExposeWithOptions` supplies `ExposedCall.Source` and allows exact frame,
+  origin and document allowlists. `AllFrames` explicitly broadens frame scope.
+  An exposure survives navigation unless its origin or document policy prevents
+  it. Every script in an allowed document can call it, including third-party
+  scripts, so validate arguments and grant only capabilities that document
+  needs. Direct calls to the internal binding receive the same authorization.
+- **Call rate and memory.** Calls execute serially. Event ingress is bounded by
+  the subscription budgets below; pending reply queues are bounded too.
+  `ExposeOptions.MaxPayloadBytes` and `MaxReplyBytes` default to 1 MiB each.
+  Queue overflow stops the exposure and reports a limit error through `onError`.
+  Oversized payloads are ignored and reported; oversized results reject the
+  promise and are reported. Go callbacks must cooperate with cancellation; Rod
+  cannot interrupt arbitrary Go code or prevent a callback from allocating its
+  result before encoding it.
 - **Failures.** A panic in `fn` or in the JSON encoding of its result, and
   `runtime.Goexit` in `fn`, such as from a failing `Must` helper, are recovered.
   The page's promise rejects with the fixed message `exposed function failed`,
@@ -304,35 +299,55 @@ Rod calls in that document, so do not call it on untrusted pages.
 
 ### Event streams
 
-`Browser.Event` and `Page.Event` are ordered, lossless, and unbounded: events
-that have not been read stay in memory, and a page decides how many events it
-causes, such as console messages. Keep reading, or cancel the context, to
-release a subscription. `EachEvent`, `WaitEvent`, and `WaitDownload` keep the
-events they match from the moment they subscribe until their wait runs or their
-context ends.
+`Browser.Event` and `Page.Event` preserve order within a bounded subscription:
+4096 pending events and 16 MiB of protocol payload by default. `EventBuffer`
+configures those limits; set it before `Browser.Connect` to cover internal
+subscriptions too. The byte budget counts protocol payload, not decoded Go
+objects or allocation overhead. An overflow closes the subscription and clears
+its backlog. `EventWithContext` exposes `context.Cause`, which matches
+`ErrEventOverflow`; event waits return that error and diagnostics return an
+incomplete snapshot. Internal page-relay overflow ends that page's session.
+Cancel a subscription's context when abandoning it. Applications still need
+limits on the number of browser instances, pages and subscriptions they create.
+
+### File inputs
+
+`Page.HandleFileDialog` accepts a chooser only from the receiver's frame,
+requires a backend node and recognized selection mode, and aborts on frame
+navigation. Before assigning files it resolves the input to an object handle
+and rechecks the frame's document identity, so a chooser queued before a
+navigation cannot supply files to a replacement document.
+`HandleFileDialogWithOptions` additionally pins the backend node
+and mode. Use `Element.SetFiles` for a known input: it avoids a race between
+multiple inputs in one frame. Once supplied, files are readable by the selected
+document; do not give untrusted documents host secrets.
 
 ### Downloads
 
-- `Browser.WaitDownload(dir)` saves the download as
-  `filepath.Join(dir, info.GUID)`, a name that the browser chooses. The wait
-  returns an error matching `ErrDownloadGUID`, and no download, when the GUID is
-  not a single local file name: empty, `.`, `..`, containing `/`, `\`, `:`, or a
-  NUL byte, or rejected by `filepath.IsLocal`. The path therefore stays inside
-  `dir`. Use a `dir` that other local users cannot write, such as one from
-  `os.MkdirTemp`.
-- From the call to `WaitDownload` until its wait returns or its context ends,
-  the browser saves every download of that browser context into `dir` without a
-  prompt, from any page. The wait returns only the first download; the others
-  remain in `dir`.
-- `Browser.MustWaitDownload` creates a new directory with `os.MkdirTemp` for
-  each call, with mode `0700` on Unix; on Windows it inherits the permissions of
-  `os.TempDir()`. It removes the directory after the returned function reads the
-  file, and also when setup, the wait, or the read fails. The directory remains
-  if the returned function is never called.
-- `MustWaitDownload` reads the whole file into memory, so the page decides how
-  much memory it uses. For untrusted pages, call `WaitDownload` and read the
-  file with a size limit.
-- Downloaded bytes are page content.
+`Browser.WaitDownload(dir, options...)` defaults to 64 MiB per accepted download
+and a two-minute deadline. `DownloadOptions` can restrict frame, URL, suggested
+filename and a metadata predicate. `Page.WaitDownload` always restricts to its
+receiver frame. Nonmatching and additional downloads observed before completion
+are canceled. GUIDs must be single local filenames;
+invalid values return `ErrDownloadGUID` without escaping the directory.
+
+Chrome's download behavior remains context-wide and its progress reports are
+asynchronous, so cancellation is not a filesystem quota. Completed or late
+additional files can remain in caller-owned directories. `WaitDownload` does
+not delete client files: its directory belongs to the browser's host, which
+may be remote. Use a dedicated
+incognito context and a private directory for hostile workflows, and apply OS
+disk quotas where required. URL and filename metadata alone do not authenticate
+content. An unfiltered browser wait still selects the first download in its
+context; use page-scoped waits and provenance filters to prevent substitution.
+
+`MustWaitDownload` uses a private temporary directory and bounds its read to
+64 MiB. `MustWaitDownloadWithInfo` and `Page.MustWaitDownload` also return the
+browser's provenance metadata and accept an explicit positive byte limit.
+The temporary directory is removed after reading, or on failure or timeout even
+when the returned wait is not called. A completed file remains until the
+returned function is called. Streaming
+callers can use `WaitDownload` and open the result themselves with a byte limit.
 
 ### Screenshots
 
@@ -340,12 +355,20 @@ A page controls its own size.
 
 | Protection | Default | Opt-out | Risk when changed |
 | --- | --- | --- | --- |
-| Scroll screenshot height | `Page.ScrollScreenshot` returns an error matching `ErrScrollScreenshotTooTall`, before capturing, when the page content is taller than `ScrollScreenshotOptions.MaxHeight`, 32768 CSS pixels by default. | A larger `MaxHeight`. | The page chooses its content height, and stitching holds about four bytes of memory per device pixel of the result. |
+| Scroll screenshot height | `Page.ScrollScreenshot` returns an error matching `ErrScrollScreenshotTooTall`, before capturing, when the page content is taller than `ScrollScreenshotOptions.MaxHeight`, 32768 CSS pixels by default. | A larger `MaxHeight`, within the independent dimension, pixel and byte limits below. | The page chooses its content height, and stitching holds about four bytes of memory per device pixel of the result. |
 | Stitched image size | `utils.SplicePngVertical`, which stitches scroll screenshots, reads image sizes from their headers and rejects a source image or a result larger than `utils.MaxSplicePixels` (2^28 pixels) before decoding pixels. | None. | — |
 
-`Page.Screenshot(true, …)` and `Page.MustScreenshotFullPage` resize the viewport
-to the page's content size without a Rod limit; `cdp.WebSocket.MaxMessageSize`
-bounds the image that the browser returns.
+Full-page, scroll and clipped screenshots, including element screenshots, reject
+invalid dimensions, dimensions above 32768 device pixels, and areas above
+`MaxScreenshotPixels` (32 Mi pixels). Encoded images are limited to
+`MaxCaptureBytes` (64 MiB); scroll captures also bound the total encoded bytes
+of their tiles. PNG/JPEG dimensions are checked on return.
+Failures match `ErrScreenshotTooLarge` or `ErrCaptureTooLarge`. Raw protocol
+commands bypass these application-level limits.
+
+`Page.PDF` streams through a `StreamReader` whose `MaxBytes` defaults to 64 MiB.
+`MustPDF` reads that bounded stream and closes it. Streaming callers can change
+`MaxBytes`; zero removes the limit. Always close streams when finished.
 
 ### Launcher defaults
 
@@ -355,27 +378,23 @@ a symlink, already exists at that path, and removes the profile after the
 browser exits. On Unix, the directory has mode `0700`. On Windows, Go ignores
 the mode, and the directory inherits the permissions of its parent. This relies
 on the parent directory being private, or on Unix sticky, as `/tmp` is; set
-`TMPDIR` on Unix, or `TMP` on Windows, only to such a directory. On Unix, the
+`TMPDIR` on Unix, or `TMP` on Windows, only to such a directory. On Linux, the
 launcher's supervisor also gives each browser a private temporary directory
 beneath that parent and removes it afterwards, and it stops the browser and
-removes the profile when the program exits or crashes first. Windows has no
-supervisor: the program removes the profile after the browser exits, so if the
-program ends first, the browser keeps running with its DevTools port open, and
-the profile remains.
+removes the profile when the program exits or crashes first. Other systems use
+direct launches: the program removes the profile after the browser exits, so if
+the program ends first, the browser can keep running with its DevTools port
+open, and the profile remains.
 `Launcher.UserDataDir(dir)` and `-rod=dir=...` select a caller-owned profile
 instead, which Rod never removes and does not make private. It holds cookies and
 other session state, so create it yourself with owner-only permissions.
 
-**Default flags that weaken isolation.** `Launcher.FormatArgs` lists every flag
-that a launch uses.
-
-| Default | Effect | To remove |
-| --- | --- | --- |
-| `--disable-features=site-per-process,TranslateUI` and `--disable-site-isolation-trials` | Site isolation is off, so pages and iframes of different sites can share a renderer process. A compromised renderer or a side channel in one site can then reach data of the others, and cross-site iframes can call [exposed functions](#exposed-functions). | `l.Delete("disable-site-isolation-trials").Set("disable-features", "TranslateUI")` |
-| `--no-sandbox`, added when Rod detects a container through `/.dockerenv`, `/.containerenv`, or the `KUBERNETES_SERVICE_HOST` environment variable | Chrome's sandbox is off, so a compromised renderer runs with the privileges of the browser's user. | `l.NoSandbox(false)`, in a container that supports Chrome's sandbox. Chrome may refuse to run as root without `--no-sandbox`. |
-| `--disable-popup-blocking` | Pages can open windows without a user gesture. Each window is a separate target, which the page's `Page.HijackRequests` router and diagnostics do not cover; see [what routes do not see](#what-routes-do-not-see). | `l.Delete("disable-popup-blocking")` |
-| `--disable-ipc-flooding-protection` | Chrome no longer throttles pages that flood the browser process with messages, such as rapid navigation and history API calls. | `l.Delete("disable-ipc-flooding-protection")` |
-| Other flags, such as `--disable-client-side-phishing-detection` | They turn off browser features, such as Chrome's client-side phishing detection, that are not isolation boundaries. | `l.Delete("<name>")` |
+**Browser isolation.** `launcher.New` preserves Chrome's sandbox, site
+isolation, popup blocking and IPC flooding protection. It does not disable the
+sandbox merely because it detects a container. `NoSandbox(true)` is an explicit
+opt-out for environments that cannot provide Chrome's sandbox; a compromised
+renderer then has the browser user's privileges. Raw `Set`/`Delete` options can
+also weaken protections. `Launcher.FormatArgs` shows the selected flags.
 
 **DevTools port.** The browser's DevTools endpoint listens on `127.0.0.1` at a
 port that the browser picks (`--remote-debugging-port=0`). Chrome does not
@@ -385,13 +404,12 @@ no way to restrict this endpoint; where other users of the machine are not
 trusted, run the browser in its own container, virtual machine, or network
 namespace.
 
-**Fixed ports.** `Launcher.RemoteDebuggingPort(port)` and `-rod=port=...`
-select a fixed port. `Launcher.Launch`, which `Browser.Connect` also uses when it
-launches a browser, first connects to whatever already answers at
-`127.0.0.1:<port>`, which can be a browser or server that another user started.
-`launcher.NewUserMode` uses port 37712 this way. `Browser.Launch` and
-`Launcher.LaunchNew` never adopt an existing endpoint: an occupied port returns
-an error matching `launcher.ErrDebuggingPortInUse`.
+**Fixed ports.** `Launcher.Launch`, `LaunchNew` and browser launch helpers
+never adopt an existing listener. An occupied fixed port returns
+`launcher.ErrDebuggingPortInUse`. `NewUserMode` also requests a random port.
+Attach to a known browser explicitly with `ControlURL` or `Client`; callers
+must establish that endpoint's identity. TCP DevTools remains unauthenticated,
+so random ports do not protect it from other users on the same host.
 
 **Certificate errors.** The browser rejects invalid certificates by default.
 `Browser.IgnoreCertErrors(true)` makes the whole browser ignore certificate
@@ -405,16 +423,21 @@ private key can impersonate any site.
 - `rod-manager` requires its token in `ROD_MANAGER_TOKEN`, removes the variable
   from its own environment after reading it, and removes it from every browser's
   environment. It listens on `127.0.0.1:7317` by default and serves plain HTTP.
-  A non-loopback `-address` requires `-allow-plaintext-remote`; terminate TLS in
-  a reverse proxy or tunnel in front of the manager.
+  `-tls-cert` and `-tls-key` enable authenticated HTTPS directly. Without TLS,
+  a non-loopback `-address` requires `-allow-plaintext-remote`; use a TLS reverse
+  proxy in front of that listener.
 - `launcher.NewManager(token)` rejects every request when the token is empty.
   Requests must carry `Authorization: Bearer <token>`. The manager compares
   SHA-256 digests of the tokens in constant time and removes the header before
   its hooks run and before it proxies the connection to the browser.
-- `launcher.NewManaged(ctx, serviceURL, token)` rejects `http://` and `ws://`
-  URLs whose host is not loopback with `launcher.ErrManagerInsecureTransport`;
-  there is no opt-out. It sends the token on the settings request and on the
-  WebSocket handshake, does not follow redirects, and rejects settings responses
+- `launcher.NewManaged(ctx, serviceURL, token, options...)` requires `https://`
+  or `wss://`, including on loopback. Plaintext returns
+  `launcher.ErrManagerInsecureTransport` before sending credentials. A private
+  CA can be supplied through `ManagerClientOptions.TLSConfig`; disabling
+  certificate verification is rejected. The same TLS configuration protects
+  both settings and `Client`/`MustClient` WebSocket connections. Custom clients
+  using `ClientHeader` must apply the same TLS trust configuration. The token
+  is sent on the settings request and WebSocket handshake, does not follow redirects, and rejects settings responses
   larger than 1 MiB. The launcher it returns holds the manager's settings,
   including the executable, environment, working directory, and switches for
   the manager's host. Use it only with `Launcher.Client` or `MustClient`:
@@ -448,6 +471,22 @@ flag is used. Pass untrusted arguments after `--` or after a positional
 argument, never among the leading flags. The `DISABLE_ROD_FLAG` environment
 variable, set to any value, disables `-rod`.
 
+Credential transitions disable ambient `-rod` processing and reject Unix
+launches with `launcher.ErrSecureExecution`. Linux checks `AT_SECURE`, including
+file capabilities; macOS and BSD systems use `issetugid`. Linux guardians also
+verify inherited socket peer credentials and that the parent runs the same
+executable, then require a fresh challenge response carrying that parent PID's
+kernel message credentials. No command or cleanup runs before authentication.
+Profile cleanup stays anchored to an already-open parent directory. Other Unix
+systems disable private re-execution and directly launch a browser process
+group; application-crash cleanup is unavailable there. Run browser automation
+without setuid, setgid, or file-capability transitions.
+
+`Launcher.StartURL` and positional launch arguments must be absolute URLs with
+supported schemes. Switch-shaped, relative and malformed values fail with
+`launcher.ErrInvalidURL` before starting a process. `launcher.Open` returns the
+validation or launch error. Use `Launcher.Set` for intentional browser switches.
+
 ### Monitor
 
 - `Browser.ServeMonitor(addr)`, `Browser.Monitor(addr)`, and
@@ -470,6 +509,13 @@ variable, set to any value, disables `-rod`.
   then opens the URL in the system browser by passing it on the command line,
   which other local users may be able to read. On shared machines, call
   `Browser.ServeMonitor` and open the URL yourself.
+
+The monitor bounds request reads (headers and body) to five seconds, idle
+keep-alive connections to 30 seconds, and request headers to 32 KiB. The read
+limits apply regardless of token and Host validation, including when Go drains
+the unread body of a rejected request. Screenshot processing is independent of
+these read deadlines. Use a proxy or OS connection limits when exposing the
+monitor to a larger network.
 
 ### Trace mode
 
@@ -515,13 +561,12 @@ HTML.
 
 - Keep the defaults: strict decoding, `FollowRedirects` off, the response
   limits, failing unparsable URLs, and scoped `HandleAuth` credentials.
-- Remove the flags that disable site isolation, and keep Chrome's sandbox. In a
-  container, provide one that supports the sandbox and call `NoSandbox(false)`.
-- Prefer `ContinueRequest` to `LoadResponse`. When Go must load responses, use a
-  client without a proxy whose dialer rejects addresses that are not global
-  unicast or are private, as described in
-  [request hijacking](#request-hijacking), give it a `Timeout`, lower
-  `MaxResponseBodyBytes`, and bound concurrent handlers.
+- Keep the default site isolation and sandbox. Use a container that supports
+  Chrome's sandbox.
+- Prefer `ContinueRequest` when browser networking suffices. Otherwise use
+  `LoadResponse(nil, ...)`, add deployment-specific `DenyNetworks`, and lower
+  response byte limits as appropriate. Reserve `LoadResponseUnsafe` for trusted
+  requests with a separately enforced network policy.
 - Enforce request policies with `Browser.HijackRequests` rather than
   `Page.HijackRequests`, and block WebSocket endpoints outside Rod; see
   [what routes do not see](#what-routes-do-not-see).
@@ -542,19 +587,20 @@ HTML.
   container, virtual machine, or network namespace when they are not trusted.
 - Keep generated profiles, or keep a caller-owned `UserDataDir` private, and
   keep `TMPDIR` on Unix, or `TMP` on Windows, pointing to a private directory,
-  or on Unix a sticky one. On Windows, stop the browser before the program
+  or on Unix a sticky one. Outside Linux, stop the browser before the program
   exits; see [profiles](#launcher-defaults).
-- Launch with `Browser.Launch` or `Launcher.LaunchNew`, or keep the debugging
-  port at 0, so that Rod never adopts another user's endpoint.
+- Keep the debugging port at 0. Launch helpers reject occupied fixed ports;
+  explicit attachments must use a trusted endpoint.
 - Save downloads with `MustWaitDownload` or into a directory from
   `os.MkdirTemp`.
-- When given a file name, `Page.MustScreenshot`, `Page.MustScreenshotFullPage`,
-  `Page.MustScrollScreenshot`, `Page.MustPDF`, and `Element.MustScreenshot` save
-  the capture through `utils.OutputFile`, which creates missing directories with
-  mode `0775` and files with mode `0664` before the umask, so other users can
-  usually read them. An empty name saves under `tmp/screenshots` or `tmp/pdf` in
-  the working directory. Save captures of sensitive pages into a private
-  directory, or write the returned bytes yourself.
+- Capture helpers create files exclusively with mode `0600` and missing
+  directories with mode `0700` on Unix. Existing files, symlinks, FIFOs and
+  directories fail instead of being overwritten. Windows inherits parent ACLs.
+  Keep existing parent paths trusted: directory creation and initial parent
+  resolution can traverse existing symlinks. The final file is opened relative
+  to an anchored directory and never follows a destination symlink. An empty
+  name still selects `tmp/screenshots` or `tmp/pdf`; returned bytes can be
+  written separately when an application intentionally needs overwrite.
 - Serve the monitor with `Browser.ServeMonitor` on loopback, and open its URL
   yourself instead of using `Browser.Monitor` or `-rod=monitor`.
 - Pass untrusted command-line arguments after `--`, or set `DISABLE_ROD_FLAG`.
@@ -563,8 +609,8 @@ HTML.
 
 - Use a long random token, and give it only to those you would let administer
   the browser host.
-- Keep `rod-manager` on its loopback address behind a TLS reverse proxy or an
-  encrypted tunnel, and connect with `https://` or `wss://` URLs. Use
+- Serve TLS with `rod-manager -tls-cert=... -tls-key=...`, or keep its loopback
+  listener behind a TLS reverse proxy, and connect with `https://` or `wss://`. Use
   `-allow-plaintext-remote` only when the plaintext hop between the TLS
   terminator and the manager stays on a trusted network.
 - Run the manager on a host or container dedicated to it, and enforce stricter

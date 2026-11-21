@@ -10,6 +10,90 @@ Each heading names that version and the previous version it changes. Describe
 the implementation for the named version. Keep historical entries intact; add
 later changes under their own version.
 
+## v0.129.0 — compared with v0.128.0
+
+### Source compatibility
+
+| Affected | Change | Migration |
+| --- | --- | --- |
+| `launcher.Open` | Its function type changes from `func(string)` to `func(string) error`. Existing call statements still compile, but assignments and callbacks requiring the old type do not. | Update function types and handle the returned error, or use a wrapper matching the required callback type. |
+| `launcher.NewManaged`, `MustNewManaged` | Add a variadic `...ManagerClientOptions` parameter. Three-argument calls still compile, but variables and callbacks requiring the old function types do not. | Add the variadic parameter to those function types, or wrap the constructor. |
+| `Browser.WaitDownload` | Adds a variadic `...DownloadOptions` parameter. One-argument calls still compile, but interfaces declaring the old method and variables requiring its old function type do not. | Update interface declarations and function types, or adapt the call through a wrapper. |
+
+### Build and launch
+
+| Affected | Change | Migration |
+| --- | --- | --- |
+| All modules and `go.work` | Raise the minimum Go version from 1.27.1 to 1.27.4. | Build with Go 1.27.4 or a newer supported patched compiler. |
+| `Launcher.Launch`, `LaunchNew` on Unix and ambient `-rod` configuration | Setuid, setgid and other secure-execution states now reject these launches with `ErrSecureExecution` and disable ambient configuration. | Run automation without credential transitions; pass trusted configuration explicitly instead of relying on ambient flags in such processes. |
+| Linux launch in restricted environments | Requires readable `/proc/self/auxv`, `/proc/self/exe` and the parent's `/proc/<pid>/exe`, Unix socket peer/message credentials, and the kernel `/dev/urandom` device. Owned-profile cleanup also needs `/proc/self/fd`. Missing or unreadable auxiliary-vector data rejects launch. | Provide these facilities in the runtime environment; see [platform requirements](PLATFORM_SUPPORT.md#platform-requirements-and-known-gaps). |
+| Linux applications whose executable is replaced while running | A replacement file fails guardian executable-identity validation even when built from the same version. Previously a compatible replacement could launch the guardian. | Restart the application after replacing its executable and before launching another browser. |
+| Local launch on macOS and other non-Linux Unix systems | Launches directly in a process group instead of using a supervisor. Application death no longer triggers browser/profile cleanup. | Close the browser and call `Launcher.Cleanup` before exiting. Use an external supervisor when cleanup after application failure is required. |
+| Browser `TMPDIR` on non-Linux Unix systems | Passes through the configured or inherited value instead of supplying and removing a private scratch directory. | Provide a private temporary directory through `Launcher.Env` and arrange its cleanup when that isolation is required. |
+| `Launcher.StartURL`, positional launch arguments, `launcher.Open` | Relative paths, switch-shaped values and schemes outside `http`, `https`, `about`, `file`, `data`, `chrome` and `chrome-extension` now fail with `ErrInvalidURL`. | Supply an absolute supported URL, convert local paths to `file:` URLs, and use `Launcher.Set` for switches. |
+| `Launcher.FormatArgs` and multi-URL launches | Preserve the supplied positional URL order after sorted switches. Previously all arguments, including URLs, were sorted together. | Supply URLs in the desired opening order; update callers that depend on globally sorted argument output. |
+| `launcher.New` sandbox default in containers | No longer adds `--no-sandbox` automatically. Environments that cannot start Chrome's sandbox now fail to launch. | Use a sandbox-capable environment, or explicitly call `NoSandbox(true)` when accepting an unsandboxed browser. |
+| `launcher.New` site isolation, popup and IPC defaults | No longer disables site isolation, popup blocking or IPC flooding protection. Cross-site frames may use separate targets, popups without user activation may be blocked, and rapid navigation may be throttled. | Handle cross-site frame sessions and use user activation for popup workflows. Use `Launcher.Set` for an intentional protection opt-out. |
+| `Launcher.Launch`, `MustLaunch`, auto-launching `Browser.Connect` | No longer adopt an existing fixed-port endpoint; an occupied port returns `ErrDebuggingPortInUse`. | Attach explicitly using a trusted `ControlURL` or `Client`, or launch with port 0. |
+| `launcher.NewUserMode` | Changes the default debugging port from 37712 to 0, requesting a random port. | Use the endpoint returned by launch, or set an available port explicitly with `RemoteDebuggingPort`. |
+| `launcher.NewManaged`, `MustNewManaged` service URLs | Require HTTPS/WSS even on loopback and reject URL userinfo. An empty URL now selects `https://localhost:7317` instead of `ws://127.0.0.1:7317`; rejected URLs return `ErrManagerInsecureTransport`. | Serve TLS with `rod-manager -tls-cert=... -tls-key=...` or a TLS proxy. Remove URL userinfo and use the token argument for authentication. Supply private CA trust through `ManagerClientOptions.TLSConfig`. |
+| Managed-client HTTP configuration | Settings requests use a dedicated client and transport instead of inheriting `http.DefaultClient` and `http.DefaultTransport` customizations, including timeouts, cookies and TLS settings. | Move TLS roots and client certificates to `ManagerClientOptions.TLSConfig`, and set deadlines on the supplied context. Deployments depending on other global client behavior must support the dedicated transport. |
+
+### Page capabilities and networking
+
+| Affected | Change | Migration |
+| --- | --- | --- |
+| `Page.Expose`, `Page.MustExpose` frame scope | Calls from other frames sharing the target no longer invoke the callback; the default accepts only the receiver frame. | Use `ExposeWithOptions` with explicit `Frames`, or `AllFrames` when every frame sharing the target is trusted. |
+| Exposed-function payloads and replies | Previously unbounded binding payloads and encoded replies default to 1 MiB each. Oversized payloads are ignored and reported to `onError`; oversized replies reject the JavaScript promise. Pending replies are capped at 1024 entries / 16 MiB, in addition to the sending batch; queue overflow ends the exposure. | Set `ExposeOptions.MaxPayloadBytes` and `MaxReplyBytes` for larger values. Limit outstanding JavaScript calls, handle `onError`, and call the stop function after termination. Configure event ingress with `EventBuffer` as described below. |
+| `Hijack.LoadResponse`, `MustLoadResponse` clients and destinations | Non-nil clients now fail with `ErrHijackUnsafeClient`. Nil uses a dedicated direct client instead of `http.DefaultClient`, ignores environment proxies and rejects private or special-purpose destinations. | Use `ContinueRequest` to let the browser fetch, or call `LoadResponseUnsafe` with an explicit client and network policy for trusted requests needing internal destinations, proxies or custom transport settings. |
+| `Hijack.LoadResponse`, `MustLoadResponse` request budgets | Add a 30-second total timeout, shorter connection/handshake/header deadlines, and a process-wide maximum of eight concurrent safe fetches. Excess calls fail with `ErrHijackConcurrency`. | Bound concurrent fetches and handle deadline errors. Use `ContinueRequest`, or an explicitly configured unsafe client when different budgets are required. |
+| `Hijack.FollowRedirects` when true | Safe loading rejects redirects to another origin instead of following the HTTP client's broader redirect policy. Origin includes scheme, host and effective port. | Handle `ErrHijackNetworkPolicy`, or use `LoadResponseUnsafe` with a client whose `CheckRedirect` enforces the required destination policy. |
+| Hijack routers | Previously unlimited concurrent handlers default to 64 per router, including response fulfillment. Excess paused requests fail and report `ErrHijackConcurrency`. | Configure `MaxConcurrentRequests` for the workload and observe `OnError`. |
+| `Page.HandleFileDialog` | Other frames' choosers no longer satisfy the wait; receiver-frame navigation aborts it with `ErrFrameContextChanged`. | Use the intended iframe's `Page`, re-arm after navigation, or use `Element.SetFiles` for a known input. |
+| `Browser.WaitDownload`, `Browser.MustWaitDownload` limits | Previously unbounded waits default to 64 MiB and two minutes from setup. Excess reported size returns `ErrDownloadTooLarge`; the deadline ends the wait. `MustWaitDownload` also limits its file read to 64 MiB. | Supply positive `DownloadOptions.MaxBytes` and `Timeout` for larger or slower downloads. Use `MustWaitDownloadWithInfo` when the convenience read needs different limits. |
+| `Browser.WaitDownload`, `Browser.MustWaitDownload` timing and cancellation | Processing starts at setup, and completion or timeout restores download behavior even before the returned function is called. Previously processing waited for that call. Observed additional downloads are canceled while the wait is active; failure or cancellation also cancels the selected transfer instead of only restoring download behavior. | Arm immediately before triggering the intended download and keep the wait alive while its transfer is needed. Use separate browser contexts for independent downloads instead of relying on one wait to leave additional downloads running. |
+
+### Resource limits and output
+
+| Affected | Change | Migration |
+| --- | --- | --- |
+| Event streams, waits and diagnostics | Previously unbounded subscriptions default to 4096 queued events / 16 MiB of protocol payload. Overflow closes the subscription and discards queued events; waits return `ErrEventOverflow`, diagnostics return `ErrDiagnosticsIncomplete`, and an overflowing internal page relay ends its page session. | Configure `EventBuffer` before connecting for internal subscriptions; use `EventWithContext` and inspect `context.Cause` for public streams. Consume promptly and cancel abandoned streams. |
+| `Page.Screenshot`, `Page.ScrollScreenshot`, `Element.Screenshot` and their `Must` helpers | Add a 33,554,432-pixel budget and a 32768-device-pixel dimension limit for full-page/clipped preflight and returned PNG/JPEG images. Encoded captures are capped at 64 MiB; scroll capture also caps aggregate tile bytes. Previously accepted larger captures fail. | Capture smaller regions and handle `ErrScreenshotTooLarge` / `ErrCaptureTooLarge`. Use direct protocol calls with your own budgets when larger captures are required. |
+| `Page.PDF`, `Page.MustPDF` | PDF readers default to a 64 MiB limit instead of being unbounded; excess data returns `ErrCaptureTooLarge`. | For larger PDFs, use `Page.PDF` and set the returned reader's `MaxBytes` before reading; zero disables the limit. Close the reader after use. |
+| Screenshot/PDF `Must` helpers that write files | Existing output paths now fail instead of being overwritten. New Unix files/directories use modes `0600`/`0700` instead of `0664`/`0775`, before umask. | Choose a fresh filename, or write the returned bytes explicitly when overwriting or different permissions are required. |
+| Monitor HTTP clients | Adds five-second request-read and 30-second idle-connection timeouts, and lowers the configured header limit from 1 MiB to 32 KiB. | Keep headers within the limit, send requests within five seconds and reconnect after an idle connection closes. |
+| `examples/custom-websocket` | Previously unbounded complete messages, including fragmented messages, default to a 256 MiB limit. Overflow returns `cdp.ErrWebSocketMessageTooLarge` and closes with status 1009. | Set a positive `MaxMessageSize` when adapting the example for larger messages. |
+
+### Protocol bindings
+
+The generated `proto` API uses Chrome `158.0.8127.36` instead of
+`152.0.7977.64`. Names below belong to `proto`. Removed commands also lose their
+`Call` and `ProtoReq` methods; removed events lose `ProtoEvent`.
+
+| Affected | Change | Migration |
+| --- | --- | --- |
+| `NetworkSetRequestInterception`, `NetworkRequestIntercepted`, `NetworkContinueInterceptedRequest`, `NetworkGetResponseBodyForInterception`, `NetworkTakeResponseBodyForInterceptionAsStream` and their result types; `NetworkInterceptionID`, `NetworkInterceptionStage` and its constants, `NetworkRequestPattern` | Removed with the legacy Network interception API. | Use `FetchEnable` / `FetchRequestPattern`, `FetchRequestPaused` and `FetchRequestID`. Continue, fulfill or fail through the corresponding `Fetch` commands; use `FetchGetResponseBody` or `FetchTakeResponseBodyAsStream` for bodies. Handle authentication through `FetchAuthRequired` and `FetchContinueWithAuth`. |
+| `NetworkSetAcceptedEncodings`, `NetworkClearAcceptedEncodingsOverride`, `NetworkContentEncoding` and its constants | Removed. | Remove the encoding override and use browser defaults; the captured protocol has no replacement command. |
+| `StorageGetSharedStorageMetadata`, `StorageGetSharedStorageEntries`, `StorageSetSharedStorageEntry`, `StorageDeleteSharedStorageEntry`, `StorageClearSharedStorageEntries`, `StorageResetSharedStorageBudget`, `StorageSetSharedStorageTracking`; their results and all `StorageSharedStorage*` types/constants; `StorageStorageTypeSharedStorage` | Removed with the shared-storage protocol API. | Remove these calls, event subscriptions and storage-type filters. The captured protocol has no replacement for shared-storage inspection or mutation. |
+| `StorageGetRelatedWebsiteSets`, `StorageGetRelatedWebsiteSetsResult`, `StorageRelatedWebsiteSet`; `AuditsCookieExclusionReasonExcludeThirdPartyCookieBlockedInFirstPartySet`, `NetworkCookieBlockedReasonThirdPartyBlockedInFirstPartySet`, `NetworkSetCookieBlockedReasonThirdPartyBlockedInFirstPartySet` | Related Website Sets inspection and these cookie-reason constants are removed. | Remove the query and handling specific to these reasons; no replacement is exposed in the captured protocol. |
+| `PagePermissionsPolicyFeature` constants ending in `JoinAdInterestGroup`, `PrivateAggregation`, `RecordAdAuctionEvents`, `RunAdAuction`, `SharedStorage` and `SharedStorageSelectURL` | Removed. | Remove references to these permission-policy values. |
+| `AnimationSeekAnimations.CurrentTime` | Changes from `float64` to `*float64` and becomes optional. | Set `CurrentTime` to a pointer for one shared time, or supply `CurrentTimes` with one value per animation. Set exactly one of these fields. |
+| `WebAuthnCredential.SignCount` | Changes from `*int` to `float64` and is always serialized. Nil no longer represents an omitted counter. | Supply the counter directly, converting existing integer values; use `-1` when the credential should have no signature counter. |
+| `WebAuthnSetCredentialProperties.SignCount` | Changes from `*int` to `*float64`. | Convert the value before taking its pointer. Nil still leaves the counter unchanged; `-1` removes it. |
+| `NetworkDirectTCPSocketAborted.ErrorMessage`, `NetworkDirectUDPSocketAborted.ErrorMessage` | Change from `string` to `NetworkErrorReason`. | Use the corresponding `NetworkErrorReason` constants, or explicit conversions when reading or supplying strings. |
+| `PageFileHandler.Icons` | Removed. | Remove this field from literals and code reading file-handler icons; the captured manifest model no longer exposes them. |
+
+Non-empty positional struct literals also stop compiling where fields are
+added: `AuditsInspectorIssueDetails`, `DebuggerEvaluateOnCallFrame`,
+`DebuggerScope`, `DebuggerStepOver`, `EmulationSetDeviceMetricsOverride`,
+`NetworkDirectUDPSocketJoinedMulticastGroup`,
+`NetworkDirectUDPSocketLeftMulticastGroup`, `NetworkLoadingFinished`,
+`OverlayHighlightConfig`, `PageGetAppIDResult`, `PageScreencastFrameMetadata`,
+`PageStartScreencast`, `PreloadPrerenderStatusUpdated`,
+`ServiceWorkerServiceWorkerVersion`, `WebAudioBaseAudioContext` and
+`WebMCPAnnotation`. Convert those literals to keyed fields. Empty literals and
+existing keyed literals remain valid for these additions.
+
 ## v0.128.0 — compared with v0.127.0
 
 The counts and timings in this section were measured with Go 1.27.3 on

@@ -16,8 +16,10 @@ cleanup, the container provider may retain that test container.
 
 The manager keeps its loopback-only default and no container port is exposed.
 Testcontainers executes the integration client inside the same container. The
-client verifies that an unauthenticated request is rejected before connecting
-with an ephemeral bearer token.
+client trusts an ephemeral test certificate, verifies that an unauthenticated
+HTTPS request is rejected, and connects with an ephemeral bearer token. The
+manager serves TLS directly with `-tls-cert` and `-tls-key`. The container runs
+Chrome as root, so this test explicitly requests `NoSandbox(true)`.
 
 Run it from the repository root with `go.work` enabled:
 

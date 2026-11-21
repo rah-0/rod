@@ -44,9 +44,18 @@ func captureResponse(page *rod.Page, url string, trigger func(*rod.Page) error) 
 		if discardPage {
 			// A locally timed-out CDP body read may still be running in Chrome.
 			// Close this dedicated target instead of racing it with Fetch calls.
-			closed, closeErr := (proto.TargetCloseTarget{TargetID: page.TargetID}).Call(page.Browser().Context(cleanup))
-			if closeErr == nil && !closed.Success {
-				closeErr = errors.New("browser did not close the dedicated capture page")
+			// The command acknowledges closure before destruction finishes.
+			browser := page.Browser().Context(cleanup)
+			waitClosed := browser.EachEvent(rod.On(func(event *proto.TargetTargetDestroyed, _ proto.TargetSessionID) bool {
+				return event.TargetID == page.TargetID
+			}))
+			closed, closeErr := (proto.TargetCloseTarget{TargetID: page.TargetID}).Call(browser)
+			if closeErr != nil {
+				closeErr = fmt.Errorf("close dedicated capture page %s: %w", page.TargetID, closeErr)
+			} else if !closed.Success {
+				closeErr = fmt.Errorf("browser did not close dedicated capture page %s", page.TargetID)
+			} else if waitErr := waitClosed(); waitErr != nil {
+				closeErr = fmt.Errorf("wait for dedicated capture page %s destruction: %w", page.TargetID, waitErr)
 			}
 			err = errors.Join(err, closeErr)
 		} else {

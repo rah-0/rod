@@ -546,6 +546,7 @@ var lenientCases = []lenientCase{
 				return nil, err
 			}
 			bind := env.client.params("Runtime.addBinding")[0].(proto.RuntimeAddBinding).Name
+			env.emit("session", "Runtime.executionContextCreated", `{"context":{"id":5,"origin":"https://example.test","name":"","uniqueId":"document","auxData":{"isDefault":true,"frameId":"page"}}}`)
 			env.emit("session", "Runtime.bindingCalled", lenientBindingCall(bind, 0, 1))
 			env.emit("session", "Runtime.bindingCalled", lenientBindingCall(bind, 5, 2))
 			request := <-requests

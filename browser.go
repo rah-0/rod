@@ -626,13 +626,14 @@ func (b *Browser) eachEventWithSession(sessionID proto.TargetSessionID, sessionC
 	cancel := func() { stopSession(); stopConnection() }
 	b = b.Context(ctx)
 	// Subscribe before enabling domains: Runtime.enable can emit buffered events.
-	messages := b.event.SubscribeFilter(ctx, func(msg *Message) bool {
+	ctx, messages := b.event.SubscribeContext(ctx, func(msg *Message) bool {
 		if sessionID != "" && msg.SessionID != sessionID {
 			return false
 		}
 		_, ok := callbacks[msg.Method]
 		return ok
 	})
+	b = b.Context(ctx)
 	var releases []func(context.Context) error
 	var setupErr error
 	for _, handler := range handlers {
@@ -673,10 +674,19 @@ func (b *Browser) eachEventWithSession(sessionID proto.TargetSessionID, sessionC
 			err = errors.Join(err, restoreErr)
 		}()
 		if setupErr != nil {
+			if errors.Is(context.Cause(ctx), ErrEventOverflow) {
+				return errors.Join(setupErr, ErrEventOverflow)
+			}
 			return setupErr
 		}
 		for msg := range messages {
+			if cause := context.Cause(b.ctx); errors.Is(cause, ErrEventOverflow) {
+				return cause
+			}
 			if stop, err := callbacks[msg.Method](msg); stop {
+				if cause := context.Cause(b.ctx); errors.Is(cause, ErrEventOverflow) {
+					return errors.Join(err, cause)
+				}
 				return err
 			}
 		}
@@ -697,11 +707,9 @@ func (b *Browser) eachEventWithSession(sessionID proto.TargetSessionID, sessionC
 }
 
 // Event subscribes to every browser event until the browser context or the
-// connection ends. The stream is ordered, lossless, and unbounded: events that
-// have not been read are kept in memory. Keep reading, or cancel the context
-// given to [Browser.Context], to release the subscription. Leaving a range loop
-// early without canceling keeps the subscription and its growing backlog until
-// that context or the connection ends.
+// connection ends, or its budget is exceeded. The stream is ordered. Use
+// [Browser.EventWithContext] to inspect overflow and [Browser.EventBuffer] to
+// configure budgets. Cancel the context when leaving a range loop early.
 func (b *Browser) Event() <-chan *Message {
 	return b.event.Subscribe(b.ctx)
 }
@@ -796,6 +804,49 @@ var ErrDownloadCanceled = errors.New("rod: download canceled")
 // download directory.
 var ErrDownloadGUID = errors.New("rod: download GUID is not a single local file name")
 
+// ErrDownloadTooLarge means a download exceeded its configured byte budget.
+var ErrDownloadTooLarge = errors.New("rod: download exceeds byte limit")
+
+// DefaultDownloadMaxBytes bounds downloads and convenience reads to 64 MiB.
+const DefaultDownloadMaxBytes int64 = 64 << 20
+
+// DownloadOptions filters the browser-reported provenance before accepting a
+// download. Observed nonmatching and additional downloads in the context are canceled.
+// Zero MaxBytes and Timeout select 64 MiB and two minutes; values must be positive.
+// Match receives a copy of browser metadata on the download worker and must
+// return promptly. Progress reports enforce MaxBytes; use host disk quotas for
+// a hard storage limit because Chrome may write bytes before reporting them.
+type DownloadOptions struct {
+	FrameID           proto.PageFrameID
+	URL               string
+	SuggestedFilename string
+	Match             func(proto.BrowserDownloadWillBegin) bool
+	MaxBytes          int64
+	Timeout           time.Duration
+}
+
+type downloadResult struct {
+	info *proto.BrowserDownloadWillBegin
+	err  error
+}
+
+// WaitDownload accepts downloads from this frame only. For hostile workflows,
+// dedicate an incognito context as Chrome's download behavior is context-wide.
+func (p *Page) WaitDownload(dir string, options ...DownloadOptions) (func() (*proto.BrowserDownloadWillBegin, error), error) {
+	if p.FrameID == "" {
+		return nil, errors.New("rod: download wait requires a frame ID")
+	}
+	var opts DownloadOptions
+	if len(options) > 1 {
+		return nil, errors.New("rod: expected at most one DownloadOptions")
+	}
+	if len(options) == 1 {
+		opts = options[0]
+	}
+	opts.FrameID = p.FrameID
+	return p.browser.Context(p.ctx).WaitDownload(dir, opts)
+}
+
 // A download GUID names the saved file inside the download directory. Reject
 // separators for every OS, and colons, which select Windows drives or streams.
 func validDownloadGUID(guid string) bool {
@@ -835,9 +886,14 @@ func (events *downloadEvents) lock(ctx context.Context) error {
 
 func (events *downloadEvents) unlock() { <-events.gate }
 
-// WaitDownload configures downloads and subscribes before returning. Invoke its
-// single-use wait after triggering a download; it returns the first download in
-// this browser context when that GUID completes, or an error on cancellation.
+// WaitDownload configures downloads and starts processing events before returning.
+// Invoke its single-use wait after triggering a download; it returns the first
+// matching download in this browser context when that GUID completes, or an
+// error on cancellation. Options filter provenance and bound size and duration.
+// Without filters any page in the context can supply the result; prefer
+// Page.WaitDownload for an initiating frame. Observed nonmatching and additional
+// downloads in this context are canceled. Chrome may have already written files
+// before reporting them; callers own cleanup of dir on the browser's host.
 // Files are saved as filepath.Join(dir, info.GUID); use a directory that other
 // local users cannot write, such as one from os.MkdirTemp. The wait returns an
 // error matching ErrDownloadGUID, without the download, when the browser reports
@@ -845,9 +901,25 @@ func (events *downloadEvents) unlock() { <-events.gate }
 // configure a browser context at once. Both completion and context cancellation
 // restore the previous behavior, using an independent five-second cleanup budget.
 // Browser download events remain enabled until the last concurrent context
-// waiter stops. Until the wait is invoked or the context ends, the subscription
-// keeps target and download events in memory.
-func (b *Browser) WaitDownload(dir string) (func() (*proto.BrowserDownloadWillBegin, error), error) {
+// waiter stops. Events are processed even before the returned function runs;
+// timeout restores the behavior even when that function is never called.
+func (b *Browser) WaitDownload(dir string, options ...DownloadOptions) (func() (*proto.BrowserDownloadWillBegin, error), error) {
+	var opts DownloadOptions
+	if len(options) > 1 {
+		return nil, errors.New("rod: expected at most one DownloadOptions")
+	}
+	if len(options) == 1 {
+		opts = options[0]
+	}
+	if opts.MaxBytes == 0 {
+		opts.MaxBytes = DefaultDownloadMaxBytes
+	}
+	if opts.Timeout == 0 {
+		opts.Timeout = 2 * time.Minute
+	}
+	if opts.MaxBytes < 0 || opts.Timeout < 0 {
+		return nil, errors.New("rod: download limits must be positive")
+	}
 	if err := b.ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -864,9 +936,11 @@ func (b *Browser) WaitDownload(dir string) (func() (*proto.BrowserDownloadWillBe
 	shared, _ := b.states.LoadOrStore(downloadEventsKey{}, &downloadEvents{gate: make(chan struct{}, 1)})
 	b.stateLock.Unlock()
 	events := shared.(*downloadEvents)
-	ctx, cancel := contextWithSession(b.ctx, b.connectionCtx)
+	parent, cancelSession := contextWithSession(b.ctx, b.connectionCtx)
+	ctx, cancelTimeout := context.WithTimeout(parent, opts.Timeout)
+	cancel := func() { cancelTimeout(); cancelSession() }
+	ctx, messages := b.event.SubscribeContext(ctx, downloadEvent)
 	browser := b.Context(ctx)
-	messages := b.event.SubscribeFilter(ctx, downloadEvent)
 	var oldBehavior proto.BrowserSetDownloadBehavior
 	if !b.LoadState("", &oldBehavior) {
 		oldBehavior = proto.BrowserSetDownloadBehavior{Behavior: proto.BrowserSetDownloadBehaviorBehaviorDefault, BrowserContextID: b.BrowserContextID}
@@ -929,11 +1003,19 @@ func (b *Browser) WaitDownload(dir string) (func() (*proto.BrowserDownloadWillBe
 		}
 	}
 	stopCleanup := context.AfterFunc(ctx, cleanup)
-	return func() (info *proto.BrowserDownloadWillBegin, err error) {
+	wait := func() (info *proto.BrowserDownloadWillBegin, err error) {
 		if messages == nil {
 			panic("can't use download wait function twice")
 		}
 		defer func() {
+			if cause := context.Cause(ctx); cause != nil {
+				err = errors.Join(err, cause)
+			}
+			if err != nil && info != nil {
+				cleanupCtx, stop := context.WithTimeout(context.WithoutCancel(b.ctx), 5*time.Second)
+				defer stop()
+				err = errors.Join(err, b.Context(cleanupCtx).cancelDownload(info.GUID))
+			}
 			cancel()
 			messages = nil
 			stopCleanup()
@@ -941,6 +1023,9 @@ func (b *Browser) WaitDownload(dir string) (func() (*proto.BrowserDownloadWillBe
 			err = errors.Join(err, cleanupErr)
 		}()
 		for message := range messages {
+			if cause := context.Cause(ctx); cause != nil {
+				return info, cause
+			}
 			var created proto.TargetTargetCreated
 			var changed proto.TargetTargetInfoChanged
 			var begin proto.BrowserDownloadWillBegin
@@ -957,14 +1042,23 @@ func (b *Browser) WaitDownload(dir string) (func() (*proto.BrowserDownloadWillBe
 			}
 			if ok, err := message.Load(&begin); err != nil {
 				return info, err
-			} else if ok && info == nil {
+			} else if ok {
 				matches, matchErr := browser.downloadInContext(begin.FrameID, contexts, incognito)
 				if matchErr != nil {
-					return nil, matchErr
+					return info, matchErr
 				}
 				if matches {
 					if !validDownloadGUID(begin.GUID) {
-						return nil, fmt.Errorf("%w: %q", ErrDownloadGUID, begin.GUID)
+						return info, fmt.Errorf("%w: %q", ErrDownloadGUID, begin.GUID)
+					}
+					if info != nil || opts.FrameID != "" && begin.FrameID != opts.FrameID ||
+						opts.URL != "" && begin.URL != opts.URL ||
+						opts.SuggestedFilename != "" && begin.SuggestedFilename != opts.SuggestedFilename ||
+						opts.Match != nil && !opts.Match(begin) {
+						if err := browser.cancelDownload(begin.GUID); err != nil {
+							return info, err
+						}
+						continue
 					}
 					info = &begin
 				}
@@ -972,19 +1066,44 @@ func (b *Browser) WaitDownload(dir string) (func() (*proto.BrowserDownloadWillBe
 			if ok, err := message.Load(&progress); err != nil {
 				return info, err
 			} else if ok && info != nil && progress.GUID == info.GUID {
+				if progress.ReceivedBytes > float64(opts.MaxBytes) || progress.TotalBytes > float64(opts.MaxBytes) {
+					return info, ErrDownloadTooLarge
+				}
 				switch progress.State {
 				case proto.BrowserDownloadProgressStateCompleted:
-					return info, nil
+					return info, context.Cause(ctx)
 				case proto.BrowserDownloadProgressStateCanceled:
 					return info, ErrDownloadCanceled
 				}
 			}
 		}
-		if err := ctx.Err(); err != nil {
+		if err := context.Cause(ctx); err != nil {
 			return info, err
 		}
 		return info, ErrBrowserDisconnected
+	}
+	result := make(chan downloadResult, 1)
+	go func() {
+		info, err := wait()
+		result <- downloadResult{info: info, err: err}
+	}()
+	var waited sync.Once
+	return func() (*proto.BrowserDownloadWillBegin, error) {
+		first := false
+		waited.Do(func() { first = true })
+		if !first {
+			panic("can't use download wait function twice")
+		}
+		download := <-result
+		return download.info, download.err
 	}, nil
+}
+
+func (b *Browser) cancelDownload(guid string) error {
+	if !validDownloadGUID(guid) {
+		return ErrDownloadGUID
+	}
+	return (proto.BrowserCancelDownload{GUID: guid, BrowserContextID: b.BrowserContextID}).Call(b)
 }
 
 // Browser download events omit the browser context. Target discovery resolves

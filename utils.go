@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,9 +34,10 @@ type Message struct {
 	SessionID proto.TargetSessionID
 	Method    string
 
-	lock  sync.Mutex
-	data  json.RawMessage
-	event any
+	lock   sync.Mutex
+	data   json.RawMessage
+	event  any
+	source *ExposedSource
 }
 
 // lenientEvent is the event of a [Message] that Load decodes with
@@ -184,12 +187,19 @@ type StreamReader struct {
 	// to the requested size as base64 in one CDP message. Zero requests len(p).
 	ChunkSize int
 
-	c      proto.Client
-	handle proto.IOStreamHandle
-	buf    []byte // received data not yet returned by Read
-	pos    int    // stream position of buf[0]
-	synced *int   // Offset whose value matches pos
-	eof    bool
+	// MaxBytes limits bytes returned by Read across all offsets. Nonpositive
+	// values permit an unlimited stream. Page.PDF sets MaxCaptureBytes.
+	// Exceeding the limit is terminal and returns ErrCaptureTooLarge.
+	MaxBytes int64
+
+	c             proto.Client
+	handle        proto.IOStreamHandle
+	buf           []byte // received data not yet returned by Read
+	pos           int    // stream position of buf[0]
+	synced        *int   // Offset whose value matches pos
+	eof           bool
+	readBytes     int64
+	limitExceeded bool
 }
 
 // NewStreamReader instance.
@@ -204,12 +214,21 @@ func (sr *StreamReader) Read(p []byte) (n int, err error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
+	if sr.limitExceeded || sr.MaxBytes > 0 && sr.readBytes > sr.MaxBytes {
+		sr.limitExceeded = true
+		sr.buf = nil
+		return 0, ErrCaptureTooLarge
+	}
 	if sr.Offset != nil && (sr.Offset != sr.synced || *sr.Offset != sr.pos) {
 		sr.buf, sr.pos, sr.eof = nil, *sr.Offset, false
 	}
 	sr.synced = sr.Offset
 	if len(sr.buf) == 0 && !sr.eof {
-		if err := sr.fill(max(len(p), sr.ChunkSize)); err != nil {
+		size := max(len(p), sr.ChunkSize)
+		if sr.MaxBytes > 0 {
+			size = min(size, int(min(sr.MaxBytes-sr.readBytes, int64(math.MaxInt-1))+1))
+		}
+		if err := sr.fill(size); err != nil {
 			return 0, err
 		}
 	}
@@ -219,7 +238,13 @@ func (sr *StreamReader) Read(p []byte) (n int, err error) {
 		}
 		return 0, nil
 	}
+	if sr.MaxBytes > 0 && int64(len(sr.buf)) > sr.MaxBytes-sr.readBytes {
+		sr.buf = nil
+		sr.limitExceeded = true
+		return 0, ErrCaptureTooLarge
+	}
 	n = copy(p, sr.buf)
+	sr.readBytes += int64(n)
 	sr.buf = sr.buf[n:]
 	if len(sr.buf) == 0 {
 		sr.buf = nil
@@ -244,11 +269,25 @@ func (sr *StreamReader) fill(size int) error {
 
 	var bin []byte
 	if res.Base64Encoded {
-		bin, err = base64.StdEncoding.DecodeString(res.Data)
+		if sr.MaxBytes > 0 {
+			remaining := sr.MaxBytes - sr.readBytes
+			decoded := base64.NewDecoder(base64.StdEncoding, strings.NewReader(res.Data))
+			bin, err = io.ReadAll(io.LimitReader(decoded, min(remaining, math.MaxInt64-1)+1))
+			if int64(len(bin)) > remaining {
+				sr.limitExceeded = true
+				return ErrCaptureTooLarge
+			}
+		} else {
+			bin, err = base64.StdEncoding.DecodeString(res.Data)
+		}
 		if err != nil {
 			return err
 		}
 	} else {
+		if sr.MaxBytes > 0 && int64(len(res.Data)) > sr.MaxBytes-sr.readBytes {
+			sr.limitExceeded = true
+			return ErrCaptureTooLarge
+		}
 		bin = []byte(res.Data)
 	}
 	if len(bin) == 0 && !res.EOF {
@@ -327,7 +366,7 @@ func saveFile(fileType saveFileType, bin []byte, toFile []string) error {
 			toFile = []string{"tmp", "pdf", stamp + ".pdf"}
 		}
 	}
-	return utils.OutputFile(filepath.Join(toFile...), bin)
+	return utils.OutputFileExclusive(filepath.Join(toFile...), bin)
 }
 
 func httHTML(w http.ResponseWriter, body string) {

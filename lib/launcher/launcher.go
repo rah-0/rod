@@ -5,10 +5,12 @@ import (
 	"context"
 	"crypto"
 	"crypto/rand"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +40,8 @@ type Launcher struct {
 	exit               chan struct{}
 	processStop        func()
 	cleanupUserDataDir string
+	cleanupParent      *os.Root
+	cleanupName        string
 	cleanupErr         error
 
 	profileRoot      *os.Root
@@ -47,12 +51,14 @@ type Launcher struct {
 	managed      bool
 	serviceURL   string
 	managerToken string
+	managerTLS   *tls.Config
 
 	isLaunched atomic.Bool
 }
 
 // New returns the default arguments to start browser.
-// Headless will be enabled by default.
+// Headless is enabled by default. Chrome's sandbox, site isolation, popup
+// blocking, and IPC flood protection remain enabled, including in containers.
 // UserDataDir defaults to a new randomly named directory directly inside
 // [os.TempDir]. Launch creates it with owner-only permissions, fails if the
 // path already exists, and removes it when the browser exits.
@@ -85,8 +91,7 @@ func New() *Launcher {
 		"no-first-run":      nil,
 		"no-startup-window": nil,
 
-		// TODO: about the "site-per-process" see https://github.com/puppeteer/puppeteer/issues/2548
-		"disable-features": {"site-per-process", "TranslateUI"},
+		"disable-features": {"TranslateUI"},
 
 		"disable-dev-shm-usage":                              nil,
 		"disable-background-networking":                      nil,
@@ -97,12 +102,9 @@ func New() *Launcher {
 		"disable-component-extensions-with-background-pages": nil,
 		"disable-default-apps":                               nil,
 		"disable-hang-monitor":                               nil,
-		"disable-ipc-flooding-protection":                    nil,
-		"disable-popup-blocking":                             nil,
 		"disable-prompt-on-repost":                           nil,
 		"disable-renderer-backgrounding":                     nil,
 		"disable-sync":                                       nil,
-		"disable-site-isolation-trials":                      nil,
 		"enable-automation":                                  nil,
 		"enable-features":                                    {"NetworkService", "NetworkServiceInProcess"},
 		"force-color-profile":                                {"srgb"},
@@ -115,9 +117,6 @@ func New() *Launcher {
 	}
 	if defaults.Devtools {
 		defaultFlags["auto-open-devtools-for-tabs"] = nil
-	}
-	if inContainer {
-		defaultFlags[flags.NoSandbox] = nil
 	}
 	if defaults.Proxy != "" {
 		defaultFlags[flags.ProxyServer] = []string{defaults.Proxy}
@@ -141,7 +140,8 @@ func New() *Launcher {
 // remote-debugging switches for the default Chrome data directory; closing an
 // existing browser does not remove that restriction. Set [Launcher.UserDataDir]
 // to a separate, non-default automation directory and sign in there separately.
-// An explicitly supplied directory remains caller-owned after cleanup.
+// An explicitly supplied directory remains caller-owned after cleanup. The
+// debugging port is random by default; no existing endpoint is adopted.
 // See https://developer.chrome.com/blog/remote-debugging-port.
 func NewUserMode() *Launcher {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -151,7 +151,7 @@ func NewUserMode() *Launcher {
 		ctx:       ctx,
 		ctxCancel: cancel,
 		Flags: map[flags.Flag][]string{
-			flags.RemoteDebuggingPort: {"37712"},
+			flags.RemoteDebuggingPort: {"0"},
 			"no-startup-window":       nil,
 			flags.Bin:                 {bin},
 		},
@@ -371,7 +371,9 @@ func (l *Launcher) Env(env ...string) *Launcher {
 	return l.Set(flags.Env, env...)
 }
 
-// StartURL to launch.
+// StartURL sets the initial URL. Launch rejects malformed URLs and switch-shaped
+// values with ErrInvalidURL; supported schemes are http, https, about, file, data,
+// chrome, and chrome-extension.
 func (l *Launcher) StartURL(u string) *Launcher {
 	return l.Set("", u)
 }
@@ -402,8 +404,8 @@ func (l *Launcher) FormatArgs() []string {
 		execArgs = append(execArgs, str)
 	}
 
-	execArgs = append(execArgs, l.Flags[flags.Arguments]...)
 	slices.Sort(execArgs)
+	execArgs = append(execArgs, l.Flags[flags.Arguments]...)
 	return execArgs
 }
 
@@ -424,7 +426,9 @@ func (l *Launcher) MustLaunch() string {
 	return u
 }
 
-// Launch a standalone temp browser instance and returns the debug url.
+// Launch starts a new browser process and returns its debug URL. A configured
+// debugging port that is already occupied returns ErrDebuggingPortInUse.
+// To connect to an existing browser, use its explicitly selected ControlURL.
 // bin and profileDir are optional, set them to empty to use the default values.
 // If you want to reuse sessions, such as cookies, set the [Launcher.UserDataDir] to the same location.
 //
@@ -450,7 +454,7 @@ func (l *Launcher) LaunchNew(ctx context.Context) (string, error) {
 	return l.launch(ctx, false)
 }
 
-func (l *Launcher) launch(ctx context.Context, reuse bool) (u string, err error) {
+func (l *Launcher) launch(ctx context.Context, includeOutput bool) (u string, err error) {
 	if l.hasLaunched() {
 		return "", ErrAlreadyLaunched
 	}
@@ -479,6 +483,12 @@ func (l *Launcher) launch(ctx context.Context, reuse bool) (u string, err error)
 		return "", err
 	}
 
+	for _, argument := range l.Flags[flags.Arguments] {
+		if err := validateURL(argument); err != nil {
+			return "", err
+		}
+	}
+
 	bin, err := l.getBin()
 	if err != nil {
 		return "", err
@@ -486,18 +496,11 @@ func (l *Launcher) launch(ctx context.Context, reuse bool) (u string, err error)
 
 	port := l.Get(flags.RemoteDebuggingPort)
 	if port != "" && port != "0" {
-		if reuse {
-			u, err := ResolveURL(l.ctx, port)
-			if err == nil {
-				return u, nil
-			}
-		} else {
-			listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", port))
-			if err != nil {
-				return "", fmt.Errorf("%w: %s: %w", ErrDebuggingPortInUse, port, err)
-			}
-			_ = listener.Close()
+		listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", port))
+		if err != nil {
+			return "", fmt.Errorf("%w: %s: %w", ErrDebuggingPortInUse, port, err)
 		}
+		_ = listener.Close()
 	}
 	// Snapshot the owned path before starting the process. Never remove a
 	// directory selected later by a caller changing launch options.
@@ -509,10 +512,17 @@ func (l *Launcher) launch(ctx context.Context, reuse bool) (u string, err error)
 		// A pre-existing path, including a symlink, belongs to somebody else,
 		// even if it happens to match the random default. Establish ownership
 		// only after creation.
-		if err := os.Mkdir(profile, 0o700); err != nil {
+		parent, err := os.OpenRoot(filepath.Dir(profile))
+		if err != nil {
+			return "", err
+		}
+		name := filepath.Base(profile)
+		if err := parent.Mkdir(name, 0o700); err != nil {
+			_ = parent.Close()
 			return "", err
 		}
 		l.cleanupUserDataDir = profile
+		l.cleanupParent, l.cleanupName = parent, name
 	}
 	if l.cleanupUserDataDir == "" {
 		if err := l.setupUserPreferences(); err != nil {
@@ -539,7 +549,7 @@ func (l *Launcher) launch(ctx context.Context, reuse bool) (u string, err error)
 
 	if err == nil {
 		u, err = l.getURL()
-		if err != nil && !reuse && l.ctx.Err() == nil && l.exited() {
+		if err != nil && !includeOutput && l.ctx.Err() == nil && l.exited() {
 			// The owned API reports output through its explicitly bounded tail.
 			// Avoid embedding the parser's separate startup buffer as well.
 			err = ErrDevToolsUnavailable
@@ -693,10 +703,12 @@ func (l *Launcher) CleanupContext(ctx context.Context) error {
 func (l *Launcher) Done() <-chan struct{} { return l.exit }
 
 func (l *Launcher) removeUserDataDir() error {
-	if l.cleanupUserDataDir != "" {
-		if err := os.RemoveAll(l.cleanupUserDataDir); err != nil {
-			return fmt.Errorf("remove browser profile %q: %w", l.cleanupUserDataDir, err)
-		}
+	if l.cleanupParent == nil {
+		return nil
+	}
+	defer l.cleanupParent.Close()
+	if err := l.cleanupParent.RemoveAll(l.cleanupName); err != nil {
+		return fmt.Errorf("remove browser profile %q: %w", l.cleanupUserDataDir, err)
 	}
 	return nil
 }
@@ -743,4 +755,26 @@ func (tail *outputTail) Write(data []byte) (int, error) {
 		tail.data = append(tail.data, data...)
 	}
 	return n, nil
+}
+
+// validateURL rejects every value that Chromium can interpret as a switch,
+// including its platform-specific whitespace and slash prefixes.
+func validateURL(value string) error {
+	if managerArgumentIsSwitch(value) {
+		return ErrInvalidURL
+	}
+	u, err := url.Parse(value)
+	if err != nil || u.Scheme == "" {
+		return ErrInvalidURL
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+		if u.Hostname() == "" {
+			return ErrInvalidURL
+		}
+	case "about", "file", "data", "chrome", "chrome-extension":
+	default:
+		return ErrInvalidURL
+	}
+	return nil
 }

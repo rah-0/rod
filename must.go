@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rah-0/rod/lib/devices"
@@ -119,32 +120,94 @@ func (b *Browser) MustSetCookies(cookies ...*proto.NetworkCookie) *Browser {
 
 // MustWaitDownload is similar to [Browser.WaitDownload]. Each call saves the
 // download in a new temporary directory from [os.MkdirTemp], which is private on
-// Unix. The returned function reads the whole file into memory and removes that
-// directory, including when the wait fails. Call it once to release the
-// directory.
+// Unix. Reads are limited to DefaultDownloadMaxBytes. Use
+// Browser.MustWaitDownloadWithInfo to retain provenance, or Page.MustWaitDownload
+// to also restrict the initiating frame. Call the result once to remove the
+// directory, including when the wait fails.
 func (b *Browser) MustWaitDownload() func() []byte {
+	wait := b.MustWaitDownloadWithInfo()
+	return func() []byte {
+		_, data := wait()
+		return data
+	}
+}
+
+// MustWaitDownload waits for this frame's download, returning its provenance and
+// bytes. Its temporary directory is removed when the returned function runs.
+func (p *Page) MustWaitDownload(options ...DownloadOptions) func() (*proto.BrowserDownloadWillBegin, []byte) {
+	var opts DownloadOptions
+	if len(options) > 1 || p.FrameID == "" {
+		p.e(errors.New("rod: page download requires a frame and at most one DownloadOptions"))
+		return func() (*proto.BrowserDownloadWillBegin, []byte) { return nil, nil }
+	}
+	if len(options) == 1 {
+		opts = options[0]
+	}
+	opts.FrameID = p.FrameID
+	return p.browser.Context(p.ctx).MustWaitDownloadWithInfo(opts)
+}
+
+// MustWaitDownloadWithInfo is WaitDownload with a private temporary directory
+// and a bounded read. It retains browser metadata for provenance checks.
+func (b *Browser) MustWaitDownloadWithInfo(options ...DownloadOptions) func() (*proto.BrowserDownloadWillBegin, []byte) {
 	dir, err := os.MkdirTemp("", "rod-download-")
 	if err != nil {
 		b.e(err)
-		return func() []byte { return nil }
+		return func() (*proto.BrowserDownloadWillBegin, []byte) { return nil, nil }
 	}
-	wait, err := b.WaitDownload(dir)
+	wait, err := b.WaitDownload(dir, options...)
 	if err != nil {
 		_ = os.RemoveAll(dir)
 		b.e(err)
-		return func() []byte { return nil }
+		return func() (*proto.BrowserDownloadWillBegin, []byte) { return nil, nil }
 	}
-
-	return func() []byte {
-		defer func() { _ = os.RemoveAll(dir) }()
+	limit := DefaultDownloadMaxBytes
+	if len(options) == 1 && options[0].MaxBytes != 0 {
+		limit = options[0].MaxBytes
+	}
+	result := make(chan downloadResult, 1)
+	go func() {
 		info, err := wait()
 		if err != nil {
-			b.e(err)
-			return nil
+			_ = os.RemoveAll(dir)
 		}
-		data, err := os.ReadFile(filepath.Join(dir, info.GUID))
+		result <- downloadResult{info: info, err: err}
+	}()
+	var waited sync.Once
+
+	return func() (*proto.BrowserDownloadWillBegin, []byte) {
+		first := false
+		waited.Do(func() { first = true })
+		if !first {
+			panic("can't use download wait function twice")
+		}
+		defer func() { _ = os.RemoveAll(dir) }()
+		download := <-result
+		info, err := download.info, download.err
+		if err != nil {
+			b.e(err)
+			return info, nil
+		}
+		file, err := os.Open(filepath.Join(dir, info.GUID))
+		if err != nil {
+			b.e(err)
+			return info, nil
+		}
+		defer file.Close()
+		data, err := io.ReadAll(io.LimitReader(file, limit))
+		if err == nil {
+			var extra [1]byte
+			if n, readErr := file.Read(extra[:]); n != 0 {
+				err = ErrDownloadTooLarge
+			} else if readErr != nil && readErr != io.EOF {
+				err = readErr
+			}
+		}
 		b.e(err)
-		return data
+		if err != nil {
+			return info, nil
+		}
+		return info, data
 	}
 }
 
@@ -434,6 +497,7 @@ func (p *Page) MustScrollScreenshot(toFile ...string) []byte {
 func (p *Page) MustPDF(toFile ...string) []byte {
 	r, err := p.PDF(&proto.PagePrintToPDF{})
 	p.e(err)
+	defer r.Close()
 	bin, err := io.ReadAll(r)
 	p.e(err)
 
@@ -1211,10 +1275,16 @@ func (r *HijackRouter) MustStop() {
 	r.browser.e(r.Stop())
 }
 
-// MustLoadResponse is similar to [Hijack.LoadResponse] with http.DefaultClient,
+// MustLoadResponse is similar to [Hijack.LoadResponse] with its safe client,
 // loading the body. It uses the Hijack's FollowRedirects setting and size limits.
 func (h *Hijack) MustLoadResponse() {
-	h.browser.e(h.LoadResponse(http.DefaultClient, true))
+	h.browser.e(h.LoadResponse(nil, true))
+}
+
+// MustLoadResponseUnsafe is similar to [Hijack.LoadResponseUnsafe] with
+// http.DefaultClient, loading the body. It permits access to internal services.
+func (h *Hijack) MustLoadResponseUnsafe() {
+	h.browser.e(h.LoadResponseUnsafe(http.DefaultClient, true))
 }
 
 // MustEqual is similar to [Element.Equal].

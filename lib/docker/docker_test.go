@@ -2,8 +2,15 @@ package docker
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"io"
+	"math/big"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,6 +53,7 @@ func TestManagerImage(t *testing.T) {
 	}
 	managerBinary := buildBinary(t, ctx, repoRoot, "./lib/launcher/rod-manager", "rod-manager")
 	clientBinary := buildBinary(t, ctx, ".", "./fixtures/manager-client", "rod-manager-client")
+	certificate, key := managerCertificate(t)
 
 	managerContainer, err := testcontainers.Run(
 		ctx,
@@ -60,10 +68,14 @@ func TestManagerImage(t *testing.T) {
 			HostFilePath:      clientBinary,
 			ContainerFilePath: clientBinaryInTest,
 			FileMode:          0o755,
+		}, testcontainers.ContainerFile{
+			HostFilePath: certificate, ContainerFilePath: "/manager.crt", FileMode: 0o600,
+		}, testcontainers.ContainerFile{
+			HostFilePath: key, ContainerFilePath: "/manager.key", FileMode: 0o600,
 		}),
 		testcontainers.WithEntrypoint(managerBinaryInTest),
 		testcontainers.WithEnv(map[string]string{launcher.ManagerTokenEnv: authToken}),
-		testcontainers.WithCmd("-rod=bin=/headless-shell/headless-shell"),
+		testcontainers.WithCmd("-rod=bin=/headless-shell/headless-shell", "-tls-cert=/manager.crt", "-tls-key=/manager.key"),
 		testcontainers.WithWaitStrategy(wait.ForLog("[rod-manager] listening on:")),
 	)
 	testcontainers.CleanupContainer(t, managerContainer)
@@ -91,6 +103,37 @@ func TestManagerImage(t *testing.T) {
 		t.Fatal("browser returned an empty product version")
 	}
 	t.Logf("tested %s from %s", product, chromiumImage)
+}
+
+func managerCertificate(t *testing.T) (string, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "manager test"},
+		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
+		KeyUsage:    x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	certFile, keyFile := filepath.Join(dir, "manager.crt"), filepath.Join(dir, "manager.key")
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return certFile, keyFile
 }
 
 func buildBinary(t *testing.T, ctx context.Context, dir, pkg, name string) string {

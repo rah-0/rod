@@ -45,6 +45,19 @@ not fail the check when the protocol is unchanged. The browser test script also
 runs runtime tests when the freshness check fails, so both protocol changes and
 failures in exercised APIs are visible.
 
+Generation and tests must select the same browser. On Linux, discovery checks
+`chrome` on `PATH` first. To use a separate browser installation for both:
+
+```sh
+export PATH="/path/to/chrome-linux64:$PATH"
+go run ./lib/proto/generate
+bash scripts/check.sh browser
+```
+
+An older browser can be runtime-compatible with the checked-in bindings while
+its schema differs. Update that browser before checking freshness; regenerating
+against the older version would remove bindings for newer protocol features.
+
 If the environment requires disabling sandboxing for protocol capture, opt in
 with `ROD_PROTOCOL_NO_SANDBOX=1 bash scripts/check.sh browser`. Direct generation
 and checks accept `-no-sandbox`; sandboxing is enabled by default.

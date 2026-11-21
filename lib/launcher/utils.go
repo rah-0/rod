@@ -7,11 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/url"
-
-	"github.com/rah-0/rod/lib/utils"
 )
-
-var inContainer = utils.InContainer
 
 func toHTTP(u url.URL) *url.URL {
 	newURL := u

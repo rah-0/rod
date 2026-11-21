@@ -146,7 +146,7 @@ func (p *Page) StartDiagnostics(options DiagnosticsOptions) (*PageDiagnostics, e
 		requests:  make(map[[sha256.Size]byte]diagnosticRequest),
 	}
 	bindingMethod := (proto.RuntimeBindingCalled{}).ProtoEvent()
-	messages := p.browser.event.SubscribeFilter(ctx, func(msg *Message) bool {
+	ctx, messages := p.browser.event.SubscribeContext(ctx, func(msg *Message) bool {
 		return msg.SessionID == p.SessionID &&
 			(diagnosticEvent(msg.Method) || (msg.Method == bindingMethod && d.boundary.Load()))
 	})
@@ -163,8 +163,9 @@ func (p *Page) StartDiagnostics(options DiagnosticsOptions) (*PageDiagnostics, e
 	for _, req := range []proto.Request{&proto.RuntimeEnable{}, &proto.NetworkEnable{}} {
 		release, err := p.browser.Context(ctx).acquireDomain(p.SessionID, req)
 		if err != nil {
+			cause := context.Cause(ctx)
 			cancel()
-			return nil, errors.Join(fmt.Errorf("rod: start diagnostics: %w", err), cleanup())
+			return nil, errors.Join(fmt.Errorf("rod: start diagnostics: %w", err), cause, cleanup())
 		}
 		releases = append(releases, release)
 	}
@@ -181,8 +182,8 @@ func (p *Page) StartDiagnostics(options DiagnosticsOptions) (*PageDiagnostics, e
 		cleanupErr := cleanup()
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		if !d.complete {
-			d.err = errors.Join(d.err, ErrDiagnosticsIncomplete, ctx.Err())
+		if !d.complete || errors.Is(context.Cause(ctx), ErrEventOverflow) {
+			d.err = errors.Join(d.err, ErrDiagnosticsIncomplete, context.Cause(ctx))
 		}
 		if cleanupErr != nil {
 			d.err = errors.Join(d.err, ErrDiagnosticsIncomplete, cleanupErr)

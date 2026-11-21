@@ -444,7 +444,7 @@ func TestGuardianStartupFailure(t *testing.T) {
 		name, want string
 		setup      func(t *testing.T, l *Launcher, dir string)
 	}{
-		{"reported", "launcher guardian startup: invalid managed profile name", func(t *testing.T, l *Launcher, dir string) {
+		{"reported", "launcher browser startup: invalid managed profile name", func(t *testing.T, l *Launcher, dir string) {
 			parent, err := os.OpenRoot(dir)
 			if err != nil {
 				t.Fatal(err)
@@ -669,7 +669,7 @@ func TestGuardianOutlivesExitSignalsOnceReady(t *testing.T) {
 	}
 	for _, sig := range guardianTestExitSignals {
 		t.Run(sig.String(), func(t *testing.T) {
-			input, owner, err := os.Pipe()
+			input, owner, err := guardianChannel()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -701,6 +701,9 @@ func TestGuardianOutlivesExitSignalsOnceReady(t *testing.T) {
 			_ = status.Close()
 			if ready, err := guardian.ReadStatus(reports); err != nil || !ready.Ready {
 				t.Fatalf("guardian startup: %+v, %v", ready, err)
+			}
+			if err := guardian.AnswerChallenge(reports, owner); err != nil {
+				t.Fatal(err)
 			}
 			guardianTestSignal(t, cmd.Process.Pid, sig)
 			_ = owner.Close()

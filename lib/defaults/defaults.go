@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rah-0/rod/internal/secureexec"
 	"github.com/rah-0/rod/lib/utils"
 )
 
@@ -62,7 +63,9 @@ var CDP = utils.LoggerQuiet
 
 var loadOnce sync.Once
 
-// Load applies the optional -rod command-line configuration once.
+// Load applies the optional -rod command-line configuration once. It ignores
+// ambient command-line configuration during secure execution (for example,
+// setuid/setgid or Linux file-capability invocations).
 //
 // If [flag.CommandLine] has already been parsed, Load uses only the parsed
 // value of a defined -rod flag. Otherwise it defines -rod on [flag.CommandLine]
@@ -181,6 +184,9 @@ func ResetWith(options string) {
 }
 
 func loadCLI() {
+	if secureexec.Active() {
+		return
+	}
 	if _, has := os.LookupEnv("DISABLE_ROD_FLAG"); has {
 		return
 	}
@@ -216,6 +222,9 @@ func (o *commandLineOption) String() string {
 }
 
 func (o *commandLineOption) Set(options string) error {
+	if secureexec.Active() {
+		return nil
+	}
 	if err := parseOptions(options); err != nil {
 		return err
 	}

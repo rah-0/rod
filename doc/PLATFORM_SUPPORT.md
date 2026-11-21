@@ -1,6 +1,12 @@
 # Platform support and validation
 
-Last reviewed: **2026-09-06**.
+Recorded native validation: **2026-09-06**.
+
+Current cleanup policy: Linux uses an authenticated supervisor. macOS and other
+non-Linux Unix systems use direct process-group launches; explicit cleanup works,
+but application death can leave browsers and profiles behind. Windows also lacks
+application-death cleanup. The historical environment and results below remain
+specific to the recorded version.
 
 For version-specific changes and migration instructions, see
 [Breaking changes](BREAKING.md).
@@ -88,8 +94,8 @@ headful/display-server operation, Docker images, or other OS/CPU combinations.
 
 ## Platform requirements and known gaps
 
-- **Linux:** supervision requires readable `/proc/self/task/*/children` and permission to enable `PR_SET_CHILD_SUBREAPER`. Managed profile cleanup also needs `/proc/self/fd`. Restricted containers or system policies can prevent launch even on a tested distribution.
-- **Other Unix systems:** supervision kills the browser process group; detached descendants can survive. Managed profile cleanup additionally requires reopening the inherited directory through `/dev/fd`, which has not been validated on these systems.
+- **Linux:** supervision requires readable `/proc/self/task/*/children`, `/proc/self/auxv`, `/proc/self/exe`, the parent process's `/proc/<pid>/exe`, and permission to enable `PR_SET_CHILD_SUBREAPER`. Profile cleanup needs `/proc/self/fd`. The authenticated parent channel uses Unix socket peer and message credentials and the kernel random device. Restricted containers or system policies can prevent launch even on a tested distribution.
+- **Other Unix systems:** browsers launch directly in their own process group. Explicit cleanup kills that group; detached descendants can survive. There is no private re-execution or application-death supervisor, so browser processes and profiles can remain if the application exits first. Native runtime validation of this direct-launch path is not recorded.
 - **Windows:** the launcher starts Chrome directly and force-kills the initial process. There is no application-death guardian or Windows Job Object containing the process tree. Normal automation may work, but the Linux failure-cleanup result does not apply.
 - **Test tooling:** `scripts/check.sh` requires Bash and [race-detector support](https://go.dev/src/internal/platform/supported.go) for the target OS and CPU.
 
@@ -97,7 +103,7 @@ Implementation details, cleanup usage, and limitations are documented in the
 [launcher guide](../lib/launcher/README.md). The platform assessments are based
 on [browser discovery](../lib/launcher/browser.go), the
 [Linux guardian](../lib/launcher/internal/guardian/guardian_linux.go),
-[other Unix cleanup](../lib/launcher/internal/guardian/guardian_other_unix.go),
+[other Unix launches](../lib/launcher/process_other_unix.go),
 [Windows launch path](../lib/launcher/guardian_windows.go), and
 [Unix process setup](../lib/launcher/os_unix.go).
 

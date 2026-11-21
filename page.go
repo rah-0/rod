@@ -400,7 +400,7 @@ func (p *Page) Close() error {
 	defer cancel()
 	destroyedMethod := (proto.TargetTargetDestroyed{}).ProtoEvent()
 	closedMethod := (proto.PageJavascriptDialogClosed{}).ProtoEvent()
-	messages := p.browser.event.SubscribeFilter(ctx, func(msg *Message) bool {
+	ctx, messages := p.browser.event.SubscribeContext(ctx, func(msg *Message) bool {
 		return msg.Method == destroyedMethod || (msg.Method == closedMethod && msg.SessionID == p.SessionID)
 	})
 
@@ -445,7 +445,7 @@ func (p *Page) Close() error {
 			return &PageCloseCanceledError{}
 		}
 	}
-	if err := ctx.Err(); err != nil {
+	if err := context.Cause(ctx); err != nil {
 		return err
 	}
 	return ErrBrowserDisconnected
@@ -495,10 +495,33 @@ func (p *Page) HandleDialog() (
 		}
 }
 
-// HandleFileDialog returns a function that waits for the next file chooser and
-// sets its files. Completion or cancellation restores the previous interception
-// setting, including when the returned function is never called.
+// ErrFileDialog indicates an unknown frame, missing input node, or invalid mode.
+var ErrFileDialog = errors.New("rod: file chooser does not identify an expected file input")
+
+// FileDialogOptions further restricts the receiver-frame chooser. Prefer
+// Element.SetFiles when the input element is known; it avoids chooser races.
+type FileDialogOptions struct {
+	BackendNodeID proto.DOMBackendNodeID
+	Mode          proto.PageFileChooserOpenedMode
+}
+
+// HandleFileDialog waits for a chooser in this Page's frame and sets its files.
+// Other frames are ignored. Frame navigation aborts the wait. Completion or
+// cancellation restores the previous interception setting, including when the
+// returned function is never called. Prefer Element.SetFiles for a known input.
 func (p *Page) HandleFileDialog() (func([]string) error, error) {
+	return p.HandleFileDialogWithOptions(FileDialogOptions{})
+}
+
+// HandleFileDialogWithOptions additionally restricts the input node and mode.
+func (p *Page) HandleFileDialogWithOptions(options FileDialogOptions) (func([]string) error, error) {
+	if p.FrameID == "" {
+		return nil, ErrFileDialog
+	}
+	document, err := p.fileDialogDocument()
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := contextWithSession(p.ctx, p.sessionCtx)
 	view := p.Context(ctx)
 	previous := proto.PageSetInterceptFileChooserDialog{}
@@ -524,7 +547,27 @@ func (p *Page) HandleFileDialog() (func([]string) error, error) {
 	stopCleanup := context.AfterFunc(ctx, cleanup)
 
 	var e proto.PageFileChooserOpened
-	w := view.WaitEvent(&e)
+	w := view.EachEvent(
+		onEvent(func(event *proto.PageFileChooserOpened, _ proto.TargetSessionID) (bool, error) {
+			if event.FrameID != p.FrameID || options.BackendNodeID != 0 && event.BackendNodeID != options.BackendNodeID {
+				return false, nil
+			}
+			if event.BackendNodeID == 0 || event.Mode != proto.PageFileChooserOpenedModeSelectSingle && event.Mode != proto.PageFileChooserOpenedModeSelectMultiple {
+				return true, ErrFileDialog
+			}
+			if options.Mode != "" && event.Mode != options.Mode {
+				return false, nil
+			}
+			e = *event
+			return true, nil
+		}),
+		onEvent(func(event *proto.PageFrameNavigated, _ proto.TargetSessionID) (bool, error) {
+			if event.Frame != nil && event.Frame.ID == p.FrameID {
+				return true, ErrFrameContextChanged
+			}
+			return false, nil
+		}),
+	)
 
 	return func(paths []string) (err error) {
 		defer func() {
@@ -535,12 +578,61 @@ func (p *Page) HandleFileDialog() (func([]string) error, error) {
 		if err := w(); err != nil {
 			return err
 		}
+		if e.Mode == proto.PageFileChooserOpenedModeSelectSingle && len(paths) > 1 {
+			return ErrFileDialog
+		}
+		node, err := (proto.DOMResolveNode{BackendNodeID: e.BackendNodeID}).Call(view)
+		if err != nil {
+			return err
+		}
+		if node.Object == nil || node.Object.ObjectID == "" {
+			return ErrFileDialog
+		}
+		defer func() {
+			cleanupCtx, stop := context.WithTimeout(context.WithoutCancel(p.ctx), 5*time.Second)
+			defer stop()
+			_ = (proto.RuntimeReleaseObject{ObjectID: node.Object.ObjectID}).Call(p.Context(cleanupCtx))
+		}()
+		current, err := view.fileDialogDocument()
+		if err != nil {
+			return err
+		}
+		if current != document {
+			return ErrFrameContextChanged
+		}
 
 		return proto.DOMSetFileInputFiles{
-			Files:         utils.AbsolutePaths(paths),
-			BackendNodeID: e.BackendNodeID,
-		}.Call(p)
+			Files:    utils.AbsolutePaths(paths),
+			ObjectID: node.Object.ObjectID,
+		}.Call(view)
 	}, nil
+}
+
+func (p *Page) fileDialogDocument() (proto.NetworkLoaderID, error) {
+	tree, err := (proto.PageGetFrameTree{}).Call(p)
+	if err != nil {
+		return "", err
+	}
+	var find func(*proto.PageFrameTree) proto.NetworkLoaderID
+	find = func(node *proto.PageFrameTree) proto.NetworkLoaderID {
+		if node == nil {
+			return ""
+		}
+		if node.Frame != nil && node.Frame.ID == p.FrameID {
+			return node.Frame.LoaderID
+		}
+		for _, child := range node.ChildFrames {
+			if id := find(child); id != "" {
+				return id
+			}
+		}
+		return ""
+	}
+	id := find(tree.FrameTree)
+	if id == "" {
+		return "", ErrFrameContextChanged
+	}
+	return id, nil
 }
 
 // Screenshot captures the screenshot of current page.
@@ -556,6 +648,9 @@ func (p *Page) Screenshot(fullPage bool, req *proto.PageCaptureScreenshot) ([]by
 
 		if metrics.CSSContentSize == nil {
 			return nil, missingField("PageGetLayoutMetricsResult", "cssContentSize")
+		}
+		if err := p.checkScreenshotSize(metrics.CSSContentSize.Width, metrics.CSSContentSize.Height, 1); err != nil {
+			return nil, err
 		}
 
 		oldView := proto.EmulationSetDeviceMetricsOverride{}
@@ -584,6 +679,11 @@ func (p *Page) Screenshot(fullPage bool, req *proto.PageCaptureScreenshot) ([]by
 
 // captureScreenshot returns the image data of req.
 func captureScreenshot(p *Page, req *proto.PageCaptureScreenshot) ([]byte, error) {
+	if req.Clip != nil {
+		if err := p.checkScreenshotSize(req.Clip.Width, req.Clip.Height, req.Clip.Scale); err != nil {
+			return nil, err
+		}
+	}
 	shot, err := req.Call(p)
 	if err != nil {
 		return nil, err
@@ -591,6 +691,9 @@ func captureScreenshot(p *Page, req *proto.PageCaptureScreenshot) ([]byte, error
 	if shot.Data == nil {
 		// Lenient decoding leaves missing data nil; empty data is not nil.
 		return nil, missingField("PageCaptureScreenshotResult", "data")
+	}
+	if err := checkScreenshotData(shot.Data); err != nil {
+		return nil, err
 	}
 	return shot.Data, nil
 }
@@ -687,9 +790,13 @@ func (p *Page) ScrollScreenshot(opt *ScrollScreenshotOptions) ([]byte, error) {
 		return nil, fmt.Errorf("%w: content height %v exceeds MaxHeight %v",
 			ErrScrollScreenshotTooTall, contentHeight, opt.MaxHeight)
 	}
+	if err := p.checkScreenshotSize(metrics.CSSVisualViewport.ClientWidth, contentHeight, 1); err != nil {
+		return nil, err
+	}
 
 	var scrollTop float64
 	var images []utils.ImgWithBox
+	var imageBytes int
 
 	for {
 		clip := &proto.PageViewport{
@@ -722,6 +829,10 @@ func (p *Page) ScrollScreenshot(opt *ScrollScreenshotOptions) ([]byte, error) {
 			return nil, err
 		}
 
+		if len(shot) > MaxCaptureBytes-imageBytes {
+			return nil, ErrCaptureTooLarge
+		}
+		imageBytes += len(shot)
 		images = append(images, utils.ImgWithBox{Img: shot})
 
 		scrollTop += scrollY
@@ -748,6 +859,9 @@ func (p *Page) ScrollScreenshot(opt *ScrollScreenshotOptions) ([]byte, error) {
 	}
 	bs, err := utils.SplicePngVertical(images, opt.Format, imgOption)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkScreenshotData(bs); err != nil {
 		return nil, err
 	}
 
@@ -790,6 +904,7 @@ func (p *Page) PDF(req *proto.PagePrintToPDF) (*StreamReader, error) {
 
 	reader := NewStreamReader(p, res.Stream)
 	reader.ChunkSize = pdfChunkSize
+	reader.MaxBytes = MaxCaptureBytes
 	return reader, nil
 }
 
@@ -1466,11 +1581,9 @@ func (p *Page) Call(ctx context.Context, sessionID, methodName string, params an
 }
 
 // Event subscribes to this page's session events until the page context or its
-// session ends. The stream is ordered, lossless, and unbounded: events that have
-// not been read are kept in memory. Keep reading, or cancel the context given to
-// [Page.Context], to release the subscription. Leaving a range loop early
-// without canceling keeps the subscription and its growing backlog until that
-// context or the session ends.
+// session ends, or its budget is exceeded. The stream is ordered. Use
+// [Page.EventWithContext] to inspect overflow and [Page.EventBuffer] to configure
+// budgets. Cancel the context when leaving a range loop early.
 func (p *Page) Event() <-chan *Message {
 	return p.event.Subscribe(p.ctx)
 }
@@ -1480,12 +1593,13 @@ func (p *Page) initEvents() {
 	if ctx == nil {
 		ctx = p.ctx
 	}
-	p.event = observable.New[*Message](ctx)
-	event := p.browser.event.SubscribeFilter(ctx, func(msg *Message) bool {
+	ctx, event := p.browser.event.SubscribeContext(ctx, func(msg *Message) bool {
 		return msg.SessionID == p.SessionID ||
 			msg.Method == (proto.TargetDetachedFromTarget{}).ProtoEvent() ||
 			msg.Method == (proto.TargetTargetDestroyed{}).ProtoEvent()
 	})
+	p.sessionCtx = ctx
+	p.event = observable.New[*Message](ctx)
 
 	go func() {
 		defer p.terminateSession()
@@ -1506,6 +1620,7 @@ func (p *Page) initEvents() {
 				continue
 			}
 
+			p.trackExecutionContext(msg)
 			p.event.Publish(msg)
 		}
 	}()

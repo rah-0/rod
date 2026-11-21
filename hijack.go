@@ -9,6 +9,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"slices"
@@ -33,6 +34,9 @@ const DefaultMaxResponseBodyBytes int64 = 64 << 20
 // Chrome rejects response headers larger than 256 KiB from the network with
 // net::ERR_RESPONSE_HEADERS_TOO_BIG.
 const DefaultMaxResponseHeaderBytes int64 = 256 << 10
+
+// DefaultMaxHijackRequests bounds concurrently running handlers per router.
+const DefaultMaxHijackRequests = 64
 
 // ErrResponseBodyTooLarge means Hijack.LoadResponse stopped reading a body
 // larger than Hijack.MaxResponseBodyBytes.
@@ -68,8 +72,8 @@ func (p *Page) HijackRequests() *HijackRouter {
 
 // HijackRouter context.
 //
-// Each paused request is served on its own goroutine, so handlers run
-// concurrently. The router resolves every paused request once. If a handler
+// Each admitted request is served on its own goroutine, up to the limit set by
+// MaxConcurrentRequests. The router resolves every paused request once. If a handler
 // panics, including through a Must helper such as Hijack.MustLoadResponse, or
 // ends its goroutine with runtime.Goexit, the router fails the request with
 // net::ERR_FAILED and reports a *TryError or ErrHijackHandlerExited through
@@ -96,15 +100,18 @@ type HijackRouter struct {
 
 	// continueUnparsable continues requests whose URL net/url cannot parse.
 	continueUnparsable bool
+	maxConcurrent      int
+	active             int
 }
 
 func newHijackRouter(browser *Browser, client proto.Client) *HijackRouter {
 	return &HijackRouter{
-		enable:   &proto.FetchEnable{},
-		browser:  browser,
-		client:   client,
-		handlers: []*hijackHandler{},
-		onError:  func(error) {},
+		enable:        &proto.FetchEnable{},
+		browser:       browser,
+		client:        client,
+		handlers:      []*hijackHandler{},
+		onError:       func(error) {},
+		maxConcurrent: DefaultMaxHijackRequests,
 	}
 }
 
@@ -128,10 +135,44 @@ func (r *HijackRouter) initEvents() *HijackRouter {
 	}
 
 	r.run = r.browser.Context(eventCtx).eachEvent(sessionID, On(func(e *proto.FetchRequestPaused, _ proto.TargetSessionID) bool {
-		go r.serve(eventCtx, e)
+		r.serveAsync(eventCtx, e)
 		return false
 	}))
 	return r
+}
+
+// MaxConcurrentRequests bounds the number of active handlers, including their
+// response fulfillment. Zero or negative values select DefaultMaxHijackRequests.
+// Excess paused requests fail closed and report ErrHijackConcurrency to OnError.
+// Lowering the limit leaves already running handlers to finish.
+func (r *HijackRouter) MaxConcurrentRequests(limit int) *HijackRouter {
+	if limit <= 0 {
+		limit = DefaultMaxHijackRequests
+	}
+	r.mu.Lock()
+	r.maxConcurrent = limit
+	r.mu.Unlock()
+	return r
+}
+
+func (r *HijackRouter) serveAsync(ctx context.Context, e *proto.FetchRequestPaused) {
+	r.mu.Lock()
+	if r.active >= r.maxConcurrent {
+		onError := r.onError
+		r.mu.Unlock()
+		onError(errors.Join(ErrHijackConcurrency, r.fail(e.RequestID)))
+		return
+	}
+	r.active++
+	r.mu.Unlock()
+	go func() {
+		defer func() {
+			r.mu.Lock()
+			r.active--
+			r.mu.Unlock()
+		}()
+		r.serve(ctx, e)
+	}()
 }
 
 // serve dispatches one paused request and resolves it exactly once. Handler
@@ -441,35 +482,21 @@ type Hijack struct {
 	// http.Transport allows 10 MiB by default.
 	MaxResponseHeaderBytes int64
 
-	// FollowRedirects makes LoadResponse follow redirects in Go, using the
-	// client's CheckRedirect policy, or http.Client's default policy of at most
-	// 10 redirects when the client has none. The final response then fulfills
-	// the original request, and headers of the redirect responses, such as
-	// Set-Cookie, do not reach the browser. It starts false: LoadResponse
-	// returns a 3xx response to the browser, which follows it under its own
-	// policies.
+	// FollowRedirects makes LoadResponse follow up to ten same-origin redirects.
+	// LoadResponseUnsafe instead uses its client's CheckRedirect policy, or the
+	// standard client's limit of ten redirects. It starts false: a 3xx response
+	// returns to the browser to follow under its own network policies.
 	//
-	// Following redirects in Go gives the page the final response as the
-	// response of the original URL. A page whose request is redirected, such
-	// as by its own server or an open redirect, can then read the response of
-	// any URL the client can reach, including internal services, as
-	// same-origin data; the browser's CORS and private network protections do
-	// not apply. The final response's headers, such as Set-Cookie,
-	// Content-Security-Policy, and CORS headers, also apply to the original
-	// URL, so a redirect target can set cookies for the page's origin. Go also
-	// forwards the request headers to every redirect target, including custom
-	// headers such as API tokens. It drops Authorization, Cookie, and the other
-	// credential headers that net/http removes only when the target host is
-	// neither the original host nor one of its subdomains, so they reach
-	// subdomains and other ports and schemes of the same host, including plain
-	// http. When the
-	// original request has a Referer, Go sends it unchanged to each target;
-	// otherwise it sends the previous URL, with its path and query, as the
-	// Referer, except on a redirect from https to http. Enable it only for
-	// requests whose redirect targets you trust, or give the client a
-	// CheckRedirect that rejects other targets and removes the headers they
-	// must not receive.
+	// A followed response and its headers fulfill the original URL. With
+	// LoadResponseUnsafe, cross-origin redirects can expose internal responses
+	// as same-origin data, forward credentials, and apply cookies or other
+	// security headers from the redirect target to the original origin.
 	FollowRedirects bool
+
+	// DenyNetworks adds deployment-specific ranges to LoadResponse's blocked
+	// addresses. It cannot permit an address that the default policy denies.
+	// LoadResponseUnsafe does not use this policy.
+	DenyNetworks []netip.Prefix
 
 	continueRequest *proto.FetchContinueRequest
 
@@ -484,24 +511,34 @@ func (h *Hijack) ContinueRequest(cq *proto.FetchContinueRequest) {
 	h.continueRequest = cq
 }
 
-// LoadResponse sends the request with client and loads the response as the
-// default response to override. A nil client uses http.DefaultClient.
+// LoadResponse fetches with a direct, bounded HTTP client that rejects private
+// and special-purpose destination addresses. client must be nil; custom clients
+// require the explicit [Hijack.LoadResponseUnsafe] method. The browser's network
+// policy still does not apply: prefer ContinueRequest for untrusted pages.
 //
-// Unless FollowRedirects is set, redirects are not followed. A 3xx response and
-// its Location header return to the browser, which follows the redirect under
-// its own CORS and network policies; routes intercept the next request again,
-// and the client's CheckRedirect is not used. The request is sent by Go, so it
-// uses the client's transport, proxy, and TLS settings and bypasses the
-// browser's proxy configuration and private network protections.
+// DNS answers are validated before a numeric address is dialed. Environment
+// proxies are ignored. DenyNetworks can block additional deployment ranges.
+// Calls time out after 30 seconds and at most DefaultMaxSafeHijackRequests run
+// concurrently across the process; excess calls return ErrHijackConcurrency.
+// Redirects are returned to the browser unless FollowRedirects is true, which
+// permits at most ten redirects within the original HTTP origin only.
 //
-// Response headers larger than MaxResponseHeaderBytes return an error matching
-// ErrResponseHeadersTooLarge. With loadBody, a body larger than
-// MaxResponseBodyBytes returns an error matching ErrResponseBodyTooLarge.
-// Responses to HEAD requests and 1xx, 204,
-// and 304 responses load an empty body whatever their Content-Length. The
-// status, headers, and body are applied only after the response loads
-// successfully.
+// MaxResponseBodyBytes and MaxResponseHeaderBytes bound the response. Errors
+// leave Hijack.Response unchanged. HEAD, 1xx, 204, and 304 responses have no body.
 func (h *Hijack) LoadResponse(client *http.Client, loadBody bool) error {
+	if client != nil {
+		return ErrHijackUnsafeClient
+	}
+	return h.loadResponseSafe(loadBody)
+}
+
+// LoadResponseUnsafe sends the request using client, or http.DefaultClient when
+// nil, without address, proxy, timeout, or concurrency restrictions. Use it only
+// for trusted destinations or with a client that enforces your network policy.
+// It bypasses the browser's network protections and can expose internal services
+// to a page. FollowRedirects enables the client's redirect policy; otherwise a
+// 3xx response returns to the browser. Response size limits still apply.
+func (h *Hijack) LoadResponseUnsafe(client *http.Client, loadBody bool) error {
 	if client == nil {
 		client = http.DefaultClient
 	}

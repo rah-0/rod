@@ -364,16 +364,22 @@ func serve(host string, handler func(net.Addr) http.Handler) (string, func() err
 	utils.E(err)
 
 	h := handler(l.Addr())
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if err := recover(); err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				utils.E(json.NewEncoder(w).Encode(err))
-			}
-		}()
+	srv := &http.Server{
+		ReadTimeout:       5 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		MaxHeaderBytes:    32 << 10,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if err := recover(); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					utils.E(json.NewEncoder(w).Encode(err))
+				}
+			}()
 
-		h.ServeHTTP(w, r)
-	})}
+			h.ServeHTTP(w, r)
+		}),
+	}
 
 	go func() { _ = srv.Serve(l) }()
 

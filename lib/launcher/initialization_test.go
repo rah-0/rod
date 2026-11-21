@@ -65,7 +65,7 @@ func TestLauncherContextReplacementReleasesParent(t *testing.T) {
 func TestFailedManagedInitializationReleasesParent(t *testing.T) {
 	for _, response := range []string{"unauthorized", "server error", "invalid JSON", "oversized"} {
 		t.Run(response, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				switch response {
 				case "unauthorized":
 					w.WriteHeader(http.StatusUnauthorized)
@@ -80,7 +80,7 @@ func TestFailedManagedInitializationReleasesParent(t *testing.T) {
 			defer server.Close()
 			ctx := &launcherTrackedContext{Context: t.Context()}
 			for range 100 {
-				if _, err := NewManaged(ctx, server.URL, "test-token"); err == nil {
+				if _, err := NewManaged(ctx, server.URL, "test-token", managerTestOptions(server)); err == nil {
 					t.Fatal("initialization unexpectedly succeeded")
 				}
 			}
@@ -101,7 +101,7 @@ func TestManagedInitializationCancellation(t *testing.T) {
 				ctx, stop = context.WithTimeout(ctx, 30*time.Millisecond)
 				defer stop()
 			}
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if phase == "body" {
 					_, _ = io.WriteString(w, `{"flags":`)
 					w.(http.Flusher).Flush()
@@ -112,7 +112,7 @@ func TestManagedInitializationCancellation(t *testing.T) {
 				<-r.Context().Done()
 			}))
 			defer server.Close()
-			_, err := NewManaged(ctx, server.URL, "test-token")
+			_, err := NewManaged(ctx, server.URL, "test-token", managerTestOptions(server))
 			want := context.Canceled
 			if phase == "deadline" {
 				want = context.DeadlineExceeded
@@ -128,11 +128,11 @@ func TestManagedInitializationCancellation(t *testing.T) {
 // executable, so local launches reject it before running anything.
 func TestManagedLauncherRejectsLocalLaunch(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "manager-chosen-browser")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"flags":{"rod-bin":[`+strconv.Quote(bin)+`]}}`)
 	}))
 	defer server.Close()
-	l, err := NewManaged(t.Context(), server.URL, "test-token")
+	l, err := NewManaged(t.Context(), server.URL, "test-token", managerTestOptions(server))
 	if err != nil {
 		t.Fatal(err)
 	}

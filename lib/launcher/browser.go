@@ -67,17 +67,23 @@ func lookPath(goos string) (found string, has bool) {
 // interface for testing.
 var openExec = exec.Command
 
-// Open tries to open the url via system's default browser.
-func Open(url string) {
+// Open opens an absolute URL in a discovered system browser. It rejects
+// malformed URLs, unsupported schemes, and switch-shaped values with ErrInvalidURL.
+func Open(url string) error {
+	if err := validateURL(url); err != nil {
+		return err
+	}
 	// Windows doesn't support format [::]
 	url = strings.Replace(url, "[::]", "[::1]", 1)
 
 	if bin, has := LookPath(); has {
 		p := openExec(bin, url)
-		if err := p.Start(); err == nil {
-			_ = p.Process.Release()
+		if err := p.Start(); err != nil {
+			return err
 		}
+		return p.Process.Release()
 	}
+	return ErrBrowserNotFound
 }
 
 func expandWindowsExePaths(list ...string) []string {

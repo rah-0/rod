@@ -15,7 +15,7 @@ var ErrManagerUnauthorized = errors.New("launcher manager authentication failed"
 
 // ErrManagerInsecureTransport indicates that a remote manager URL would expose its bearer credential.
 var ErrManagerInsecureTransport = errors.New(
-	"launcher manager requires HTTPS or WSS for non-loopback connections",
+	"launcher manager requires authenticated HTTPS or WSS, including loopback",
 )
 
 // ErrManagedLaunch indicates that Launch, MustLaunch, or LaunchNew was called
@@ -27,3 +27,9 @@ var ErrDebuggingPortInUse = errors.New("browser debugging port is unavailable")
 
 // ErrDevToolsUnavailable indicates a process that exited before announcing DevTools.
 var ErrDevToolsUnavailable = errors.New("browser exited before announcing its DevTools endpoint")
+
+// ErrInvalidURL indicates a malformed URL or a value Chromium could parse as a switch.
+var ErrInvalidURL = errors.New("launcher requires an absolute URL with a supported scheme")
+
+// ErrSecureExecution indicates an attempted launch from an elevated Unix invocation.
+var ErrSecureExecution = errors.New("launcher refuses secure-execution credential transitions; run browser automation without setuid, setgid, or file capabilities")

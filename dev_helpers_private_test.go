@@ -72,7 +72,7 @@ func (monitorClient) Call(context.Context, string, string, any) ([]byte, error) 
 
 func TestMonitorReportsURL(t *testing.T) {
 	var opened []string
-	openMonitor = func(u string) { opened = append(opened, u) }
+	openMonitor = func(u string) error { opened = append(opened, u); return nil }
 	defer func() { openMonitor = launcher.Open }()
 
 	var logged [][]any

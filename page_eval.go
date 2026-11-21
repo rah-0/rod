@@ -39,6 +39,78 @@ type jsHelperCache struct {
 	// installs maps a context to a channel that closes when the helper install
 	// running in it ends.
 	installs map[proto.RuntimeRemoteObjectID]chan struct{}
+
+	// execution contains browser-supplied identity, never page-provided data.
+	execution map[proto.RuntimeExecutionContextID]ExposedSource
+}
+
+// ExposedSource identifies the document calling an exposed function. DocumentID
+// is Chromium's system-unique execution-context ID and changes on navigation.
+type ExposedSource struct {
+	ExecutionContextID proto.RuntimeExecutionContextID
+	DocumentID         string
+	FrameID            proto.PageFrameID
+	TargetID           proto.TargetTargetID
+	SessionID          proto.TargetSessionID
+	Origin             string
+}
+
+// ExposedCall contains browser-authenticated source metadata and untrusted input.
+type ExposedCall struct {
+	Source  ExposedSource
+	Request jsonvalue.Value
+}
+
+// ExposeOptions restricts the documents allowed to invoke a Go function.
+// Empty Frames permits only the receiver's frame unless AllFrames is set.
+// Nonempty Origins and Documents are additional exact allowlists. Documents
+// contains ExposedSource.DocumentID values and therefore pins authorization to
+// particular documents, including across navigation. Options are copied.
+type ExposeOptions struct {
+	Frames    []proto.PageFrameID
+	Origins   []string
+	Documents []string
+	AllFrames bool
+	// MaxPayloadBytes and MaxReplyBytes default to 1 MiB each.
+	MaxPayloadBytes int
+	MaxReplyBytes   int
+}
+
+func (p *Page) trackExecutionContext(message *Message) {
+	if p.helpers == nil {
+		return
+	}
+	c := p.helpers
+	c.Lock()
+	defer c.Unlock()
+	var created proto.RuntimeExecutionContextCreated
+	var destroyed proto.RuntimeExecutionContextDestroyed
+	var cleared proto.RuntimeExecutionContextsCleared
+	var binding proto.RuntimeBindingCalled
+	if ok, _ := message.Load(&created); ok && created.Context != nil {
+		description := created.Context
+		frame := proto.PageFrameID(description.AuxData["frameId"].Str())
+		if !description.AuxData["isDefault"].Bool() || frame == "" || description.UniqueID == "" {
+			return
+		}
+		if c.execution == nil {
+			c.execution = make(map[proto.RuntimeExecutionContextID]ExposedSource)
+		}
+		c.execution[description.ID] = ExposedSource{
+			ExecutionContextID: description.ID, DocumentID: description.UniqueID,
+			FrameID: frame, TargetID: p.TargetID, SessionID: p.SessionID, Origin: description.Origin,
+		}
+	} else if ok, _ := message.Load(&destroyed); ok {
+		delete(c.execution, destroyed.ExecutionContextID)
+	} else if ok, _ := message.Load(&cleared); ok {
+		clear(c.execution)
+	} else if ok, _ := message.Load(&binding); ok {
+		if source, found := c.execution[binding.ExecutionContextID]; found {
+			message.lock.Lock()
+			message.source = &source
+			message.lock.Unlock()
+		}
+	}
 }
 
 // lockInstall waits until no helper install runs in the context, then starts
@@ -319,7 +391,9 @@ func (p *Page) evaluate(opts *EvalOptions) (*proto.RuntimeRemoteObject, error) {
 	return res.Result, nil
 }
 
-// Expose fn to the page's window object with the name. The exposure survives reloads.
+// Expose fn to this frame's window object with the name. The exposure survives reloads.
+// Calls from other frames are rejected, including direct binding calls. Use
+// ExposeWithOptions to select other frames, origins, or particular documents.
 // Go errors and results that cannot be JSON-encoded reject the JavaScript promise
 // with an error message. Replies are delivered in the frame that called the function.
 // If fn or the encoding of its result panics, or fn ends its goroutine with
@@ -336,11 +410,40 @@ func (p *Page) evaluate(opts *EvalOptions) (*proto.RuntimeRemoteObject, error) {
 // previous reply. Replies that wait for the page are delivered in batches, so
 // several promises can resolve in the same task. Calls that fn has not handled
 // and replies that the page has not received, including fn's encoded results,
-// stay in this process's memory until then, so a page that keeps making calls
-// faster than it receives the replies increases memory use.
+// stay in this process's bounded event and reply queues until then. EventBuffer
+// configures ingress. Payloads and encoded results are limited to 1 MiB each;
+// ExposeWithOptions changes these limits. The pending reply queue permits at
+// most 1024 replies and 16 MiB, in addition to the batch currently being sent.
+// Overflow stops the exposure and reports ErrExposedFunctionLimit or
+// ErrEventOverflow through onError. Oversized payloads are ignored and reported;
+// oversized results reject the promise and are reported.
 // Call the idempotent stop function to remove the binding and reload script.
 // Cleanup has its own bounded context. A Go callback already running is not interrupted.
 func (p *Page) Expose(name string, fn func(jsonvalue.Value) (any, error), onError func(error)) (stop func() error, err error) {
+	return p.ExposeWithOptions(name, ExposeOptions{}, func(call ExposedCall) (any, error) {
+		return fn(call.Request)
+	}, onError)
+}
+
+// ExposeWithOptions exposes a function with browser-authenticated caller metadata.
+// Calls outside the selected frames, origins or documents are rejected before
+// invoking fn. Authorization is checked again after queued calls are read.
+func (p *Page) ExposeWithOptions(name string, options ExposeOptions, fn func(ExposedCall) (any, error), onError func(error)) (stop func() error, err error) {
+	if options.MaxPayloadBytes == 0 {
+		options.MaxPayloadBytes = 1 << 20
+	}
+	if options.MaxReplyBytes == 0 {
+		options.MaxReplyBytes = 1 << 20
+	}
+	if options.MaxPayloadBytes < 0 || options.MaxReplyBytes < 0 {
+		return nil, errors.New("rod: exposed function byte limits must be positive")
+	}
+	options.Frames = slices.Clone(options.Frames)
+	options.Origins = slices.Clone(options.Origins)
+	options.Documents = slices.Clone(options.Documents)
+	if len(options.Frames) == 0 && !options.AllFrames {
+		options.Frames = []proto.PageFrameID{p.FrameID}
+	}
 	releaseRuntime, err := p.browser.Context(p.ctx).acquireDomain(p.SessionID, proto.RuntimeEnable{})
 	if err != nil {
 		return nil, err
@@ -348,7 +451,8 @@ func (p *Page) Expose(name string, fn func(jsonvalue.Value) (any, error), onErro
 	bind := "_" + utils.RandString(8)
 	events, cancel := p.WithCancel()
 	bindingMethod := (proto.RuntimeBindingCalled{}).ProtoEvent()
-	messages := p.event.SubscribeFilter(events.ctx, func(msg *Message) bool { return msg.Method == bindingMethod })
+	subscriptionCtx, messages := p.event.SubscribeContext(events.ctx, func(msg *Message) bool { return msg.Method == bindingMethod })
+	events = events.Context(subscriptionCtx)
 	restoreRuntime := func() error {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(p.ctx), 5*time.Second)
 		defer cancel()
@@ -389,7 +493,7 @@ func (p *Page) Expose(name string, fn func(jsonvalue.Value) (any, error), onErro
 	go replies.send(events)
 
 	// Subscribe before installing a callable function in the document.
-	handler := &exposeHandler{bind: bind, fn: fn, onError: onError, messages: messages, replies: replies, cancel: cancel, decoding: p.GetDecoding()}
+	handler := &exposeHandler{bind: bind, fn: fn, page: p, ctx: subscriptionCtx, options: options, onError: onError, messages: messages, replies: replies, cancel: cancel, decoding: p.GetDecoding()}
 	go handler.serve(nil)
 
 	bindingAdded = true
@@ -416,6 +520,10 @@ func (p *Page) Expose(name string, fn func(jsonvalue.Value) (any, error), onErro
 // runtime.Goexit, such as through a WithPanic fail function, instead of returning.
 var ErrExposedFunctionExited = errors.New("rod: exposed function exited without returning")
 
+// ErrExposedFunctionLimit means a binding payload, result or reply queue exceeded
+// its budget. Queue overflow stops the exposure; call stop to remove its script.
+var ErrExposedFunctionLimit = errors.New("rod: exposed function exceeds resource limit")
+
 // exposeFailure rejects a call whose function did not return. The page gets no
 // details of the failure.
 const exposeFailure = "exposed function failed"
@@ -424,7 +532,10 @@ const exposeFailure = "exposed function failed"
 // in the order the page made the calls, and queues the replies.
 type exposeHandler struct {
 	bind     string
-	fn       func(jsonvalue.Value) (any, error)
+	fn       func(ExposedCall) (any, error)
+	page     *Page
+	ctx      context.Context
+	options  ExposeOptions
 	onError  func(error)
 	messages <-chan *Message
 	replies  *exposeReplies
@@ -437,7 +548,7 @@ type exposeHandler struct {
 // runtime.Goexit, serve rejects the call being handled and continues on a new
 // goroutine.
 func (h *exposeHandler) serve(exited error) {
-	var contextID proto.RuntimeExecutionContextID
+	var source ExposedSource
 	var callback string
 	handling, returned := false, false
 	defer func() {
@@ -448,18 +559,25 @@ func (h *exposeHandler) serve(exited error) {
 		// runtime.Goexit skips Try's recover but still runs deferred calls.
 		var err error
 		if handling {
-			h.reply(contextID, callback, nil, new(exposeFailure))
+			h.reply(source, callback, nil, new(exposeFailure))
 			err = ErrExposedFunctionExited
 		}
 		go h.serve(err)
 	}()
 	h.report(exited)
 	for message := range h.messages {
+		if h.ctx.Err() != nil {
+			break
+		}
 		// An undecodable binding call names no callback to answer, and one
 		// without an execution context, which lenient decoding leaves zero,
 		// names no context to answer in; skip them.
 		var e proto.RuntimeBindingCalled
 		if ok, _ := message.Load(&e); !ok || e.Name != h.bind || lenientMissing(h.decoding, e.ExecutionContextID) {
+			continue
+		}
+		if len(e.Payload) > h.options.MaxPayloadBytes {
+			h.report(ErrExposedFunctionLimit)
 			continue
 		}
 		var payload struct {
@@ -469,23 +587,65 @@ func (h *exposeHandler) serve(exited error) {
 		if json.Unmarshal([]byte(e.Payload), &payload) != nil || !exposeCallback(h.bind, payload.Callback) {
 			continue
 		}
-		contextID, callback, handling = e.ExecutionContextID, payload.Callback, true
-		result, errorMessage, err := exposeCall(h.fn, payload.Request)
+		callback, handling = payload.Callback, true
+		var authorized bool
+		source, authorized = h.authorize(message)
+		if !authorized {
+			handling = false
+			h.reply(source, callback, nil, new("exposed function caller is not authorized"))
+			continue
+		}
+		if h.ctx.Err() != nil {
+			handling = false
+			break
+		}
+		result, errorMessage, err := exposeCall(func(request jsonvalue.Value) (any, error) {
+			return h.fn(ExposedCall{Source: source, Request: request})
+		}, payload.Request)
 		handling = false
-		h.reply(contextID, callback, result, errorMessage)
+		if len(result) > h.options.MaxReplyBytes || errorMessage != nil && len(*errorMessage) > h.options.MaxReplyBytes {
+			result, errorMessage, err = nil, new("exposed function response exceeds byte limit"), ErrExposedFunctionLimit
+		}
+		h.reply(source, callback, result, errorMessage)
 		h.report(err)
 	}
 	returned = true
+	if cause := context.Cause(h.ctx); cause != nil && !errors.Is(cause, context.Canceled) {
+		h.report(cause)
+	}
+}
+
+func (h *exposeHandler) authorize(message *Message) (ExposedSource, bool) {
+	message.lock.Lock()
+	source := message.source
+	message.lock.Unlock()
+	if source == nil || h.page.helpers == nil {
+		return ExposedSource{}, false
+	}
+	h.page.helpers.Lock()
+	current, live := h.page.helpers.execution[source.ExecutionContextID]
+	h.page.helpers.Unlock()
+	options := h.options
+	return *source, live && current == *source &&
+		(len(options.Frames) == 0 || slices.Contains(options.Frames, source.FrameID)) &&
+		(len(options.Origins) == 0 || slices.Contains(options.Origins, source.Origin)) &&
+		(len(options.Documents) == 0 || slices.Contains(options.Documents, source.DocumentID))
 }
 
 // reply queues the [callback, result, error] reply of a call. A nil result is
 // null.
-func (h *exposeHandler) reply(contextID proto.RuntimeExecutionContextID, callback string, result json.RawMessage, errorMessage *string) {
+func (h *exposeHandler) reply(source ExposedSource, callback string, result json.RawMessage, errorMessage *string) {
+	if source.DocumentID == "" {
+		return
+	}
 	data, err := json.Marshal([]any{callback, result, errorMessage})
 	if err != nil {
 		return // Unreachable: every part is a string, null or encoded JSON.
 	}
-	h.replies.push(exposeReply{contextID: contextID, data: data})
+	if !h.replies.push(exposeReply{contextID: source.ExecutionContextID, documentID: source.DocumentID, data: data}) {
+		h.cancel()
+		h.report(ErrExposedFunctionLimit)
+	}
 }
 
 func (h *exposeHandler) report(err error) {
@@ -551,26 +711,34 @@ func exposeCallback(binding, callback string) bool {
 // exposeReply is one encoded [callback, result, error] reply of an exposed
 // function.
 type exposeReply struct {
-	contextID proto.RuntimeExecutionContextID
-	data      json.RawMessage
+	contextID  proto.RuntimeExecutionContextID
+	documentID string
+	data       json.RawMessage
 }
 
-// exposeReplies is the ordered, lossless queue between an exposed function and
+// exposeReplies is the bounded ordered queue between an exposed function and
 // the goroutine that delivers its replies.
 type exposeReplies struct {
 	mu    sync.Mutex
 	queue []exposeReply
 	wake  chan struct{}
+	bytes int
 }
 
-func (r *exposeReplies) push(reply exposeReply) {
+func (r *exposeReplies) push(reply exposeReply) bool {
 	r.mu.Lock()
+	if len(r.queue) >= 1024 || len(reply.data) > 16<<20-r.bytes {
+		r.mu.Unlock()
+		return false
+	}
 	r.queue = append(r.queue, reply)
+	r.bytes += len(reply.data)
 	r.mu.Unlock()
 	select {
 	case r.wake <- struct{}{}:
 	default:
 	}
+	return true
 }
 
 // send delivers the queued replies until p's context ends. Replies that queue
@@ -585,6 +753,7 @@ func (r *exposeReplies) send(p *Page) {
 		r.mu.Lock()
 		queue := r.queue
 		r.queue = nil
+		r.bytes = 0
 		r.mu.Unlock()
 		for len(queue) > 0 && p.ctx.Err() == nil {
 			n := exposeReplyBatchLen(queue)
@@ -593,7 +762,7 @@ func (r *exposeReplies) send(p *Page) {
 				batch[i] = reply.data
 			}
 			_, _ = proto.RuntimeCallFunctionOn{
-				ExecutionContextID:  queue[0].contextID,
+				UniqueContextID:     queue[0].documentID,
 				FunctionDeclaration: exposeReplyJS,
 				Arguments:           []*proto.RuntimeCallArgument{{Value: jsonvalue.New(batch)}},
 			}.Call(p)
@@ -610,7 +779,7 @@ func (r *exposeReplies) send(p *Page) {
 func exposeReplyBatchLen(queue []exposeReply) int {
 	size := len(queue[0].data)
 	n := 1
-	for ; n < len(queue) && queue[n].contextID == queue[0].contextID; n++ {
+	for ; n < len(queue) && queue[n].contextID == queue[0].contextID && queue[n].documentID == queue[0].documentID; n++ {
 		size += len(queue[n].data) + 1 // One comma separates each reply.
 		if size > exposeReplyBatchBytes {
 			break

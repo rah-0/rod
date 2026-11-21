@@ -37,8 +37,10 @@ read, that read may finish within its own five-second budget before the paused
 request is continued. A completed CDP error or invalid base64 body is reported
 while the page remains usable. A body-read timeout or ambiguous transport error
 instead closes the dedicated page and reports the original error and any close
-error. Create a new page after that failure. This avoids continuing requests or
-disabling Fetch while Chrome may still be reading the body, which the
+error. It subscribes to target destruction before requesting closure and waits
+for that event within the cleanup budget. Create a new page after that failure.
+This avoids continuing requests or disabling Fetch while Chrome may still be
+reading the body, which the
 [Fetch protocol](https://chromedevtools.github.io/devtools-protocol/tot/Fetch/#method-getResponseBody)
 defines as undefined behavior. If the transport also prevents target closure,
 the caller must dispose of the owning browser.

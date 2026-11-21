@@ -1531,6 +1531,10 @@ func TestPageHandleFileDialogLifecycle(t *testing.T) {
 				events := make(chan *cdp.Event)
 				browser := rod.New().Context(t.Context()).Client(&callTestClient{events: events, call: func(callCtx context.Context, method string, params any) ([]byte, error) {
 					switch method {
+					case "Page.getFrameTree":
+						return []byte(`{"frameTree":{"frame":{"id":"frame","loaderId":"document","url":"","securityOrigin":"","mimeType":""}}}`), nil
+					case "DOM.resolveNode":
+						return []byte(`{"object":{"type":"object","subtype":"node","objectId":"file-input"}}`), nil
 					case "Page.setInterceptFileChooserDialog":
 						request := params.(proto.PageSetInterceptFileChooserDialog)
 						if request.Enabled {
@@ -1559,7 +1563,7 @@ func TestPageHandleFileDialogLifecycle(t *testing.T) {
 						}
 					case "DOM.setFileInputFiles":
 						uploads.Add(1)
-						if params.(proto.DOMSetFileInputFiles).BackendNodeID != 42 {
+						if params.(proto.DOMSetFileInputFiles).ObjectID != "file-input" {
 							t.Error("upload used an unconfirmed chooser event")
 						}
 						if phase == "set files" {
@@ -1570,6 +1574,7 @@ func TestPageHandleFileDialogLifecycle(t *testing.T) {
 				}})
 				connectTestBrowser(t, browser)
 				page := browser.Context(ctx).PageFromSession("session")
+				page.FrameID = "frame"
 				if phase == "already enabled" {
 					if err := (proto.PageSetInterceptFileChooserDialog{Enabled: true}).Call(page); err != nil {
 						t.Fatal(err)
@@ -1596,7 +1601,7 @@ func TestPageHandleFileDialogLifecycle(t *testing.T) {
 					return
 				}
 				if phase != "event setup" && phase != "cancellation" {
-					sendEvent(events, "Page.fileChooserOpened", "session", `{"backendNodeId":42,"mode":""}`)
+					sendEvent(events, "Page.fileChooserOpened", "session", `{"frameId":"frame","backendNodeId":42,"mode":"selectMultiple"}`)
 				}
 				err = setFiles(nil)
 				switch phase {

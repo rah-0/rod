@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
@@ -226,15 +227,16 @@ func memoryFileManagedBrowser(t *testing.T, g G) *rod.Browser {
 	const token = "memory-file-test-token"
 	manager := launcher.NewManager(token)
 	finished := make(chan struct{})
-	server := g.Serve()
-	server.Mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Upgrade") == "websocket" {
 			defer close(finished)
 		}
 		manager.ServeHTTP(w, r)
-	})
+	}))
+	t.Cleanup(server.Close)
 	ctx := g.Timeout(*TimeoutEach)
-	remote := launcher.MustNewManaged(ctx, server.URL(), token).NoSandbox(true)
+	options := launcher.ManagerClientOptions{TLSConfig: server.Client().Transport.(*http.Transport).TLSClientConfig}
+	remote := launcher.MustNewManaged(ctx, server.URL, token, options).NoSandbox(true)
 	client := remote.MustClient()
 	t.Cleanup(func() {
 		_ = client.Close()

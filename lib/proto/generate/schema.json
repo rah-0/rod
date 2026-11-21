@@ -605,6 +605,19 @@
               "name": "metrics"
             }
           ]
+        },
+        {
+          "description": "Retrieves ad scripts for the current page. To minimize payload size, this\nonly returns the newly tracked ad scripts since the last call to\ngetAdScripts (i.e., the delta).",
+          "name": "getAdScripts",
+          "returns": [
+            {
+              "items": {
+                "$ref": "AdScript"
+              },
+              "name": "newScripts",
+              "type": "array"
+            }
+          ]
         }
       ],
       "dependencies": [
@@ -696,6 +709,23 @@
             }
           ],
           "type": "object"
+        },
+        {
+          "description": "An ad script.\nNote: when the script is a transitive ad script, we only fill in the\nimmediate ancestor script in the provenance's adScriptAncestry field (as its\nfirst entry), rather than filling in the full ancestry. This saves work for\nthe backend, and the frontend can reconstruct the full ancestry if\nnecessary.",
+          "id": "AdScript",
+          "properties": [
+            {
+              "$ref": "Runtime.ScriptId",
+              "description": "The script ID.",
+              "name": "scriptId"
+            },
+            {
+              "$ref": "Network.AdProvenance",
+              "description": "The ad provenance.",
+              "name": "provenance"
+            }
+          ],
+          "type": "object"
         }
       ]
     },
@@ -783,9 +813,19 @@
               "type": "array"
             },
             {
-              "description": "Set the current time of each animation.",
+              "description": "Set each animation to the same time.",
               "name": "currentTime",
+              "optional": true,
               "type": "number"
+            },
+            {
+              "description": "Set each animation to a different time. If set, should have the same\nlength as animations. Exactly one of currentTime or currentTimes should\nbe set.",
+              "items": {
+                "type": "number"
+              },
+              "name": "currentTimes",
+              "optional": true,
+              "type": "array"
             }
           ]
         },
@@ -1249,7 +1289,6 @@
             "ExcludeSameSiteLax",
             "ExcludeSameSiteStrict",
             "ExcludeDomainNonASCII",
-            "ExcludeThirdPartyCookieBlockedInFirstPartySet",
             "ExcludeThirdPartyPhaseout",
             "ExcludePortMismatch",
             "ExcludeSchemeMismatch"
@@ -1775,7 +1814,10 @@
             "ItemNotInnerList",
             "InvalidAllowlistItemType",
             "ReportingEndpointNotToken",
-            "InvalidUrlPattern"
+            "InvalidUrlPattern",
+            "IFrameAttributeLoosensEmbeddingRequirement",
+            "InvalidAllowConnectionAllowlistFrom",
+            "EmbeddingRequirementNotSatisfied"
           ],
           "id": "ConnectionAllowlistError",
           "type": "string"
@@ -1913,7 +1955,8 @@
             "FormModelContextMissingToolName",
             "FormModelContextMissingToolDescription",
             "FormModelContextRequiredParameterMissingName",
-            "FormModelContextParameterMissingName"
+            "FormModelContextParameterMissingName",
+            "GeolocationPromptWithoutUserGesture"
           ],
           "id": "GenericIssueErrorType",
           "type": "string"
@@ -2036,6 +2079,7 @@
             "TooManyRequests",
             "WellKnownHttpNotFound",
             "WellKnownNoResponse",
+            "WellKnownBlockedByConnectionAllowlist",
             "WellKnownInvalidResponse",
             "WellKnownListEmpty",
             "WellKnownInvalidContentType",
@@ -2043,6 +2087,7 @@
             "WellKnownTooBig",
             "ConfigHttpNotFound",
             "ConfigNoResponse",
+            "ConfigBlockedByConnectionAllowlist",
             "ConfigInvalidResponse",
             "ConfigInvalidContentType",
             "IdpNotPotentiallyTrustworthy",
@@ -2052,11 +2097,13 @@
             "InvalidSigninResponse",
             "AccountsHttpNotFound",
             "AccountsNoResponse",
+            "AccountsBlockedByConnectionAllowlist",
             "AccountsInvalidResponse",
             "AccountsListEmpty",
             "AccountsInvalidContentType",
             "IdTokenHttpNotFound",
             "IdTokenNoResponse",
+            "IdTokenBlockedByConnectionAllowlist",
             "IdTokenInvalidResponse",
             "IdTokenIdpErrorResponse",
             "IdTokenCrossSiteIdpErrorResponse",
@@ -2073,7 +2120,8 @@
             "TypeNotMatching",
             "UiDismissedNoEmbargo",
             "CorsError",
-            "SuppressedBySegmentationPlatform"
+            "SuppressedBySegmentationPlatform",
+            "PopupBlockedByConnectionAllowlist"
           ],
           "id": "FederatedAuthRequestIssueReason",
           "type": "string"
@@ -2173,7 +2221,8 @@
             "TokenVerificationKbInvalidNonce",
             "TokenVerificationKbInvalidSdHash",
             "TokenVerificationKbMissingCnf",
-            "TokenVerificationKbSignatureFailed"
+            "TokenVerificationKbSignatureFailed",
+            "CrossOriginIframeNotSupported"
           ],
           "id": "EmailVerificationRequestIssueReason",
           "type": "string"
@@ -2448,6 +2497,33 @@
           "type": "object"
         },
         {
+          "enum": [
+            "ManifestParsingOrNetworkError",
+            "StartUrlInvalid",
+            "ManifestMissingNameOrShortName",
+            "ManifestMissingId",
+            "NoManifest"
+          ],
+          "id": "WebInstallIssueReason",
+          "type": "string"
+        },
+        {
+          "description": "This issue reports a failure involving a web app manifest used by a Web\nInstall operation.",
+          "id": "WebInstallIssueDetails",
+          "properties": [
+            {
+              "name": "manifestUrl",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "$ref": "WebInstallIssueReason",
+              "name": "reason"
+            }
+          ],
+          "type": "object"
+        },
+        {
           "description": "The issue warns about blocked calls to privacy sensitive APIs via the\nSelective Permissions Intervention.",
           "id": "SelectivePermissionsInterventionIssueDetails",
           "properties": [
@@ -2524,7 +2600,8 @@
             "PerformanceIssue",
             "SelectivePermissionsInterventionIssue",
             "EmailVerificationRequestIssue",
-            "LazyLoadImageIssue"
+            "LazyLoadImageIssue",
+            "WebInstallIssue"
           ],
           "id": "InspectorIssueCode",
           "type": "string"
@@ -2683,6 +2760,11 @@
               "$ref": "LazyLoadImageIssueDetails",
               "name": "lazyLoadImageIssueDetails",
               "optional": true
+            },
+            {
+              "$ref": "WebInstallIssueDetails",
+              "name": "webInstallIssueDetails",
+              "optional": true
             }
           ],
           "type": "object"
@@ -2718,7 +2800,7 @@
     {
       "commands": [
         {
-          "description": "Trigger autofill on a form identified by the fieldId.\nIf the field and related form cannot be autofilled, returns an error.",
+          "description": "Trigger autofill on a form identified by the fieldId.\nIf the field and related form cannot be autofilled, returns an error.\nReturns once the values have been applied to the form fields.",
           "name": "trigger",
           "parameters": [
             {
@@ -3768,6 +3850,18 @@
           ]
         },
         {
+          "description": "Adds or updates a mock camera in the shared video capture device list for\ntest automation. The mock camera is not scoped to a particular page or\nframe and is removed when the DevTools session that created it disconnects.",
+          "experimental": true,
+          "name": "addMockCamera",
+          "parameters": [
+            {
+              "description": "Required non-empty identifier for the mock camera within the current\nDevTools session. Different sessions can use the same identifier\nwithout replacing each other's cameras. This is not the\nMediaDeviceInfo.deviceId exposed to the page.",
+              "name": "deviceId",
+              "type": "string"
+            }
+          ]
+        },
+        {
           "description": "Get Chrome histograms.",
           "experimental": true,
           "name": "getHistograms",
@@ -3942,6 +4036,34 @@
             {
               "name": "url",
               "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "Gets the current globally-applied privacy control status\nSee https://www.w3.org/TR/gpc/#get-global-privacy-control",
+          "experimental": true,
+          "name": "getGlobalPrivacyControl",
+          "returns": [
+            {
+              "name": "gpc",
+              "type": "boolean"
+            }
+          ]
+        },
+        {
+          "description": "Sets and then gets the current globally-applied privacy control status\nSee https://www.w3.org/TR/gpc/#set-global-privacy-control",
+          "experimental": true,
+          "name": "setGlobalPrivacyControl",
+          "parameters": [
+            {
+              "name": "gpc",
+              "type": "boolean"
+            }
+          ],
+          "returns": [
+            {
+              "name": "gpc",
+              "type": "boolean"
             }
           ]
         }
@@ -4364,6 +4486,23 @@
               "description": "Boolean indicating if this is on or off.",
               "name": "forced",
               "type": "boolean"
+            }
+          ]
+        },
+        {
+          "description": "Forces a position-try option for the given node.",
+          "name": "forcePositionTryOption",
+          "parameters": [
+            {
+              "$ref": "DOM.NodeId",
+              "description": "The element id for which to force the position-try option.",
+              "name": "nodeId"
+            },
+            {
+              "description": "The 1-based index of the position-try fallback option, 0 for base position (no fallback),\nor omitted to clear the forced state.",
+              "name": "index",
+              "optional": true,
+              "type": "integer"
             }
           ]
         },
@@ -8349,6 +8488,94 @@
               "type": "array"
             }
           ]
+        },
+        {
+          "description": "Returns candidate nodes that are configured as triggers for the given popover.",
+          "experimental": true,
+          "name": "getImplicitAnchorCandidates",
+          "parameters": [
+            {
+              "$ref": "NodeId",
+              "description": "Id of the popover HTMLElement.",
+              "name": "nodeId"
+            }
+          ],
+          "returns": [
+            {
+              "description": "Candidate elements that can invoke this popover.",
+              "items": {
+                "$ref": "BackendNodeId"
+              },
+              "name": "backendNodeIds",
+              "type": "array"
+            }
+          ]
+        },
+        {
+          "description": "When enabling, this API forces an element to gain interest in its target,\nkeeping interest active until disabled.",
+          "experimental": true,
+          "name": "forceShowInterest",
+          "parameters": [
+            {
+              "$ref": "NodeId",
+              "description": "Id of the interest invoker HTMLElement.",
+              "name": "nodeId"
+            },
+            {
+              "description": "If true, opens and holds interest. If false, releases forced interest.",
+              "name": "enable",
+              "type": "boolean"
+            }
+          ]
+        },
+        {
+          "description": "Sets a spelling or grammar error marker on the given range of text.\nSee https://github.com/Igalia/explainers/blob/main/force-spelling-grammar-markers/README.md\nNote: exactly one between nodeId, backendNodeId and objectId should be passed\nto identify the node.",
+          "experimental": true,
+          "name": "setTextMarker",
+          "parameters": [
+            {
+              "$ref": "NodeId",
+              "description": "Identifier of the node.",
+              "name": "nodeId",
+              "optional": true
+            },
+            {
+              "$ref": "BackendNodeId",
+              "description": "Identifier of the backend node.",
+              "name": "backendNodeId",
+              "optional": true
+            },
+            {
+              "$ref": "Runtime.RemoteObjectId",
+              "description": "JavaScript object id of the node wrapper.",
+              "name": "objectId",
+              "optional": true
+            },
+            {
+              "description": "The type of marker to set on the given range of text.",
+              "enum": [
+                "spelling",
+                "grammar"
+              ],
+              "name": "type",
+              "type": "string"
+            },
+            {
+              "description": "Start offset into the element's rendered text in UTF-16 code units.\nFor a text control, an offset into the control's value.\nOffsets count text in DOM order and do not enter shadow trees.\nTo mark text inside a shadow tree, pass the element inside the shadow tree.",
+              "name": "start",
+              "type": "integer"
+            },
+            {
+              "description": "End offset (exclusive) in the same units and space as start.",
+              "name": "end",
+              "type": "integer"
+            }
+          ]
+        },
+        {
+          "description": "Clears the spelling and grammar error text markers overlapping the ranges\nset by setTextMarker in this session. These markers are also removed when\nthe DOM domain is disabled or the session ends.",
+          "experimental": true,
+          "name": "clearTextMarkers"
         }
       ],
       "dependencies": [
@@ -10738,6 +10965,18 @@
           ]
         },
         {
+          "description": "Overrides virtual keyboard geometry in CSS pixels, relative to the top-level viewport. The\nprovided rect is used for navigator.virtualKeyboard.boundingRect, geometrychange events, and\nenv(keyboard-inset-*) values on the inspected frame. The override applies independently of\nnavigator.virtualKeyboard.overlaysContent so clients can preview overlay geometry without\nmutating page state. Values are rounded to the nearest CSS pixel. Omitting the rect clears the\noverride.",
+          "experimental": true,
+          "name": "setVirtualKeyboardGeometryOverride",
+          "parameters": [
+            {
+              "$ref": "DOM.Rect",
+              "name": "keyboardRect",
+              "optional": true
+            }
+          ]
+        },
+        {
           "description": "Overrides the values of device screen dimensions (window.screen.width, window.screen.height,\nwindow.innerWidth, window.innerHeight, and \"device-width\"/\"device-height\"-related CSS media\nquery results).",
           "name": "setDeviceMetricsOverride",
           "parameters": [
@@ -10849,6 +11088,28 @@
               "name": "screenOrientationLockEmulation",
               "optional": true,
               "type": "boolean"
+            },
+            {
+              "description": "Viewport meta tag behavior. Default: `default`. Note: if `mobile` is `true`,\nthe viewport meta tag is always enabled.",
+              "enum": [
+                "enable",
+                "default"
+              ],
+              "experimental": true,
+              "name": "viewportMeta",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "description": "Text layout mode. Default: `default`. Note: if `mobile` is `true`,\nmobile text layout mode (text autosizing) is always enabled.",
+              "enum": [
+                "mobile",
+                "default"
+              ],
+              "experimental": true,
+              "name": "textLayoutMode",
+              "optional": true,
+              "type": "string"
             }
           ]
         },
@@ -11302,6 +11563,26 @@
               "description": "Hardware concurrency to report",
               "name": "hardwareConcurrency",
               "type": "integer"
+            }
+          ]
+        },
+        {
+          "description": "Overrides the value of navigator.cpuPerformance",
+          "experimental": true,
+          "name": "setCPUPerformanceOverride",
+          "parameters": [
+            {
+              "description": "Override value. Omitting the parameter disables the override.",
+              "enum": [
+                "unknown",
+                "low",
+                "mid",
+                "high",
+                "ultra"
+              ],
+              "name": "performanceTier",
+              "optional": true,
+              "type": "string"
             }
           ]
         },
@@ -13097,6 +13378,35 @@
     {
       "commands": [
         {
+          "description": "Forwards `query` to the find-in-page facility, starting a new find session.\nWhere exactly the search starts from is implementation-specific.",
+          "name": "findFirst",
+          "parameters": [
+            {
+              "name": "query",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "Moves to the next match for the query passed to the most recent\nfindFirst() call.",
+          "name": "findNext"
+        },
+        {
+          "description": "Moves to the previous match for the query passed to the most recent\nfindFirst() call.",
+          "name": "findPrev"
+        },
+        {
+          "description": "Ends the current find session, if any, and clears its highlighting.",
+          "name": "stop"
+        }
+      ],
+      "description": "This domain provides commands to trigger the \"Find in page\" feature.",
+      "domain": "FindInPage",
+      "experimental": true
+    },
+    {
+      "commands": [
+        {
           "description": "Sends a BeginFrame to the target and returns when the frame was completed. Optionally captures a\nscreenshot from the resulting frame. Requires that the target was created with enabled\nBeginFrameControl. Designed for use with --run-all-compositor-stages-before-draw, see also\nhttps://goo.gle/chrome-headless-rendering for more background.",
           "name": "beginFrame",
           "parameters": [
@@ -13245,6 +13555,7 @@
           ]
         },
         {
+          "deprecated": true,
           "description": "Return UUID of Blob object specified by a remote object id.",
           "name": "resolveBlob",
           "parameters": [
@@ -15621,26 +15932,6 @@
     {
       "commands": [
         {
-          "description": "Sets a list of content encodings that will be accepted. Empty list means no encoding is accepted.",
-          "experimental": true,
-          "name": "setAcceptedEncodings",
-          "parameters": [
-            {
-              "description": "List of accepted content encodings.",
-              "items": {
-                "$ref": "ContentEncoding"
-              },
-              "name": "encodings",
-              "type": "array"
-            }
-          ]
-        },
-        {
-          "description": "Clears accepted encodings set by setAcceptedEncodings",
-          "experimental": true,
-          "name": "clearAcceptedEncodingsOverride"
-        },
-        {
           "deprecated": true,
           "description": "Tells whether clearing browser cache is supported.",
           "name": "canClearBrowserCache",
@@ -15683,60 +15974,6 @@
         {
           "description": "Clears browser cookies.",
           "name": "clearBrowserCookies"
-        },
-        {
-          "deprecated": true,
-          "description": "Response to Network.requestIntercepted which either modifies the request to continue with any\nmodifications, or blocks it, or completes it with the provided response bytes. If a network\nfetch occurs as a result which encounters a redirect an additional Network.requestIntercepted\nevent will be sent with the same InterceptionId.\nDeprecated, use Fetch.continueRequest, Fetch.fulfillRequest and Fetch.failRequest instead.",
-          "experimental": true,
-          "name": "continueInterceptedRequest",
-          "parameters": [
-            {
-              "$ref": "InterceptionId",
-              "name": "interceptionId"
-            },
-            {
-              "$ref": "ErrorReason",
-              "description": "If set this causes the request to fail with the given reason. Passing `Aborted` for requests\nmarked with `isNavigationRequest` also cancels the navigation. Must not be set in response\nto an authChallenge.",
-              "name": "errorReason",
-              "optional": true
-            },
-            {
-              "description": "If set the requests completes using with the provided base64 encoded raw response, including\nHTTP status line and headers etc... Must not be set in response to an authChallenge.",
-              "name": "rawResponse",
-              "optional": true,
-              "type": "binary"
-            },
-            {
-              "description": "If set the request url will be modified in a way that's not observable by page. Must not be\nset in response to an authChallenge.",
-              "name": "url",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "description": "If set this allows the request method to be overridden. Must not be set in response to an\nauthChallenge.",
-              "name": "method",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "description": "If set this allows postData to be set. Must not be set in response to an authChallenge.",
-              "name": "postData",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "$ref": "Headers",
-              "description": "If set this allows the request headers to be changed. Must not be set in response to an\nauthChallenge.",
-              "name": "headers",
-              "optional": true
-            },
-            {
-              "$ref": "AuthChallengeResponse",
-              "description": "Response to a requestIntercepted with an authChallenge. Must not be set otherwise.",
-              "name": "authChallengeResponse",
-              "optional": true
-            }
-          ]
         },
         {
           "description": "Deletes browser cookies with matching name and url or domain/path/partitionKey pair.",
@@ -16070,47 +16307,6 @@
           ]
         },
         {
-          "description": "Returns content served for the given currently intercepted request.",
-          "experimental": true,
-          "name": "getResponseBodyForInterception",
-          "parameters": [
-            {
-              "$ref": "InterceptionId",
-              "description": "Identifier for the intercepted request to get body for.",
-              "name": "interceptionId"
-            }
-          ],
-          "returns": [
-            {
-              "description": "Response body.",
-              "name": "body",
-              "type": "string"
-            },
-            {
-              "description": "True, if content was sent as base64.",
-              "name": "base64Encoded",
-              "type": "boolean"
-            }
-          ]
-        },
-        {
-          "description": "Returns a handle to the stream representing the response body. Note that after this command,\nthe intercepted request can't be continued as is -- you either need to cancel it or to provide\nthe response body. The stream only supports sequential read, IO.read will fail if the position\nis specified.",
-          "experimental": true,
-          "name": "takeResponseBodyForInterceptionAsStream",
-          "parameters": [
-            {
-              "$ref": "InterceptionId",
-              "name": "interceptionId"
-            }
-          ],
-          "returns": [
-            {
-              "$ref": "IO.StreamHandle",
-              "name": "stream"
-            }
-          ]
-        },
-        {
           "description": "This method sends a new XMLHttpRequest which is identical to the original one. The following\nparameters should be identical: method, url, async, request body, extra headers, withCredentials\nattribute, user, password.",
           "experimental": true,
           "name": "replayXHR",
@@ -16337,22 +16533,6 @@
               "description": "Whether to attach a page script stack for debugging purpose.",
               "name": "enabled",
               "type": "boolean"
-            }
-          ]
-        },
-        {
-          "deprecated": true,
-          "description": "Sets the requests to intercept that match the provided patterns and optionally resource types.\nDeprecated, please use Fetch.enable instead.",
-          "experimental": true,
-          "name": "setRequestInterception",
-          "parameters": [
-            {
-              "description": "Requests matching any of these patterns will be forwarded and wait for the corresponding\ncontinueInterceptedRequest call.",
-              "items": {
-                "$ref": "RequestPattern"
-              },
-              "name": "patterns",
-              "type": "array"
             }
           ]
         },
@@ -16655,80 +16835,13 @@
               "description": "Total number of bytes received for this request.",
               "name": "encodedDataLength",
               "type": "number"
-            }
-          ]
-        },
-        {
-          "deprecated": true,
-          "description": "Details of an intercepted HTTP request, which must be either allowed, blocked, modified or\nmocked.\nDeprecated, use Fetch.requestPaused instead.",
-          "experimental": true,
-          "name": "requestIntercepted",
-          "parameters": [
-            {
-              "$ref": "InterceptionId",
-              "description": "Each request the page makes will have a unique id, however if any redirects are encountered\nwhile processing that fetch, they will be reported with the same id as the original fetch.\nLikewise if HTTP authentication is needed then the same fetch id will be used.",
-              "name": "interceptionId"
             },
             {
-              "$ref": "Request",
-              "name": "request"
-            },
-            {
-              "$ref": "Page.FrameId",
-              "description": "The id of the frame that initiated the request.",
-              "name": "frameId"
-            },
-            {
-              "$ref": "ResourceType",
-              "description": "How the requested resource will be used.",
-              "name": "resourceType"
-            },
-            {
-              "description": "Whether this is a navigation request, which can abort the navigation completely.",
-              "name": "isNavigationRequest",
-              "type": "boolean"
-            },
-            {
-              "description": "Set if the request is a navigation that will result in a download.\nOnly present after response is received from the server (i.e. HeadersReceived stage).",
-              "name": "isDownload",
+              "description": "Size of the response body before removing content encodings.\nIncludes cached bodies, but excludes headers and transfer framing.",
+              "experimental": true,
+              "name": "encodedBodyLength",
               "optional": true,
-              "type": "boolean"
-            },
-            {
-              "description": "Redirect location, only sent if a redirect was intercepted.",
-              "name": "redirectUrl",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "$ref": "AuthChallenge",
-              "description": "Details of the Authorization Challenge encountered. If this is set then\ncontinueInterceptedRequest must contain an authChallengeResponse.",
-              "name": "authChallenge",
-              "optional": true
-            },
-            {
-              "$ref": "ErrorReason",
-              "description": "Response error if intercepted at response stage or if redirect occurred while intercepting\nrequest.",
-              "name": "responseErrorReason",
-              "optional": true
-            },
-            {
-              "description": "Response code if intercepted at response stage or if redirect occurred while intercepting\nrequest or auth retry occurred.",
-              "name": "responseStatusCode",
-              "optional": true,
-              "type": "integer"
-            },
-            {
-              "$ref": "Headers",
-              "description": "Response headers if intercepted at the response stage or if redirect occurred while\nintercepting request or auth retry occurred.",
-              "name": "responseHeaders",
-              "optional": true
-            },
-            {
-              "$ref": "RequestId",
-              "description": "If the intercepted request had a corresponding requestWillBeSent event fired for it, then\nthis requestId will be the same as the requestId present in the requestWillBeSent event.",
-              "name": "requestId",
-              "optional": true
+              "type": "number"
             }
           ]
         },
@@ -17188,8 +17301,8 @@
               "name": "identifier"
             },
             {
-              "name": "errorMessage",
-              "type": "string"
+              "$ref": "ErrorReason",
+              "name": "errorMessage"
             },
             {
               "$ref": "MonotonicTime",
@@ -17259,7 +17372,14 @@
               "name": "identifier"
             },
             {
+              "description": "Multicast group address.",
               "name": "IPAddress",
+              "type": "string"
+            },
+            {
+              "description": "Source address of a source-specific multicast (SSM) membership. Absent\nfor any-source multicast (ASM) memberships.",
+              "name": "sourceAddress",
+              "optional": true,
               "type": "string"
             }
           ]
@@ -17273,7 +17393,14 @@
               "name": "identifier"
             },
             {
+              "description": "Multicast group address.",
               "name": "IPAddress",
+              "type": "string"
+            },
+            {
+              "description": "Source address of a source-specific multicast (SSM) membership. Absent\nfor any-source multicast (ASM) memberships.",
+              "name": "sourceAddress",
+              "optional": true,
               "type": "string"
             }
           ]
@@ -17347,8 +17474,8 @@
               "name": "identifier"
             },
             {
-              "name": "errorMessage",
-              "type": "string"
+              "$ref": "ErrorReason",
+              "name": "errorMessage"
             },
             {
               "$ref": "MonotonicTime",
@@ -17744,11 +17871,6 @@
         {
           "description": "Unique network request identifier.\nNote that this does not identify individual HTTP requests that are part of\na network request.",
           "id": "RequestId",
-          "type": "string"
-        },
-        {
-          "description": "Unique intercepted request identifier.",
-          "id": "InterceptionId",
           "type": "string"
         },
         {
@@ -18857,7 +18979,6 @@
             "SameSiteNoneInsecure",
             "UserPreferences",
             "ThirdPartyPhaseout",
-            "ThirdPartyBlockedInFirstPartySet",
             "SyntaxError",
             "SchemeNotSupported",
             "OverwriteSecure",
@@ -18887,7 +19008,6 @@
             "SameSiteNoneInsecure",
             "UserPreferences",
             "ThirdPartyPhaseout",
-            "ThirdPartyBlockedInFirstPartySet",
             "UnknownError",
             "SchemefulSameSiteStrict",
             "SchemefulSameSiteLax",
@@ -19144,42 +19264,6 @@
           "type": "object"
         },
         {
-          "description": "Stages of the interception to begin intercepting. Request will intercept before the request is\nsent. Response will intercept after the response is received.",
-          "enum": [
-            "Request",
-            "HeadersReceived"
-          ],
-          "experimental": true,
-          "id": "InterceptionStage",
-          "type": "string"
-        },
-        {
-          "description": "Request pattern for interception.",
-          "experimental": true,
-          "id": "RequestPattern",
-          "properties": [
-            {
-              "description": "Wildcards (`'*'` -\u003e zero or more, `'?'` -\u003e exactly one) are allowed. Escape character is\nbackslash. Omitting is equivalent to `\"*\"`.",
-              "name": "urlPattern",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "$ref": "ResourceType",
-              "description": "If set, only requests for matching resource types will be intercepted.",
-              "name": "resourceType",
-              "optional": true
-            },
-            {
-              "$ref": "InterceptionStage",
-              "description": "Stage at which to begin intercepting requests. Default is Request.",
-              "name": "interceptionStage",
-              "optional": true
-            }
-          ],
-          "type": "object"
-        },
-        {
           "description": "Information about a signed exchange signature.\nhttps://wicg.github.io/webpackage/draft-yasskin-httpbis-origin-signed-exchanges-impl.html#rfc.section.3.1",
           "experimental": true,
           "id": "SignedExchangeSignature",
@@ -19351,18 +19435,6 @@
             }
           ],
           "type": "object"
-        },
-        {
-          "description": "List of content encodings supported by the backend.",
-          "enum": [
-            "deflate",
-            "gzip",
-            "br",
-            "zstd"
-          ],
-          "experimental": true,
-          "id": "ContentEncoding",
-          "type": "string"
         },
         {
           "experimental": true,
@@ -19679,7 +19751,7 @@
             },
             {
               "$ref": "AdAncestry",
-              "description": "The script ancestry that created the ad, if any.",
+              "description": "The script ancestry that created the ad, if any.\nNote: depending on the context, this may represent the full ancestry up\nto the root script, or it may contain only one script representing the\nimmediate ancestor.",
               "name": "adScriptAncestry",
               "optional": true
             }
@@ -20165,7 +20237,10 @@
             "CrossOriginRegistrationSiteNotIncluded",
             "InvalidPreProvisionedKeyInitiatorMissing",
             "PreProvisionedKeyAccessNotGranted",
-            "PreProvisionedKeyNotFound"
+            "PreProvisionedKeyNotFound",
+            "AttestationCertificationError",
+            "AttestationSigningError",
+            "FederatedRegistrationRedirected"
           ],
           "experimental": true,
           "id": "DeviceBoundSessionFetchResult",
@@ -20233,7 +20308,7 @@
           "id": "RefreshEventDetails",
           "properties": [
             {
-              "description": "The result of a refresh.",
+              "description": "The result of a refresh.\nLINT.IfChange(DeviceBoundSessionRefreshResult)",
               "enum": [
                 "Refreshed",
                 "InitializedService",
@@ -20242,14 +20317,16 @@
                 "FatalError",
                 "SigningQuotaExceeded",
                 "RefreshedAsWaiter",
-                "TransientSigningError"
+                "TransientSigningError",
+                "InScopeRefreshNotYetNeeded",
+                "Canceled"
               ],
               "name": "refreshResult",
               "type": "string"
             },
             {
               "$ref": "DeviceBoundSessionFetchResult",
-              "description": "If there was a fetch attempt, the result of that.",
+              "description": "LINT.ThenChange(//net/device_bound_sessions/refresh_result.h:DeviceBoundSessionRefreshResult,//content/browser/devtools/protocol/network_handler.cc:DeviceBoundSessionRefreshResult)\nIf there was a fetch attempt, the result of that.",
               "name": "fetchResult",
               "optional": true
             },
@@ -20289,7 +20366,8 @@
                 "ServerRequested",
                 "InvalidSessionParams",
                 "RefreshFatalError",
-                "DevTools"
+                "DevTools",
+                "Replaced"
               ],
               "name": "deletionReason",
               "type": "string"
@@ -21212,6 +21290,67 @@
           "type": "string"
         },
         {
+          "description": "Configuration for Inset-Modified Containing Block (IMCB) and CSS Anchor Positioning highlight.",
+          "id": "ImcbHighlightConfig",
+          "properties": [
+            {
+              "$ref": "DOM.RGBA",
+              "description": "Border color for the Inset-Modified Containing Block (default: transparent).",
+              "name": "imcbBorderColor",
+              "optional": true
+            },
+            {
+              "$ref": "DOM.RGBA",
+              "description": "Background fill color for the Inset-Modified Containing Block (default: transparent).",
+              "name": "imcbBackgroundColor",
+              "optional": true
+            },
+            {
+              "$ref": "DOM.RGBA",
+              "description": "Fill color for the inset modifiers area (difference between CB and IMCB).",
+              "name": "insetsBackgroundColor",
+              "optional": true
+            },
+            {
+              "$ref": "DOM.RGBA",
+              "description": "Hatch color for the inset modifiers area.",
+              "name": "insetsHatchColor",
+              "optional": true
+            },
+            {
+              "$ref": "DOM.RGBA",
+              "description": "Border color for the referenced target anchor element(s) (when element is anchor-positioned).",
+              "name": "anchorBorderColor",
+              "optional": true
+            },
+            {
+              "$ref": "DOM.RGBA",
+              "description": "Background fill color for the referenced target anchor element(s) (when element is anchor-positioned).",
+              "name": "anchorBackgroundColor",
+              "optional": true
+            },
+            {
+              "description": "Whether to render the 3x3 position-area grid lines when position-area is used.",
+              "name": "showPositionAreaGrid",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "$ref": "DOM.RGBA",
+              "description": "Line color for the 3x3 position-area grid lines.",
+              "name": "positionAreaGridLineColor",
+              "optional": true
+            },
+            {
+              "$ref": "DOM.RGBA",
+              "description": "Fill color for the active region within the position-area grid.",
+              "name": "positionAreaActiveRegionColor",
+              "optional": true
+            }
+          ],
+          "type": "object"
+        },
+        {
           "description": "Configuration data for the highlighting of page elements.",
           "id": "HighlightConfig",
           "properties": [
@@ -21327,6 +21466,12 @@
               "$ref": "ContainerQueryContainerHighlightConfig",
               "description": "The container query container highlight configuration (default: all transparent).",
               "name": "containerQueryContainerHighlightConfig",
+              "optional": true
+            },
+            {
+              "$ref": "ImcbHighlightConfig",
+              "description": "The IMCB highlight configuration (default: all transparent).",
+              "name": "imcbHighlightConfig",
               "optional": true
             }
           ],
@@ -22135,7 +22280,7 @@
           ]
         },
         {
-          "description": "Returns the unique (PWA) app id.\nOnly returns values if the feature flag 'WebAppEnableManifestId' is enabled",
+          "description": "Returns the unique (PWA) app id, along with IWA bundle ID and parent app info.\nOnly returns values if the feature flag 'WebAppEnableManifestId' is enabled",
           "experimental": true,
           "name": "getAppId",
           "returns": [
@@ -22150,6 +22295,46 @@
               "name": "recommendedId",
               "optional": true,
               "type": "string"
+            },
+            {
+              "description": "The bundle ID for an Isolated Web App (IWA)",
+              "name": "bundleId",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "description": "The name of the parent app if this app is a Sub-App",
+              "name": "parentAppName",
+              "optional": true,
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "description": "Returns the list of installed child Sub-Apps for the inspected parent app.",
+          "experimental": true,
+          "name": "getSubApps",
+          "returns": [
+            {
+              "items": {
+                "$ref": "SubApp"
+              },
+              "name": "subApps",
+              "type": "array"
+            }
+          ]
+        },
+        {
+          "description": "Returns the list of sibling Sub-Apps sharing the same parent app if the inspected context is a Sub-App.",
+          "experimental": true,
+          "name": "getSiblingSubApps",
+          "returns": [
+            {
+              "items": {
+                "$ref": "SubApp"
+              },
+              "name": "subApps",
+              "type": "array"
             }
           ]
         },
@@ -22168,6 +22353,26 @@
               "description": "The ancestry chain of ad script identifiers leading to this frame's\ncreation, along with the root script's filterlist rule. The ancestry\nchain is ordered from the most immediate script (in the frame creation\nstack) to more distant ancestors (that created the immediately preceding\nscript). Only sent if frame is labelled as an ad and ids are available.",
               "name": "adScriptAncestry",
               "optional": true
+            }
+          ]
+        },
+        {
+          "description": "Returns the words that the frame's document added to its spell check custom\ndictionary with `document.spellCheckCustomDictionary.addWords()`, sorted.\nPage script cannot read the dictionary back; this lets developers inspect\nit.",
+          "experimental": true,
+          "name": "getSpellCheckCustomDictionary",
+          "parameters": [
+            {
+              "$ref": "FrameId",
+              "name": "frameId"
+            }
+          ],
+          "returns": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "name": "words",
+              "type": "array"
             }
           ]
         },
@@ -22939,10 +23144,73 @@
               "type": "integer"
             },
             {
-              "description": "Send every n-th frame.",
+              "description": "Send every n-th frame. Must be a positive integer.",
               "name": "everyNthFrame",
               "optional": true,
               "type": "integer"
+            },
+            {
+              "description": "Maximum number of frames sent until screencastFrameAck is required.\nDefaults to 3. Must be a positive integer.",
+              "name": "maxFramesInFlight",
+              "optional": true,
+              "type": "integer"
+            },
+            {
+              "description": "By default, after screencastFrameAck arrives, the next produced frame is sent.\nPassing this flag enables storing the last produced frame in memory, which is\nimmediately sent upon screencastFrameAck. This way, overall performance is\ntraded for a better latency.",
+              "name": "sendLastFrame",
+              "optional": true,
+              "type": "boolean"
+            }
+          ]
+        },
+        {
+          "description": "Starts screencast video recording.",
+          "experimental": true,
+          "name": "startScreenRecording",
+          "parameters": [
+            {
+              "name": "audio",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "description": "Maximum frame width in pixels.",
+              "name": "maxWidth",
+              "optional": true,
+              "type": "integer"
+            },
+            {
+              "description": "Maximum frame height in pixels.",
+              "name": "maxHeight",
+              "optional": true,
+              "type": "integer"
+            },
+            {
+              "description": "Maximum frame rate in frames per second.",
+              "name": "frameRate",
+              "optional": true,
+              "type": "integer"
+            }
+          ],
+          "returns": [
+            {
+              "$ref": "IO.StreamHandle",
+              "description": "A handle of the stream that holds resulting screencast data.",
+              "experimental": true,
+              "name": "stream"
+            }
+          ]
+        },
+        {
+          "description": "Stops screencast video recording.",
+          "experimental": true,
+          "name": "stopScreenRecording",
+          "returns": [
+            {
+              "$ref": "IO.StreamHandle",
+              "description": "A handle of the stream that holds resulting screencast data.",
+              "experimental": true,
+              "name": "stream"
             }
           ]
         },
@@ -23117,6 +23385,19 @@
               "description": "The annotated page content as a base64 encoded protobuf.\nThe format is defined by the `AnnotatedPageContent` message in\ncomponents/optimization_guide/proto/features/common_quality_data.proto",
               "name": "content",
               "type": "binary"
+            }
+          ]
+        },
+        {
+          "description": "Configures input visualization on the page.",
+          "experimental": true,
+          "name": "setInputVisualization",
+          "parameters": [
+            {
+              "description": "Whether to enable click visualization.",
+              "name": "clicks",
+              "optional": true,
+              "type": "boolean"
             }
           ]
         }
@@ -23821,11 +24102,11 @@
             "gamepad",
             "geolocation",
             "gyroscope",
+            "haptics",
             "hid",
             "identity-credentials-get",
             "idle-detection",
             "interest-cohort",
-            "join-ad-interest-group",
             "keyboard-map",
             "language-detector",
             "language-model",
@@ -23842,18 +24123,14 @@
             "otp-credentials",
             "payment",
             "picture-in-picture",
-            "private-aggregation",
             "private-state-token-issuance",
             "private-state-token-redemption",
             "publickey-credentials-create",
             "publickey-credentials-get",
-            "record-ad-auction-events",
+            "publickey-credentials-remote-client-data-json",
             "rewriter",
-            "run-ad-auction",
             "screen-wake-lock",
             "serial",
-            "shared-storage",
-            "shared-storage-select-url",
             "smart-card",
             "speaker-selection",
             "storage-access",
@@ -23862,6 +24139,7 @@
             "sync-xhr",
             "tools",
             "translator",
+            "unbounded-element",
             "unload",
             "usb",
             "usb-unrestricted",
@@ -24347,6 +24625,12 @@
               "description": "Frame swap timestamp.",
               "name": "timestamp",
               "optional": true
+            },
+            {
+              "$ref": "Network.MonotonicTime",
+              "description": "Frame swap timestamp as monotonic time.",
+              "name": "monotonicTimestamp",
+              "optional": true
             }
           ],
           "type": "object"
@@ -24731,14 +25015,6 @@
               "type": "string"
             },
             {
-              "items": {
-                "$ref": "ImageResource"
-              },
-              "name": "icons",
-              "optional": true,
-              "type": "array"
-            },
-            {
               "description": "Mimic a map, name is the key, accepts is the value.",
               "items": {
                 "$ref": "FileFilter"
@@ -25068,6 +25344,32 @@
           "type": "object"
         },
         {
+          "id": "SubApp",
+          "properties": [
+            {
+              "description": "Display name of the sub-app.",
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "description": "Scope of the sub-app.",
+              "name": "scope",
+              "type": "string"
+            },
+            {
+              "description": "Manifest id of the sub-app.",
+              "name": "manifestId",
+              "type": "string"
+            },
+            {
+              "description": "Start URL of the sub-app.",
+              "name": "startUrl",
+              "type": "string"
+            }
+          ],
+          "type": "object"
+        },
+        {
           "description": "The type of a frameNavigated event.",
           "enum": [
             "Navigation",
@@ -25223,6 +25525,7 @@
             "EmbedderExtensionMessagingForOpenPort",
             "EmbedderExtensionSentMessageToCachedFrame",
             "EmbedderExtensionFrame",
+            "EmbedderPrivilegedWebContents",
             "RequestedByWebViewClient",
             "PostMessageByWebViewClient",
             "CacheControlNoStoreDeviceBoundSessionTerminated",
@@ -25702,6 +26005,12 @@
               "name": "status"
             },
             {
+              "$ref": "SpeculationAction",
+              "description": "The action currently performed by this attempt. This differs from\n`key.action` after a prerender-until-script attempt is upgraded in place\nto a full prerender.",
+              "name": "effectiveAction",
+              "optional": true
+            },
+            {
               "$ref": "PrerenderFinalStatus",
               "name": "prerenderStatus",
               "optional": true
@@ -25968,7 +26277,8 @@
             "BrowsingDataRemoved",
             "PrerenderHostReused",
             "FormSubmitWhenPrerendering",
-            "CrossDocumentRestart"
+            "CrossDocumentRestart",
+            "PrefetchFailedCrossOriginSubframe"
           ],
           "id": "PrerenderFinalStatus",
           "type": "string"
@@ -26004,6 +26314,7 @@
             "PrefetchIsStale",
             "PrefetchNotEligibleBlockedByConnectionAllowlist",
             "PrefetchNotEligibleBrowserContextOffTheRecord",
+            "PrefetchNotEligibleCrossOrigin",
             "PrefetchNotEligibleDataSaverEnabled",
             "PrefetchNotEligibleExistingProxy",
             "PrefetchNotEligibleHostIsNonUnique",
@@ -26684,6 +26995,111 @@
           "type": "string"
         },
         {
+          "description": "Mostly corresponds to `RouterCondition` in ServiceWorker spec\n(https://www.w3.org/TR/service-workers/#dictdef-routercondition)",
+          "id": "ServiceWorkerRouterCondition",
+          "properties": [
+            {
+              "description": "Plain text, or JSON serialization of URLPatternInit or URLPattern",
+              "name": "urlPattern",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "requestMethod",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "requestMode",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "name": "requestDestination",
+              "optional": true,
+              "type": "string"
+            },
+            {
+              "$ref": "ServiceWorkerVersionRunningStatus",
+              "name": "runningStatus",
+              "optional": true
+            },
+            {
+              "items": {
+                "$ref": "ServiceWorkerRouterCondition"
+              },
+              "name": "or",
+              "optional": true,
+              "type": "array"
+            },
+            {
+              "$ref": "ServiceWorkerRouterCondition",
+              "name": "not",
+              "optional": true
+            }
+          ],
+          "type": "object"
+        },
+        {
+          "enum": [
+            "cache",
+            "fetchEvent",
+            "network",
+            "raceNetworkAndFetchHandler",
+            "raceNetworkAndCache",
+            "sourceDict"
+          ],
+          "id": "ServiceWorkerRouterSourceType",
+          "type": "string"
+        },
+        {
+          "description": "https://www.w3.org/TR/service-workers/#dictdef-routersourcedict",
+          "id": "ServiceWorkerRouterSourceDict",
+          "properties": [
+            {
+              "name": "cacheName",
+              "type": "string"
+            }
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Corresponds to `RouterSource` in the spec while the representation is different as follows.\n(https://www.w3.org/TR/service-workers/#typedefdef-routersource)\n- `RouterSourceEnum`: `type` equals `cache`, `sourceDict` is null.\n- `RouterSourceDict`: `type` equals `sourceDict`, `sourceDict` has valid value.",
+          "id": "ServiceWorkerRouterSource",
+          "properties": [
+            {
+              "$ref": "ServiceWorkerRouterSourceType",
+              "name": "type"
+            },
+            {
+              "$ref": "ServiceWorkerRouterSourceDict",
+              "description": "Non-empty iff `type` equals \"sourceDict\".",
+              "name": "sourceDict",
+              "optional": true
+            }
+          ],
+          "type": "object"
+        },
+        {
+          "id": "ServiceWorkerRouterRule",
+          "properties": [
+            {
+              "$ref": "ServiceWorkerRouterCondition",
+              "name": "condition"
+            },
+            {
+              "$ref": "ServiceWorkerRouterSource",
+              "name": "source"
+            },
+            {
+              "description": "Rule ID assigned by the browser. Unique within each ServiceWorkerVersion.",
+              "name": "id",
+              "type": "integer"
+            }
+          ],
+          "type": "object"
+        },
+        {
           "description": "ServiceWorker version.",
           "id": "ServiceWorkerVersion",
           "properties": [
@@ -26733,9 +27149,18 @@
               "optional": true
             },
             {
+              "description": "Migration to `typedRouterRules` is in progress. The browser sends either\n`routerRules` or `typedRouterRules`.\nTODO(crbug.com/540469610): Remove `routerRules` after the migration.",
               "name": "routerRules",
               "optional": true,
               "type": "string"
+            },
+            {
+              "items": {
+                "$ref": "ServiceWorkerRouterRule"
+              },
+              "name": "typedRouterRules",
+              "optional": true,
+              "type": "array"
             }
           ],
           "type": "object"
@@ -27706,108 +28131,59 @@
           ]
         },
         {
-          "description": "Gets metadata for an origin's shared storage.",
+          "description": "Returns all stored Private Verification Tokens for the current browsing\ncontext.",
           "experimental": true,
-          "name": "getSharedStorageMetadata",
-          "parameters": [
-            {
-              "name": "ownerOrigin",
-              "type": "string"
-            }
-          ],
-          "returns": [
-            {
-              "$ref": "SharedStorageMetadata",
-              "name": "metadata"
-            }
-          ]
-        },
-        {
-          "description": "Gets the entries in an given origin's shared storage.",
-          "experimental": true,
-          "name": "getSharedStorageEntries",
-          "parameters": [
-            {
-              "name": "ownerOrigin",
-              "type": "string"
-            }
-          ],
+          "name": "getPrivateVerificationTokens",
           "returns": [
             {
               "items": {
-                "$ref": "SharedStorageEntry"
+                "$ref": "PrivateVerificationToken"
               },
-              "name": "entries",
+              "name": "tokens",
               "type": "array"
             }
           ]
         },
         {
-          "description": "Sets entry with `key` and `value` for a given origin's shared storage.",
+          "description": "Returns the configured Private Verification Tokens issuers and their redeemer\norigins.",
           "experimental": true,
-          "name": "setSharedStorageEntry",
-          "parameters": [
+          "name": "getPrivateVerificationTokensIssuerConfigs",
+          "returns": [
             {
-              "name": "ownerOrigin",
-              "type": "string"
-            },
-            {
-              "name": "key",
-              "type": "string"
-            },
-            {
-              "name": "value",
-              "type": "string"
-            },
-            {
-              "description": "If `ignoreIfPresent` is included and true, then only sets the entry if\n`key` doesn't already exist.",
-              "name": "ignoreIfPresent",
-              "optional": true,
-              "type": "boolean"
+              "items": {
+                "$ref": "PrivateVerificationTokensIssuerConfig"
+              },
+              "name": "configs",
+              "type": "array"
             }
           ]
         },
         {
-          "description": "Deletes entry for `key` (if it exists) for a given origin's shared storage.",
+          "description": "Removes all Private Verification Tokens issued by the provided issuerOrigin.",
           "experimental": true,
-          "name": "deleteSharedStorageEntry",
+          "name": "clearPrivateVerificationTokens",
           "parameters": [
             {
-              "name": "ownerOrigin",
-              "type": "string"
-            },
-            {
-              "name": "key",
+              "name": "issuerOrigin",
               "type": "string"
             }
           ]
         },
         {
-          "description": "Clears all entries for a given origin's shared storage.",
+          "description": "Removes a specific Private Verification Token by its ID.",
           "experimental": true,
-          "name": "clearSharedStorageEntries",
+          "name": "deletePrivateVerificationToken",
           "parameters": [
             {
-              "name": "ownerOrigin",
+              "name": "tokenId",
               "type": "string"
             }
           ]
         },
         {
-          "description": "Resets the budget for `ownerOrigin` by clearing all budget withdrawals.",
+          "description": "Set tracking for Private Verification Tokens.",
           "experimental": true,
-          "name": "resetSharedStorageBudget",
-          "parameters": [
-            {
-              "name": "ownerOrigin",
-              "type": "string"
-            }
-          ]
-        },
-        {
-          "description": "Enables/disables issuing of sharedStorageAccessed events.",
-          "experimental": true,
-          "name": "setSharedStorageTracking",
+          "name": "setPrivateVerificationTokensTracking",
           "parameters": [
             {
               "name": "enable",
@@ -27851,20 +28227,6 @@
                 "type": "string"
               },
               "name": "deletedSites",
-              "type": "array"
-            }
-          ]
-        },
-        {
-          "description": "Returns the effective Related Website Sets in use by this profile for the browser\nsession. The effective Related Website Sets will not change during a browser session.",
-          "experimental": true,
-          "name": "getRelatedWebsiteSets",
-          "returns": [
-            {
-              "items": {
-                "$ref": "RelatedWebsiteSet"
-              },
-              "name": "sets",
               "type": "array"
             }
           ]
@@ -27976,88 +28338,6 @@
           ]
         },
         {
-          "description": "Shared storage was accessed by the associated page.\nThe following parameters are included in all events.",
-          "name": "sharedStorageAccessed",
-          "parameters": [
-            {
-              "$ref": "Network.TimeSinceEpoch",
-              "description": "Time of the access.",
-              "name": "accessTime"
-            },
-            {
-              "$ref": "SharedStorageAccessScope",
-              "description": "Enum value indicating the access scope.",
-              "name": "scope"
-            },
-            {
-              "$ref": "SharedStorageAccessMethod",
-              "description": "Enum value indicating the Shared Storage API method invoked.",
-              "name": "method"
-            },
-            {
-              "$ref": "Page.FrameId",
-              "description": "DevTools Frame Token for the primary frame tree's root.",
-              "name": "mainFrameId"
-            },
-            {
-              "description": "Serialization of the origin owning the Shared Storage data.",
-              "name": "ownerOrigin",
-              "type": "string"
-            },
-            {
-              "description": "Serialization of the site owning the Shared Storage data.",
-              "name": "ownerSite",
-              "type": "string"
-            },
-            {
-              "$ref": "SharedStorageAccessParams",
-              "description": "The sub-parameters wrapped by `params` are all optional and their\npresence/absence depends on `type`.",
-              "name": "params"
-            }
-          ]
-        },
-        {
-          "description": "A shared storage run or selectURL operation finished its execution.\nThe following parameters are included in all events.",
-          "name": "sharedStorageWorkletOperationExecutionFinished",
-          "parameters": [
-            {
-              "$ref": "Network.TimeSinceEpoch",
-              "description": "Time that the operation finished.",
-              "name": "finishedTime"
-            },
-            {
-              "description": "Time, in microseconds, from start of shared storage JS API call until\nend of operation execution in the worklet.",
-              "name": "executionTime",
-              "type": "integer"
-            },
-            {
-              "$ref": "SharedStorageAccessMethod",
-              "description": "Enum value indicating the Shared Storage API method invoked.",
-              "name": "method"
-            },
-            {
-              "description": "ID of the operation call.",
-              "name": "operationId",
-              "type": "string"
-            },
-            {
-              "$ref": "Target.TargetID",
-              "description": "Hex representation of the DevTools token used as the TargetID for the\nassociated shared storage worklet.",
-              "name": "workletTargetId"
-            },
-            {
-              "$ref": "Page.FrameId",
-              "description": "DevTools Frame Token for the primary frame tree's root.",
-              "name": "mainFrameId"
-            },
-            {
-              "description": "Serialization of the origin owning the Shared Storage data.",
-              "name": "ownerOrigin",
-              "type": "string"
-            }
-          ]
-        },
-        {
           "name": "storageBucketCreatedOrUpdated",
           "parameters": [
             {
@@ -28074,6 +28354,11 @@
               "type": "string"
             }
           ]
+        },
+        {
+          "description": "Private Verification Tokens have been stored or deleted.",
+          "experimental": true,
+          "name": "privateVerificationTokensUpdated"
         }
       ],
       "experimental": true,
@@ -28093,7 +28378,6 @@
             "websql",
             "service_workers",
             "cache_storage",
-            "shared_storage",
             "storage_buckets",
             "all",
             "other"
@@ -28135,252 +28419,65 @@
           "type": "object"
         },
         {
-          "description": "Enum of shared storage access scopes.",
-          "enum": [
-            "window",
-            "sharedStorageWorklet",
-            "header"
-          ],
-          "id": "SharedStorageAccessScope",
-          "type": "string"
-        },
-        {
-          "description": "Enum of shared storage access methods.",
-          "enum": [
-            "addModule",
-            "createWorklet",
-            "selectURL",
-            "run",
-            "batchUpdate",
-            "set",
-            "append",
-            "delete",
-            "clear",
-            "get",
-            "keys",
-            "values",
-            "entries",
-            "length",
-            "remainingBudget"
-          ],
-          "id": "SharedStorageAccessMethod",
-          "type": "string"
-        },
-        {
-          "description": "Struct for a single key-value pair in an origin's shared storage.",
-          "id": "SharedStorageEntry",
+          "description": "Details of a stored Private Verification Token.",
+          "experimental": true,
+          "id": "PrivateVerificationToken",
           "properties": [
             {
-              "name": "key",
+              "description": "Unique identifier of the token in the database.",
+              "name": "id",
               "type": "string"
             },
             {
-              "name": "value",
+              "description": "Origin of the token issuer.",
+              "name": "issuerOrigin",
               "type": "string"
-            }
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Details for an origin's shared storage.",
-          "id": "SharedStorageMetadata",
-          "properties": [
+            },
+            {
+              "description": "Public key ID used to issue the token.",
+              "name": "keyId",
+              "type": "integer"
+            },
             {
               "$ref": "Network.TimeSinceEpoch",
-              "description": "Time when the origin's shared storage was last created.",
+              "description": "Expiration timestamp in seconds since the epoch.",
+              "name": "expiration"
+            },
+            {
+              "$ref": "Network.TimeSinceEpoch",
+              "description": "Token creation timestamp in seconds since the epoch.",
               "name": "creationTime"
             },
             {
-              "description": "Number of key-value pairs stored in origin's shared storage.",
-              "name": "length",
+              "description": "Token protocol version.",
+              "name": "version",
               "type": "integer"
             },
             {
-              "description": "Current amount of bits of entropy remaining in the navigation budget.",
-              "name": "remainingBudget",
-              "type": "number"
-            },
-            {
-              "description": "Total number of bytes stored as key-value pairs in origin's shared\nstorage.",
-              "name": "bytesUsed",
-              "type": "integer"
-            }
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Represents a dictionary object passed in as privateAggregationConfig to\nrun or selectURL.",
-          "id": "SharedStoragePrivateAggregationConfig",
-          "properties": [
-            {
-              "description": "The chosen aggregation service deployment.",
-              "name": "aggregationCoordinatorOrigin",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "description": "The context ID provided.",
-              "name": "contextId",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "description": "Configures the maximum size allowed for filtering IDs.",
-              "name": "filteringIdMaxBytes",
-              "type": "integer"
-            },
-            {
-              "description": "The limit on the number of contributions in the final report.",
-              "name": "maxContributions",
-              "optional": true,
-              "type": "integer"
-            }
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Pair of reporting metadata details for a candidate URL for `selectURL()`.",
-          "id": "SharedStorageReportingMetadata",
-          "properties": [
-            {
-              "name": "eventType",
-              "type": "string"
-            },
-            {
-              "name": "reportingUrl",
+              "description": "Base64-encoded serialized token.",
+              "name": "token",
               "type": "string"
             }
           ],
           "type": "object"
         },
         {
-          "description": "Bundles a candidate URL with its reporting metadata.",
-          "id": "SharedStorageUrlWithMetadata",
+          "description": "Configuration for a Private Verification Tokens issuer.",
+          "experimental": true,
+          "id": "PrivateVerificationTokensIssuerConfig",
           "properties": [
             {
-              "description": "Spec of candidate URL.",
-              "name": "url",
+              "description": "Origin of the token issuer.",
+              "name": "issuerOrigin",
               "type": "string"
             },
             {
-              "description": "Any associated reporting metadata.",
+              "description": "Origins authorized to redeem tokens from this issuer.",
               "items": {
-                "$ref": "SharedStorageReportingMetadata"
+                "type": "string"
               },
-              "name": "reportingMetadata",
+              "name": "redeemerOrigins",
               "type": "array"
-            }
-          ],
-          "type": "object"
-        },
-        {
-          "description": "Bundles the parameters for shared storage access events whose\npresence/absence can vary according to SharedStorageAccessType.",
-          "id": "SharedStorageAccessParams",
-          "properties": [
-            {
-              "description": "Spec of the module script URL.\nPresent only for SharedStorageAccessMethods: addModule and\ncreateWorklet.",
-              "name": "scriptSourceUrl",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "description": "String denoting \"context-origin\", \"script-origin\", or a custom\norigin to be used as the worklet's data origin.\nPresent only for SharedStorageAccessMethod: createWorklet.",
-              "name": "dataOrigin",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "description": "Name of the registered operation to be run.\nPresent only for SharedStorageAccessMethods: run and selectURL.",
-              "name": "operationName",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "description": "ID of the operation call.\nPresent only for SharedStorageAccessMethods: run and selectURL.",
-              "name": "operationId",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "description": "Whether or not to keep the worket alive for future run or selectURL\ncalls.\nPresent only for SharedStorageAccessMethods: run and selectURL.",
-              "name": "keepAlive",
-              "optional": true,
-              "type": "boolean"
-            },
-            {
-              "$ref": "SharedStoragePrivateAggregationConfig",
-              "description": "Configures the private aggregation options.\nPresent only for SharedStorageAccessMethods: run and selectURL.",
-              "name": "privateAggregationConfig",
-              "optional": true
-            },
-            {
-              "description": "The operation's serialized data in bytes (converted to a string).\nPresent only for SharedStorageAccessMethods: run and selectURL.\nTODO(crbug.com/401011862): Consider updating this parameter to binary.",
-              "name": "serializedData",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "description": "Array of candidate URLs' specs, along with any associated metadata.\nPresent only for SharedStorageAccessMethod: selectURL.",
-              "items": {
-                "$ref": "SharedStorageUrlWithMetadata"
-              },
-              "name": "urlsWithMetadata",
-              "optional": true,
-              "type": "array"
-            },
-            {
-              "description": "Spec of the URN:UUID generated for a selectURL call.\nPresent only for SharedStorageAccessMethod: selectURL.",
-              "name": "urnUuid",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "description": "Key for a specific entry in an origin's shared storage.\nPresent only for SharedStorageAccessMethods: set, append, delete, and\nget.",
-              "name": "key",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "description": "Value for a specific entry in an origin's shared storage.\nPresent only for SharedStorageAccessMethods: set and append.",
-              "name": "value",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "description": "Whether or not to set an entry for a key if that key is already present.\nPresent only for SharedStorageAccessMethod: set.",
-              "name": "ignoreIfPresent",
-              "optional": true,
-              "type": "boolean"
-            },
-            {
-              "description": "A number denoting the (0-based) order of the worklet's\ncreation relative to all other shared storage worklets created by\ndocuments using the current storage partition.\nPresent only for SharedStorageAccessMethods: addModule, createWorklet.",
-              "name": "workletOrdinal",
-              "optional": true,
-              "type": "integer"
-            },
-            {
-              "$ref": "Target.TargetID",
-              "description": "Hex representation of the DevTools token used as the TargetID for the\nassociated shared storage worklet.\nPresent only for SharedStorageAccessMethods: addModule, createWorklet,\nrun, selectURL, and any other SharedStorageAccessMethod when the\nSharedStorageAccessScope is sharedStorageWorklet.",
-              "name": "workletTargetId",
-              "optional": true
-            },
-            {
-              "description": "Name of the lock to be acquired, if present.\nOptionally present only for SharedStorageAccessMethods: batchUpdate,\nset, append, delete, and clear.",
-              "name": "withLock",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "description": "If the method has been called as part of a batchUpdate, then this\nnumber identifies the batch to which it belongs.\nOptionally present only for SharedStorageAccessMethods:\nbatchUpdate (required), set, append, delete, and clear.",
-              "name": "batchUpdateId",
-              "optional": true,
-              "type": "string"
-            },
-            {
-              "description": "Number of modifier methods sent in batch.\nPresent only for SharedStorageAccessMethod: batchUpdate.",
-              "name": "batchSize",
-              "optional": true,
-              "type": "integer"
             }
           ],
           "type": "object"
@@ -28436,38 +28533,6 @@
             {
               "$ref": "StorageBucketsDurability",
               "name": "durability"
-            }
-          ],
-          "type": "object"
-        },
-        {
-          "description": "A single Related Website Set object.",
-          "experimental": true,
-          "id": "RelatedWebsiteSet",
-          "properties": [
-            {
-              "description": "The primary site of this set, along with the ccTLDs if there is any.",
-              "items": {
-                "type": "string"
-              },
-              "name": "primarySites",
-              "type": "array"
-            },
-            {
-              "description": "The associated sites of this set, along with the ccTLDs if there is any.",
-              "items": {
-                "type": "string"
-              },
-              "name": "associatedSites",
-              "type": "array"
-            },
-            {
-              "description": "The service sites of this set, along with the ccTLDs if there is any.",
-              "items": {
-                "type": "string"
-              },
-              "name": "serviceSites",
-              "type": "array"
             }
           ],
           "type": "object"
@@ -30266,6 +30331,10 @@
               "description": "Context sample rate.",
               "name": "sampleRate",
               "type": "number"
+            },
+            {
+              "name": "renderQuantumSize",
+              "type": "number"
             }
           ],
           "type": "object"
@@ -30578,7 +30647,7 @@
               "description": "Must be equal to or greater than -1.\nIf -1, the signature counter is removed from the credential, and every\nassertion operation will report a value of 0.\nSee https://w3c.github.io/webauthn/#signature-counter",
               "name": "signCount",
               "optional": true,
-              "type": "integer"
+              "type": "number"
             }
           ]
         }
@@ -30667,11 +30736,14 @@
           "type": "string"
         },
         {
+          "description": "LINT.IfChange(AuthenticatorTransport)",
           "enum": [
             "usb",
             "nfc",
             "ble",
             "cable",
+            "hybrid",
+            "smart-card",
             "internal"
           ],
           "id": "AuthenticatorTransport",
@@ -30806,8 +30878,7 @@
             {
               "description": "Signature counter. Must be equal to or greater than -1.\nIf -1, the credential won't have an associated signature counter, and\nevery assertion operation will report a value of 0.\nSee https://w3c.github.io/webauthn/#signature-counter",
               "name": "signCount",
-              "optional": true,
-              "type": "integer"
+              "type": "number"
             },
             {
               "description": "The large blob associated with the credential.\nSee https://w3c.github.io/webauthn/#sctn-large-blob-extension",
@@ -31026,6 +31097,18 @@
             {
               "description": "A hint indicating that the tool output may contain untrusted content, ex: UGC, 3rd party data.",
               "name": "untrustedContent",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "description": "A hint indicating that executing the tool will result in consequential actions, ex: booking a flight, transferring money.",
+              "name": "consequential",
+              "optional": true,
+              "type": "boolean"
+            },
+            {
+              "description": "If true, indicates that the tool is intended for debugging and developer tooling rather than end-user interactions.",
+              "name": "debugging",
               "optional": true,
               "type": "boolean"
             },
@@ -31314,6 +31397,13 @@
               "experimental": true,
               "name": "timeout",
               "optional": true
+            },
+            {
+              "description": "Specifies the scope number to evaluate the expression in (default: 0, innermost scope).",
+              "experimental": true,
+              "name": "scopeNumber",
+              "optional": true,
+              "type": "integer"
             }
           ],
           "returns": [
@@ -31839,7 +31929,8 @@
           ]
         },
         {
-          "description": "Edits JavaScript source live.\n\nIn general, functions that are currently on the stack can not be edited with\na single exception: If the edited function is the top-most stack frame and\nthat is the only activation of that function on the stack. In this case\nthe live edit will be successful and a `Debugger.restartFrame` for the\ntop-most function is automatically triggered.",
+          "deprecated": true,
+          "description": "Live edit is no longer supported and this command always fails with a \"no longer available\" error.",
           "name": "setScriptSource",
           "parameters": [
             {
@@ -31994,6 +32085,16 @@
                 "$ref": "LocationRange"
               },
               "name": "skipList",
+              "optional": true,
+              "type": "array"
+            },
+            {
+              "description": "Functions whose source range lies within one of the enterRanges are\nentered as if by stepInto, even when they are called (directly or\nindirectly) from a call that is stepped over.",
+              "experimental": true,
+              "items": {
+                "$ref": "LocationRange"
+              },
+              "name": "enterRanges",
               "optional": true,
               "type": "array"
             }
@@ -32515,6 +32616,17 @@
               "description": "Location in the source code where scope ends",
               "name": "endLocation",
               "optional": true
+            },
+            {
+              "description": "Present if the scope has no variable values to show. Absent means that\nthe scope declares at least one variable with an available value.\nEmpty scopes are retained in the scope chain because\nthey can be targeted via `evaluateOnCallFrame` (using `scopeNumber`) or\nmatched against scopes in source maps.",
+              "enum": [
+                "no-variables",
+                "all-unavailable"
+              ],
+              "experimental": true,
+              "name": "emptyReason",
+              "optional": true,
+              "type": "string"
             }
           ],
           "type": "object"
@@ -34291,6 +34403,7 @@
                 "dataview",
                 "webassemblymemory",
                 "wasmvalue",
+                "deferredmodule",
                 "trustedtype"
               ],
               "name": "subtype",
@@ -34410,6 +34523,7 @@
                 "dataview",
                 "webassemblymemory",
                 "wasmvalue",
+                "deferredmodule",
                 "trustedtype"
               ],
               "name": "subtype",
@@ -34506,6 +34620,7 @@
                 "dataview",
                 "webassemblymemory",
                 "wasmvalue",
+                "deferredmodule",
                 "trustedtype"
               ],
               "name": "subtype",

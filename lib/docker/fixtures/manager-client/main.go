@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log"
@@ -14,7 +16,7 @@ import (
 	"github.com/rah-0/rod/lib/proto"
 )
 
-const managerURL = "http://127.0.0.1:7317"
+const managerURL = "https://127.0.0.1:7317"
 
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -31,12 +33,24 @@ func exerciseManager(ctx context.Context, authToken string) (product string, err
 	if authToken == "" {
 		return "", fmt.Errorf("%s is empty", launcher.ManagerTokenEnv)
 	}
+	cert, err := os.ReadFile("/manager.crt")
+	if err != nil {
+		return "", err
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(cert) {
+		return "", errors.New("invalid test certificate")
+	}
+	tlsConfig := &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+	transport := &http.Transport{TLSClientConfig: tlsConfig}
+	defer transport.CloseIdleConnections()
+	httpClient := &http.Client{Transport: transport, Timeout: 10 * time.Second}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, managerURL, nil)
 	if err != nil {
 		return "", err
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -45,11 +59,12 @@ func exerciseManager(ctx context.Context, authToken string) (product string, err
 		return "", fmt.Errorf("unauthenticated manager request returned %s", res.Status)
 	}
 
-	managed, err := launcher.NewManaged(ctx, managerURL, authToken)
+	managed, err := launcher.NewManaged(ctx, managerURL, authToken, launcher.ManagerClientOptions{TLSConfig: tlsConfig})
 	if err != nil {
 		return "", err
 	}
-	client, err := managed.Context(ctx).Client()
+	// This test runs a root browser in an isolated container without sandbox support.
+	client, err := managed.Context(ctx).NoSandbox(true).Client()
 	if err != nil {
 		return "", err
 	}

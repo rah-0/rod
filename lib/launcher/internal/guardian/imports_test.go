@@ -21,6 +21,7 @@ import (
 // application.
 func TestImports(t *testing.T) {
 	allowed := map[string]bool{
+		"github.com/rah-0/rod/internal/secureexec": true,
 		"errors": true, "io": true, "os": true, "os/signal": true, "path": true,
 		"runtime": true, "strconv": true, "sync": true, "syscall": true, "time": true,
 	}

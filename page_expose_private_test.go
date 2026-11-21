@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -24,8 +25,10 @@ type exposeTestClient struct {
 	sessionTestClient
 	binding string
 	// deliveries receives the replies of each delivery; release unblocks it.
-	deliveries chan exposeTestDelivery
-	release    chan struct{}
+	deliveries  chan exposeTestDelivery
+	release     chan struct{}
+	contextLock sync.Mutex
+	contexts    map[string]proto.RuntimeExecutionContextID
 }
 
 // exposeTestDelivery is one reply round trip as the page receives it.
@@ -44,6 +47,14 @@ func newExposeTestPage(t *testing.T) (*Page, *exposeTestClient) {
 	}
 	client.call = func(ctx context.Context, _, method string, params any) ([]byte, error) {
 		switch method {
+		case "Page.getFrameTree":
+			return []byte(`{"frameTree":{"frame":{"id":"target","loaderId":"document","url":"","securityOrigin":"","mimeType":""}}}`), nil
+		case "DOM.resolveNode":
+			return []byte(`{"object":{"type":"object","subtype":"node","objectId":"file-input"}}`), nil
+		case "Runtime.enable":
+			for _, id := range []proto.RuntimeExecutionContextID{5, 6} {
+				client.context(id, "target", "https://trusted.test", fmt.Sprint("document-", id))
+			}
 		case "Target.attachToTarget":
 			return []byte(`{"sessionId":"page-session"}`), nil
 		case "Runtime.addBinding":
@@ -53,7 +64,10 @@ func newExposeTestPage(t *testing.T) (*Page, *exposeTestClient) {
 		case "Page.addScriptToEvaluateOnNewDocument":
 			return []byte(`{"identifier":"script"}`), nil
 		case "Runtime.callFunctionOn":
-			if request := params.(proto.RuntimeCallFunctionOn); request.ExecutionContextID != 0 {
+			if request := params.(proto.RuntimeCallFunctionOn); request.UniqueContextID != "" {
+				client.contextLock.Lock()
+				request.ExecutionContextID = client.contexts[request.UniqueContextID]
+				client.contextLock.Unlock()
 				delivery, err := decodeExposeDelivery(request)
 				if err != nil {
 					return nil, err
@@ -76,6 +90,20 @@ func newExposeTestPage(t *testing.T) (*Page, *exposeTestClient) {
 		t.Fatal(err)
 	}
 	return page, client
+}
+
+func (client *exposeTestClient) context(id proto.RuntimeExecutionContextID, frame proto.PageFrameID, origin, document string) {
+	client.contextLock.Lock()
+	if client.contexts == nil {
+		client.contexts = map[string]proto.RuntimeExecutionContextID{}
+	}
+	client.contexts[document] = id
+	client.contextLock.Unlock()
+	params, _ := json.Marshal(proto.RuntimeExecutionContextCreated{Context: &proto.RuntimeExecutionContextDescription{
+		ID: id, UniqueID: document, Origin: origin,
+		AuxData: map[string]jsonvalue.Value{"frameId": jsonvalue.New(frame), "isDefault": jsonvalue.New(true)},
+	}})
+	client.events <- &cdp.Event{SessionID: "page-session", Method: "Runtime.executionContextCreated", Params: params}
 }
 
 // decodeExposeDelivery decodes a reply request as the page function would.

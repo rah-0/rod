@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,10 +36,17 @@ const (
 )
 
 // MustNewManaged is similar to NewManaged.
-func MustNewManaged(ctx context.Context, serviceURL, authToken string) *Launcher {
-	l, err := NewManaged(ctx, serviceURL, authToken)
+func MustNewManaged(ctx context.Context, serviceURL, authToken string, options ...ManagerClientOptions) *Launcher {
+	l, err := NewManaged(ctx, serviceURL, authToken, options...)
 	utils.E(err)
 	return l
+}
+
+// ManagerClientOptions configures authenticated TLS for a managed client.
+// TLSConfig applies to both the settings request and the WebSocket connection.
+// Use RootCAs for a private certificate authority. InsecureSkipVerify is rejected.
+type ManagerClientOptions struct {
+	TLSConfig *tls.Config
 }
 
 // NewManaged creates a default Launcher instance from launcher.Manager.
@@ -47,23 +55,35 @@ func MustNewManaged(ctx context.Context, serviceURL, authToken string) *Launcher
 // Linux machine will return different default settings from the one on Mac.
 // The manager kills the remote browser after the WebSocket is closed.
 // The authToken is sent as a bearer credential on both the initial HTTP request and the WebSocket handshake.
-// Plain HTTP and WebSocket URLs are accepted only for loopback hosts; use HTTPS or WSS remotely.
+// HTTPS or WSS is required, including on loopback. An empty serviceURL selects
+// https://localhost:7317. A private CA can be supplied in ManagerClientOptions.
 // ctx covers the initial HTTP request and response decoding, and remains the
 // launcher context for Client. Supply a deadline when initialization must be bounded.
 // The launcher holds the manager's settings, including the executable,
 // environment, and working directory on the manager's host. Use it with Client
 // or MustClient; Launch, MustLaunch, and LaunchNew reject it with ErrManagedLaunch.
-func NewManaged(ctx context.Context, serviceURL, authToken string) (_ *Launcher, err error) {
+func NewManaged(ctx context.Context, serviceURL, authToken string, options ...ManagerClientOptions) (_ *Launcher, err error) {
 	if serviceURL == "" {
-		serviceURL = "ws://127.0.0.1:7317"
+		serviceURL = "https://localhost:7317"
 	}
 
 	u, err := url.Parse(serviceURL)
 	if err != nil {
 		return nil, err
 	}
-	if managerURLUsesPlaintext(u) && !managerLoopbackHost(u.Hostname()) {
+	if (u.Scheme != "https" && u.Scheme != "wss") || u.Hostname() == "" || u.User != nil {
 		return nil, ErrManagerInsecureTransport
+	}
+
+	if len(options) > 1 {
+		return nil, errors.New("launcher manager accepts only one client options value")
+	}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	if len(options) == 1 && options[0].TLSConfig != nil {
+		tlsConfig = options[0].TLSConfig.Clone()
+		if tlsConfig.InsecureSkipVerify {
+			return nil, ErrManagerInsecureTransport
+		}
 	}
 
 	l := New().Context(ctx)
@@ -74,6 +94,7 @@ func NewManaged(ctx context.Context, serviceURL, authToken string) (_ *Launcher,
 	}()
 	l.managed = true
 	l.managerToken = authToken
+	l.managerTLS = tlsConfig
 	l.serviceURL = toWS(*u).String()
 	l.Flags = nil
 
@@ -83,7 +104,9 @@ func NewManaged(ctx context.Context, serviceURL, authToken string) (_ *Launcher,
 	}
 	l.addManagerAuthorization(req.Header)
 
-	httpClient := *http.DefaultClient
+	transport := &http.Transport{Proxy: http.ProxyFromEnvironment, TLSClientConfig: tlsConfig}
+	defer transport.CloseIdleConnections()
+	httpClient := http.Client{Transport: transport}
 	httpClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
@@ -120,17 +143,24 @@ func (l *Launcher) JSON() []byte {
 
 // MustClient similar to Launcher.Client.
 func (l *Launcher) MustClient() *cdp.Client {
-	u, h := l.ClientHeader()
-	return cdp.MustStartWithURL(l.ctx, u, h)
+	c, err := l.Client()
+	utils.E(err)
+	return c
 }
 
 // Client for launching browser remotely via the launcher.Manager.
 func (l *Launcher) Client() (*cdp.Client, error) {
 	u, h := l.ClientHeader()
-	return cdp.StartWithURL(l.ctx, u, h)
+	ws := &cdp.WebSocket{Dialer: &tls.Dialer{Config: l.managerTLS}}
+	if err := ws.Connect(l.ctx, u, h); err != nil {
+		return nil, err
+	}
+	return cdp.New().Start(ws), nil
 }
 
-// ClientHeader for launching browser remotely via the launcher.Manager.
+// ClientHeader returns the URL and headers for a custom managed transport.
+// Custom transports must authenticate TLS with the same trust configuration as
+// NewManaged. Client and MustClient apply ManagerClientOptions automatically.
 func (l *Launcher) ClientHeader() (string, http.Header) {
 	l.mustManaged()
 	header := http.Header{}

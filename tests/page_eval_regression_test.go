@@ -39,7 +39,8 @@ func TestExposeFrameResponsesAndQuotedNames(t *testing.T) {
 	defer p.CancelTimeout()
 	p.MustWaitLoad()
 	const name = `quoted"name`
-	stop, err := p.Expose(name, func(value jsonvalue.Value) (any, error) {
+	stop, err := p.ExposeWithOptions(name, rod.ExposeOptions{AllFrames: true}, func(call rod.ExposedCall) (any, error) {
+		value := call.Request
 		if value.Str() == "reject" {
 			return nil, errors.New("callback rejected")
 		}

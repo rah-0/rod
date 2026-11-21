@@ -75,7 +75,7 @@ func TestCleanupWithoutProcess(t *testing.T) {
 	})
 }
 
-func TestCleanupReusedBrowser(t *testing.T) {
+func TestCleanupRejectedExistingBrowser(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprintf(w, `{"webSocketDebuggerUrl":"ws://%s/devtools/browser/test"}`, r.Host)
 	}))
@@ -94,22 +94,22 @@ func TestCleanupReusedBrowser(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := l.Launch(); err != nil {
+			if _, err := l.Launch(); !errors.Is(err, ErrDebuggingPortInUse) {
 				t.Fatal(err)
 			}
 			if l.PID() != 0 {
-				t.Fatal("reuse unexpectedly owns a process")
+				t.Fatal("rejected launch unexpectedly owns a process")
 			}
 			cleanupPromptly(t, l)
 			if _, err := ResolveURL(t.Context(), server.URL); err != nil {
-				t.Fatalf("cleanup stopped the reused browser: %v", err)
+				t.Fatalf("cleanup stopped the existing listener: %v", err)
 			}
 			if configured {
 				if _, err := os.Stat(sentinel); err != nil {
 					t.Fatalf("cleanup removed caller profile: %v", err)
 				}
 			} else if _, err := os.Stat(l.Get("user-data-dir")); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("reuse created an unnecessary profile: %v", err)
+				t.Fatalf("rejected launch created an unnecessary profile: %v", err)
 			}
 		})
 	}

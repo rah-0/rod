@@ -9,19 +9,23 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
 // The private invocation needs the marker variable, its exact arguments, and a
-// pipe as both standard input and descriptor 3. Without any one of them the
-// executable runs as usual: it reports nothing on descriptor 3 and leaves the
-// directory that the invocation names as the profile to remove.
+// valid authenticated socket as standard input and a status pipe. Recognized
+// private invocations fail closed; ordinary invocations run as usual. Neither
+// path removes an unauthenticated profile.
 func TestPrivateInvocationRequirements(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("private re-execution is disabled outside Linux")
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	private := func(profile string) []string { return []string{Argument, profile, ""} }
+	private := func(profile string) []string { return []string{Argument, "owned", filepath.Base(profile)} }
 	const pipe, regular, closed = "pipe", "regular file", "closed"
 	for _, test := range []struct {
 		name          string
@@ -33,10 +37,11 @@ func TestPrivateInvocationRequirements(t *testing.T) {
 		{"ordinary arguments", "1", func(string) []string { return []string{"-test.run=^$"} }, pipe, pipe, 0},
 		{"no marker", "", private, pipe, pipe, 2},
 		{"another marker value", "true", private, pipe, pipe, 2},
-		{"too few arguments", "1", func(profile string) []string { return []string{Argument, profile} }, pipe, pipe, 2},
-		{"standard input is no pipe", "1", private, closed, pipe, 2},
-		{"descriptor 3 is closed", "1", private, pipe, closed, 2},
-		{"descriptor 3 is a file", "1", private, pipe, regular, 2},
+		{"too few arguments", "1", func(profile string) []string { return []string{Argument, profile} }, pipe, pipe, 1},
+		{"pipe-shaped forgery", "1", private, pipe, pipe, 1},
+		{"standard input is no socket", "1", private, closed, pipe, 1},
+		{"descriptor 3 is closed", "1", private, pipe, closed, 1},
+		{"descriptor 3 is a file", "1", private, pipe, regular, 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -148,5 +153,15 @@ func TestTemporaryDirSkipsExistingNames(t *testing.T) {
 			t.Fatalf("names %q: %v", names, err)
 		}
 		unchanged()
+	}
+}
+
+func TestTemporaryDirRejectsTraversal(t *testing.T) {
+	base := t.TempDir()
+	for _, name := range []string{"", ".", "..", "../outside", "/absolute"} {
+		configuration := Command{Env: []string{"TMPDIR=" + base}, Scratch: []string{name}}
+		if _, err := TemporaryDir(&configuration); err == nil {
+			t.Fatalf("temporary directory accepted %q", name)
+		}
 	}
 }

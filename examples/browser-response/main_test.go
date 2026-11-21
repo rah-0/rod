@@ -422,13 +422,14 @@ func TestBrowserResponseStalledBody(t *testing.T) {
 	if got := strings.Join(commands, ","); got != "Fetch.enable,Fetch.getResponseBody" {
 		t.Fatalf("commands raced an incomplete body read: %s", got)
 	}
+	captureErr := err
 	pages, err := browser.Pages()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, page := range pages {
 		if page.TargetID == app.Page.TargetID {
-			t.Fatal("stalled capture kept its dedicated page open")
+			t.Fatalf("stalled capture kept its dedicated page open; capture error: %v", captureErr)
 		}
 	}
 	replacement := responseFixture(t, browser, http.HandlerFunc(responseHandler))
@@ -454,13 +455,14 @@ func TestBrowserResponseAmbiguousRead(t *testing.T) {
 	if commands != "Fetch.enable,Fetch.getResponseBody" {
 		t.Fatalf("commands raced an ambiguous body read: %s", commands)
 	}
+	captureErr := err
 	pages, err := browser.Pages()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, page := range pages {
 		if page.TargetID == app.Page.TargetID {
-			t.Fatal("ambiguous capture kept its dedicated page open")
+			t.Fatalf("ambiguous capture kept its dedicated page open; capture error: %v", captureErr)
 		}
 	}
 }

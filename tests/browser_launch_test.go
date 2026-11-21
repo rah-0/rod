@@ -206,8 +206,8 @@ func TestConfiguredBrowserLaunchConflicts(t *testing.T) {
 		t.Fatalf("unrelated browser was affected: %v", err)
 	}
 	used := launcher.New().Bin("unused").RemoteDebuggingPort(port)
-	if _, err := used.Launch(); err != nil {
-		t.Fatal(err)
+	if _, err := used.Launch(); !errors.Is(err, launcher.ErrDebuggingPortInUse) {
+		t.Fatalf("occupied port = %v", err)
 	}
 	if err := rod.New().ControlURL("").Launch(used); !errors.Is(err, launcher.ErrAlreadyLaunched) {
 		t.Fatalf("used launcher = %v", err)

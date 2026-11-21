@@ -1,11 +1,11 @@
 {
   "source": "installed browser /json/protocol",
-  "sha256": "2baa96e91c764182a6ee5ff4048d744082a34ef786aa0e3ac9c7bfe2ce9bc625",
+  "sha256": "23863cb10c787342be41d13d313161cbbf1d8443d3a4d1e15d75b4bdf7f08880",
   "browser": {
-    "Browser": "Chrome/152.0.7977.64",
+    "Browser": "Chrome/158.0.8127.36",
     "Protocol-Version": "1.3",
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36",
-    "V8-Version": "15.2.124.18",
-    "WebKit-Version": "537.36 (@506c834ecceaa943c5f41e6cfe7f68acb5c45346)"
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/158.0.0.0 Safari/537.36",
+    "V8-Version": "15.8.62.31",
+    "WebKit-Version": "537.36 (@14d6f648e8cd7ad750a4044200ce94d3321be260)"
   }
 }
